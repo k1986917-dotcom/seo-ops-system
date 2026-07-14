@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="metric-grid">
+  <article class="metric-card">
+    <span class="metric-icon blue">A</span>
+    <div><p>已同步文章</p><strong>{{ summary.blogs }}</strong><small>CMS 当前内容</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon violet">P</span>
+    <div><p>已同步产品</p><strong>{{ summary.products }}</strong><small>可关联商业页面</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon amber">D</span>
+    <div><p>数据源</p><strong>{{ summary.sources|length }}/3</strong><small>GSC · Blog · Product</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon green">O</span>
+    <div><p>当前机会</p><strong>{{ summary.opportunity_count }}</strong><small>先过门槛，再排序</small></div>
+  </article>
+</section>
+
+<section class="section-heading">
+  <div><p class="eyebrow">FOCUS</p><h2>本轮最值得做的事</h2></div>
+  {% if summary.sources %}
+  <form method="post" action="/analysis/run">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <button class="button button-primary" type="submit">重新分析</button>
+  </form>
+  {% endif %}
+</section>
+
+{% if summary.top_opportunities %}
+<section class="focus-grid">
+  {% for op in summary.top_opportunities %}
+  <article class="focus-card focus-{{ loop.index }}">
+    <div class="focus-top"><span class="rank">0{{ loop.index }}</span><span class="slot">{{ op.portfolio_slot }}</span></div>
+    <h3>{{ op.title }}</h3>
+    <p>{{ op.recommended_action }}</p>
+    <div class="evidence-row">
+      <span>强度 {{ op.strength|round|int }}</span>
+      <span>可信度 {{ {'high':'高','medium':'中','low':'低'}[op.confidence] }}</span>
+      <span>工作量 {{ op.effort }}</span>
+    </div>
+    <a href="/opportunities" class="text-link">查看证据与限制 →</a>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="empty-state">
+  <div class="empty-icon">↳</div>
+  <h3>先建立站点的真实状态</h3>
+  <p>导入 GSC 对比数据、博客 JSON 和产品 JSON 后，系统才会生成有证据的任务。没有合格机会时允许不推荐。</p>
+  <a class="button button-primary" href="/imports">去导入数据</a>
+</section>
+{% endif %}
+
+<section class="two-column">
+  <article class="panel">
+    <div class="panel-title"><div><p class="eyebrow">DATA HEALTH</p><h2>数据新鲜度</h2></div></div>
+    {% if summary.sources %}
+    <div class="source-list">
+      {% for source in summary.sources %}
+      <div class="source-row">
+        <span class="source-icon">{{ source.source_type[:1]|upper }}</span>
+        <div><strong>{{ source.source_type|replace('_',' ') }}</strong><small>{{ source.last_imported }}</small></div>
+        <span class="pill pill-good">可用</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">还没有导入记录。</p>
+    {% endif %}
+  </article>
+
+  <article class="panel method-summary">
+    <p class="eyebrow">HOW IT DECIDES</p>
+    <h2>这不是关键词生成器</h2>
+    <ol class="flow-list">
+      <li><span>1</span><div><strong>资格门槛</strong><small>证据、可执行性、重复与风险</small></div></li>
+      <li><span>2</span><div><strong>站内排序</strong><small>强度 × 证据可信度 ÷ 工作量</small></div></li>
+      <li><span>3</span><div><strong>效果反馈</strong><small>记录发布前基线与后续观察</small></div></li>
+    </ol>
+    <a class="text-link" href="/method">查看规则版本和来源 →</a>
+  </article>
+</section>
+{% endblock %}
+

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="ai-status-card {{ 'connected' if ai_status.enabled else '' }}">
+  <div class="ai-orb">✦</div>
+  <div class="ai-status-copy">
+    <p class="eyebrow">OPTIONAL AI LAYER</p>
+    <h2>{{ 'AI 已连接' if ai_status.enabled else '系统可以接入大模型' }}</h2>
+    {% if ai_status.enabled %}
+    <p>当前模型：<strong>{{ ai_status.model }}</strong>，Provider：{{ ai_status.provider }}。API Key 只在后端读取，页面不会显示。</p>
+    {% else %}
+    <p>当前未配置模型，但数据导入、规则判断、机会排序和效果记录都能正常工作。配置后可对机会进行证据解释，并逐步生成 brief 和草稿。</p>
+    {% endif %}
+  </div>
+  <span class="pill {{ 'pill-good' if ai_status.enabled else 'pill-neutral' }}">{{ '已启用' if ai_status.enabled else '未配置' }}</span>
+</section>
+
+<section class="two-column">
+  <article class="panel">
+    <p class="eyebrow">CONFIGURATION</p><h2>如何配置</h2>
+    <p class="muted">在项目 `.env` 中设置后重启应用。外部服务需要 API Key；本地兼容服务可按其要求填写。</p>
+    <pre class="config-block">SEO_OPS_AI_BASE_URL=https://api.example.com/v1
+SEO_OPS_AI_API_KEY=••••••••
+SEO_OPS_AI_MODEL=model-name
+SEO_OPS_AI_PROVIDER=openai-compatible</pre>
+    <dl class="status-list">
+      <div><dt>Base URL</dt><dd>{{ ai_status.base_url or '未设置' }}</dd></div>
+      <div><dt>Model</dt><dd>{{ ai_status.model or '未设置' }}</dd></div>
+      <div><dt>API Key</dt><dd>{{ '已设置（已隐藏）' if ai_status.has_key else '未设置' }}</dd></div>
+      <div><dt>历史调用</dt><dd>{{ ai_status.run_count }}</dd></div>
+    </dl>
+  </article>
+
+  <article class="panel">
+    <p class="eyebrow">SAFETY BOUNDARY</p><h2>AI 能做与不能做</h2>
+    <div class="allow-grid">
+      <div class="allow"><strong>允许</strong><ul><li>解释已有证据</li><li>生成 research brief</li><li>基于核验素材起草正文</li><li>指出缺失证据</li></ul></div>
+      <div class="deny"><strong>禁止</strong><ul><li>修改指标或分数</li><li>制造来源和亲测经历</li><li>绕过资格门槛</li><li>自动发布或删除</li></ul></div>
+    </div>
+    <p class="muted">每次调用会记录模型、Prompt 哈希、输入证据 ID 与输出；不会记录 API Key。</p>
+  </article>
+</section>
+
+<section class="intro-strip"><div><strong>为什么这样设计？</strong><p>模型负责语言和综合判断，程序负责可重复计算，原始数据负责事实。三者分开，模型更换或暂时不可用时系统不会失去核心能力。</p></div><a class="text-link" href="/method">查看方法治理 →</a></section>
+{% endblock %}
+

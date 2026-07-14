@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="intro-strip">
+  <div><strong>原始文件不会被删除</strong><p>每次导入先保存 SHA-256 与不可变快照；重复文件不会重复入库。</p></div>
+  <span class="pill pill-good">审计可追溯</span>
+</section>
+
+<section class="upload-grid">
+  <article class="upload-card">
+    <div class="upload-badge blue">G</div>
+    <h2>Search Console</h2>
+    <p>支持标准导出和“过去 28 天 / 先前 28 天”对比导出，保留查询、网页、设备、国家等全部维度。</p>
+    <form method="post" action="/imports/gsc" enctype="multipart/form-data" class="upload-form">
+      <input type="hidden" name="site_id" value="{{ site.id }}">
+      <label class="file-drop">
+        <input type="file" name="files" accept=".xlsx" multiple required>
+        <span class="drop-icon">⇧</span>
+        <strong>选择 GSC Excel</strong>
+        <small>可同时选择标准和对比文件</small>
+        <em class="file-name">尚未选择文件</em>
+      </label>
+      <button class="button button-primary full" type="submit">导入 GSC</button>
+    </form>
+  </article>
+
+  <article class="upload-card">
+    <div class="upload-badge violet">C</div>
+    <h2>CMS 内容</h2>
+    <p>系统会自动识别 blogs 或 products 导出，保存完整正文、SEO 字段、价格、库存与属性快照。</p>
+    <form method="post" action="/imports/cms" enctype="multipart/form-data" class="upload-form">
+      <input type="hidden" name="site_id" value="{{ site.id }}">
+      <label class="file-drop">
+        <input type="file" name="files" accept=".json" multiple required>
+        <span class="drop-icon">⇧</span>
+        <strong>选择 CMS JSON</strong>
+        <small>可同时选择文章和产品文件</small>
+        <em class="file-name">尚未选择文件</em>
+      </label>
+      <button class="button button-primary full" type="submit">导入 CMS</button>
+    </form>
+  </article>
+</section>
+
+<section class="panel">
+  <div class="panel-title"><div><p class="eyebrow">HISTORY</p><h2>导入记录</h2></div><span class="muted">最近 20 次</span></div>
+  {% if imports %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>来源</th><th>文件</th><th>状态</th><th>记录数</th><th>时间</th></tr></thead>
+      <tbody>
+      {% for item in imports %}
+        <tr>
+          <td><span class="source-tag">{{ item.source_type }}</span></td>
+          <td><strong>{{ item.original_name }}</strong><small class="block mono">{{ item.sha256[:12] }}</small></td>
+          <td><span class="pill {{ 'pill-good' if item.status == 'success' else 'pill-bad' if item.status == 'failed' else 'pill-neutral' }}">{{ item.status }}</span></td>
+          <td>{{ item.row_count|number }}</td>
+          <td class="muted">{{ item.imported_at }}</td>
+        </tr>
+        {% if item.error_message %}<tr class="error-row"><td colspan="5">{{ item.error_message }}</td></tr>{% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">还没有导入记录。</p>
+  {% endif %}
+</section>
+{% endblock %}
+

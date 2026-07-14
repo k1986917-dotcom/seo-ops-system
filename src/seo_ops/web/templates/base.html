@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ page_title }} · SEO Ops</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark">S</span>
+        <span><strong>SEO Ops</strong><small>内容运营系统</small></span>
+      </a>
+
+      <nav class="nav-list" aria-label="主导航">
+        <a class="nav-item {{ 'active' if page == 'dashboard' else '' }}" href="/">
+          <span>◫</span>今日工作台
+        </a>
+        <a class="nav-item {{ 'active' if page == 'imports' else '' }}" href="/imports">
+          <span>⇩</span>数据导入
+        </a>
+        <a class="nav-item {{ 'active' if page == 'opportunities' else '' }}" href="/opportunities">
+          <span>◎</span>机会与任务
+        </a>
+        <a class="nav-item {{ 'active' if page == 'method' else '' }}" href="/method">
+          <span>◇</span>方法与证据
+        </a>
+        <a class="nav-item {{ 'active' if page == 'ai' else '' }}" href="/ai">
+          <span>✦</span>AI 助手
+        </a>
+      </nav>
+
+      <div class="sidebar-note">
+        <span class="status-dot"></span>
+        <div><strong>本地安全模式</strong><small>不会自动发布或删除</small></div>
+      </div>
+      <div class="sidebar-version">v{{ version }}</div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">{{ site.name if site else 'SEO OPS' }}</p>
+          <h1>{{ page_title }}</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="pill {{ 'pill-good' if ai_enabled else 'pill-neutral' }}">
+            <span class="status-dot"></span>{{ 'AI 已连接' if ai_enabled else 'AI 可选' }}
+          </span>
+          <a class="button button-secondary" href="/imports">更新数据</a>
+        </div>
+      </header>
+
+      {% if message %}
+      <div class="alert alert-{{ message_level }}" role="status">
+        <span>{{ '✓' if message_level == 'success' else '!' }}</span>{{ message }}
+      </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+</body>
+</html>
+

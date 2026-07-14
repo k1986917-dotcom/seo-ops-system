@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-heading compact">
+  <div><p class="eyebrow">EVIDENCE-GATED</p><h2>先过门槛，再比较优先级</h2><p class="muted">补证据任务不会伪装成新文章建议；没有合格项时允许少于三个。</p></div>
+  <form method="post" action="/analysis/run">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <button class="button button-primary" type="submit">运行新一轮分析</button>
+  </form>
+</section>
+
+{% if opportunities %}
+<div class="opportunity-list">
+  {% for op in opportunities %}
+  <article class="opportunity-card {{ 'is-top' if op.portfolio_slot else '' }}">
+    <div class="op-main">
+      <div class="op-labels">
+        {% if op.portfolio_slot %}<span class="slot">{{ op.portfolio_slot }}</span>{% endif %}
+        <span class="pill {{ 'pill-good' if op.gate_status == 'passed' else 'pill-warning' if op.gate_status == 'needs_evidence' else 'pill-bad' }}">{{ {'passed':'门槛通过','needs_evidence':'需要补证据','blocked':'已阻塞'}[op.gate_status] }}</span>
+        <span class="rule-key">{{ op.rule_key }} · {{ op.method_version }}</span>
+      </div>
+      <h2>{{ op.title }}</h2>
+      <p class="op-action">{{ op.recommended_action }}</p>
+      <p class="target-ref">{{ op.target_ref }}</p>
+      <div class="gate-reasons">
+        {% for reason in op.gate_reasons %}<span>✓ {{ reason }}</span>{% endfor %}
+      </div>
+
+      <details class="evidence-details">
+        <summary>查看原始证据与限制</summary>
+        <pre>{{ op.evidence|tojson(indent=2) }}</pre>
+      </details>
+
+      {% if op.ai_explanation %}
+      <div class="ai-explanation">
+        <span class="ai-star">✦</span>
+        <div><strong>AI 证据解释</strong><p>{{ op.ai_explanation.summary }}</p>
+          {% if op.ai_explanation.cautions %}<small>注意：{{ op.ai_explanation.cautions|join('；') }}</small>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <aside class="op-score">
+      <div class="score-ring" style="--score: {{ op.strength }}"><strong>{{ op.strength|round|int }}</strong><small>机会强度</small></div>
+      <dl>
+        <div><dt>可信度</dt><dd>{{ {'high':'高','medium':'中','low':'低'}[op.confidence] }}</dd></div>
+        <div><dt>工作量</dt><dd>{{ op.effort }}</dd></div>
+        <div><dt>排序值</dt><dd>{{ op.priority }}</dd></div>
+      </dl>
+      {% if ai_enabled and not op.ai_explanation %}
+      <form method="post" action="/opportunities/{{ op.id }}/ai-explain"><button class="button button-secondary full" type="submit">✦ AI 解释证据</button></form>
+      {% endif %}
+      {% if op.status == 'proposed' %}
+      <form method="post" action="/opportunities/{{ op.id }}/decision" class="decision-form">
+        <input name="reason" placeholder="决定原因（建议填写）">
+        <div><button class="button button-primary" name="decision" value="accepted" type="submit">接受</button><button class="button button-ghost" name="decision" value="rejected" type="submit">拒绝</button></div>
+      </form>
+      {% else %}
+      <span class="decision-status">当前状态：{{ op.status }}</span>
+      {% endif %}
+    </aside>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<section class="empty-state"><div class="empty-icon">◎</div><h3>还没有机会分析</h3><p>先导入 GSC 和 CMS 数据，再运行第一轮分析。</p><a class="button button-primary" href="/imports">去导入数据</a></section>
+{% endif %}
+{% endblock %}
+
