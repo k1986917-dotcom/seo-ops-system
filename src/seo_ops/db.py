@@ -185,8 +185,18 @@ CREATE INDEX IF NOT EXISTS idx_gsc_import_dimension ON gsc_metrics(import_id, di
 CREATE INDEX IF NOT EXISTS idx_content_site_type ON content_items(site_id, content_type);
 CREATE INDEX IF NOT EXISTS idx_analysis_site_date ON analysis_runs(site_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_opportunities_run_priority ON opportunities(analysis_run_id, priority DESC);
+"""
 
-PRAGMA user_version = 1;
+MIGRATION_2 = """
+CREATE TABLE IF NOT EXISTS source_connections (
+    provider TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('connected','error')),
+    last_checked_at TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    error_message TEXT
+);
+
+PRAGMA user_version = 2;
 """
 
 
@@ -237,6 +247,26 @@ DEFAULT_RULES = [
         "sources": ["https://support.google.com/webmasters/answer/7042828?hl=en"],
         "known_failures": [],
     },
+    {
+        "rule_key": "gsc_signal_stability",
+        "version": "0.2.0",
+        "rule_type": "official_fact",
+        "evidence_level": "A+B",
+        "rationale": "GSC 是核心第一方信号，但会受聚合、顶部行限制、不完整数据和已知统计异常影响；先审计稳定性再行动。",
+        "config": {
+            "min_independent_windows": 3,
+            "zero_click_signal_requires_windows": 2,
+            "known_anomaly_start": "2025-05-13",
+            "known_anomaly_end": "2026-04-27",
+        },
+        "sources": [
+            "https://support.google.com/webmasters/answer/6211453?hl=en",
+            "https://developers.google.com/webmaster-tools/v1/how-tos/all-your-data?hl=en",
+            "https://developers.google.com/search/docs/monitor-debug/debugging-search-traffic-drops?hl=en",
+        ],
+        "known_failures": ["没有日期维度时只能按导入日近似窗口", "历史异常清单需要定期复查"],
+        "review_after": "2026-08-14",
+    },
 ]
 
 
@@ -264,11 +294,21 @@ def connection(settings: Settings | None = None) -> Iterator[sqlite3.Connection]
         conn.close()
 
 
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if version == 0:
+        conn.execute("PRAGMA user_version = 1")
+        version = 1
+    if version < 2:
+        conn.executescript(MIGRATION_2)
+
+
 def init_db(settings: Settings | None = None) -> None:
     active_settings = settings or get_settings()
     active_settings.ensure_directories()
     with connection(active_settings) as conn:
         conn.executescript(SCHEMA)
+        _apply_migrations(conn)
         now = utc_now()
         conn.execute(
             """
@@ -297,6 +337,6 @@ def init_db(settings: Settings | None = None) -> None:
                     json_dumps(rule["sources"]),
                     json_dumps(rule["known_failures"]),
                     "2026-07-14",
-                    "2026-10-14",
+                    rule.get("review_after", "2026-10-14"),
                 ),
             )

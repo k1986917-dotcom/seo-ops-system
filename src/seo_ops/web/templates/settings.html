@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="settings-hero">
+  <div>
+    <p class="eyebrow">EVIDENCE CONNECTIONS</p>
+    <h2>外部数据与 AI 在这里统一配置</h2>
+    <p>数据源负责提供可核验事实，程序负责门槛和计算，AI 只负责综合、解释与后续 brief。已配置 {{ configured_count }}/4 个可连接服务。</p>
+  </div>
+  <div class="settings-hero-count"><strong>{{ configured_count }}</strong><span>已配置服务</span></div>
+</section>
+
+<div class="security-note" role="note">
+  <span>⌁</span>
+  <div><strong>密钥不会回显</strong><p>密码框永远为空；留空表示保留旧值。密钥只写入本机项目的 <code>.env</code>（权限 600，Git 已忽略），不进入数据库、HTML、日志或 Git。它是本地明文环境文件，并非加密保险库。</p></div>
+</div>
+
+<form class="settings-form" method="post" action="/settings">
+  <section class="settings-section" id="ai">
+    <div class="settings-section-head">
+      <div><p class="eyebrow">AI ADVISOR</p><h2>AI 助手</h2><p>支持 OpenAI-compatible 服务。AI 不参与硬门槛和分数，也不能自动发布。</p></div>
+      <span class="pill {{ 'pill-good' if settings_status.ai.configured else 'pill-neutral' }}">{{ '已配置' if settings_status.ai.configured else '未配置' }}</span>
+    </div>
+    <div class="form-grid form-grid-3">
+      <label><span>Provider</span><select name="ai_provider"><option value="openai-compatible" selected>openai-compatible</option></select></label>
+      <label><span>Base URL</span><input type="url" name="ai_base_url" value="{{ settings_status.ai.base_url or '' }}" placeholder="https://api.example.com/v1"></label>
+      <label><span>模型名称</span><input type="text" name="ai_model" value="{{ settings_status.ai.model or '' }}" placeholder="model-name"></label>
+    </div>
+    <div class="secret-row">
+      <label class="secret-field"><span>API Key</span><input type="password" name="ai_api_key" autocomplete="new-password" placeholder="{{ '已配置；留空则保留' if settings_status.ai.has_key else '填入新的 API Key' }}"></label>
+      <label class="clear-secret"><input type="checkbox" name="clear_ai_api_key" value="1">清除本地 AI Key</label>
+    </div>
+  </section>
+
+  <section class="settings-section">
+    <div class="settings-section-head">
+      <div><p class="eyebrow">SEARCH INTELLIGENCE</p><h2>SerpAPI 与 Google Trends</h2><p>同一个 SerpAPI Key 可用于真实 SERP 快照和 Google Trends 接口；两类结果仍分开存证。</p></div>
+      <span class="pill {{ 'pill-good' if settings_status.serpapi.configured else 'pill-neutral' }}">{{ '已配置' if settings_status.serpapi.configured else '未配置' }}</span>
+    </div>
+    <div class="secret-row">
+      <label class="secret-field"><span>SerpAPI Key</span><input type="password" name="serpapi_api_key" autocomplete="new-password" placeholder="{{ '已配置；留空则保留' if settings_status.serpapi.has_key else '填入重新生成的 Key' }}"></label>
+      <label class="clear-secret"><input type="checkbox" name="clear_serpapi_api_key" value="1">清除本地 Key</label>
+    </div>
+    <div class="form-grid form-grid-4">
+      <label><span>默认国家</span><input type="text" name="serpapi_country" value="{{ settings_status.serpapi.country }}" maxlength="2"></label>
+      <label><span>语言</span><input type="text" name="serpapi_language" value="{{ settings_status.serpapi.language }}" maxlength="6"></label>
+      <label><span>设备</span><select name="serpapi_device">{% for value in ['desktop','mobile','tablet'] %}<option value="{{ value }}" {{ 'selected' if settings_status.serpapi.device == value else '' }}>{{ value }}</option>{% endfor %}</select></label>
+      <label><span>精确位置（可空）</span><input type="text" name="serpapi_location" value="{{ settings_status.serpapi.location or '' }}" placeholder="United States"></label>
+    </div>
+    <div class="subsection-title"><strong>Google Trends 接入</strong><small>Trends 是相对兴趣，不是绝对搜索量。</small></div>
+    <div class="form-grid form-grid-3">
+      <label><span>接入方式</span><select name="trends_provider">
+        <option value="serpapi" {{ 'selected' if settings_status.trends.provider == 'serpapi' else '' }}>SerpAPI（推荐）</option>
+        <option value="manual_csv" {{ 'selected' if settings_status.trends.provider == 'manual_csv' else '' }}>手动 CSV</option>
+        <option value="google_alpha" {{ 'selected' if settings_status.trends.provider == 'google_alpha' else '' }}>Google 官方 Alpha（需资格）</option>
+      </select></label>
+      <label><span>地区</span><input type="text" name="trends_geo" value="{{ settings_status.trends.geo }}" placeholder="US"></label>
+      <label><span>默认时间范围</span><select name="trends_timeframe">{% for value, label in [('today 3-m','过去 3 个月'),('today 12-m','过去 12 个月'),('today 5-y','过去 5 年')] %}<option value="{{ value }}" {{ 'selected' if settings_status.trends.timeframe == value else '' }}>{{ label }}</option>{% endfor %}</select></label>
+    </div>
+  </section>
+
+  <section class="settings-section">
+    <div class="settings-section-head"><div><p class="eyebrow">WEB RESEARCH</p><h2>页面采集与资料发现</h2><p>Firecrawl 与 Tavily 都不会被当作排名或搜索量来源。</p></div></div>
+    <div class="provider-settings-grid">
+      <article class="provider-config">
+        <div class="provider-config-head"><div class="source-icon">FC</div><div><strong>Firecrawl</strong><small>抓取指定网页与结构化字段</small></div><span class="pill {{ 'pill-good' if settings_status.firecrawl.configured else 'pill-neutral' }}">{{ '已配置' if settings_status.firecrawl.configured else '未配置' }}</span></div>
+        <label><span>Base URL</span><input type="url" name="firecrawl_base_url" value="{{ settings_status.firecrawl.base_url }}"></label>
+        <label><span>API Key</span><input type="password" name="firecrawl_api_key" autocomplete="new-password" placeholder="{{ '已配置；留空则保留' if settings_status.firecrawl.has_key else '填入重新生成的 Key' }}"></label>
+        <label class="clear-secret"><input type="checkbox" name="clear_firecrawl_api_key" value="1">清除本地 Key</label>
+      </article>
+      <article class="provider-config">
+        <div class="provider-config-head"><div class="source-icon">TV</div><div><strong>Tavily</strong><small>发现新资料与时效线索</small></div><span class="pill {{ 'pill-good' if settings_status.tavily.configured else 'pill-neutral' }}">{{ '已配置' if settings_status.tavily.configured else '未配置' }}</span></div>
+        <label><span>Base URL</span><input type="url" name="tavily_base_url" value="{{ settings_status.tavily.base_url }}"></label>
+        <label><span>API Key</span><input type="password" name="tavily_api_key" autocomplete="new-password" placeholder="{{ '已配置；留空则保留' if settings_status.tavily.has_key else '填入重新生成的 Key' }}"></label>
+        <label class="clear-secret"><input type="checkbox" name="clear_tavily_api_key" value="1">清除本地 Key</label>
+      </article>
+    </div>
+  </section>
+
+  <div class="settings-save"><div><strong>保存后立即生效</strong><small>连接测试不会消耗搜索或模型额度。</small></div><button class="button button-primary" type="submit">保存全部设置</button></div>
+</form>
+
+<section class="settings-section connection-section">
+  <div class="settings-section-head"><div><p class="eyebrow">CONNECTION CHECKS</p><h2>连接状态</h2><p>只调用账户、用量或模型列表接口；保存新密钥后再测试。</p></div></div>
+  <div class="connection-grid">
+    {% for item in connections %}
+    <article class="connection-card">
+      <div><strong>{{ item.name }}</strong><span class="pill {{ 'pill-good' if item.last_status == 'connected' else ('pill-bad' if item.last_status == 'error' else 'pill-neutral') }}">{{ item.status_label }}</span></div>
+      <p>{{ item.last_message or ('已保存配置，尚未测试' if item.configured else '先在上方填写并保存') }}</p>
+      {% if item.checked_at %}<small>最后测试：{{ item.checked_at }}</small>{% endif %}
+      <form method="post" action="/settings/test/{{ item.key }}"><button class="button button-secondary full" type="submit" {{ 'disabled' if not item.configured else '' }}>测试连接</button></form>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="settings-section quality-section" id="data-quality">
+  <div class="settings-section-head"><div><p class="eyebrow">GSC RELIABILITY</p><h2>GSC 信号可信度</h2><p>系统不把一次高曝光或一次下跌直接当成内容机会。</p></div><span class="pill {{ 'pill-good' if gsc_quality.status == 'usable' else ('pill-bad' if gsc_quality.status == 'known_anomaly' else 'pill-warning') }}">{{ gsc_quality.label }}</span></div>
+  <div class="quality-layout">
+    <div class="quality-score"><strong>{{ gsc_quality.independent_windows }}</strong><span>独立观察窗口</span><small>共 {{ gsc_quality.snapshot_count }} 个 GSC 导入</small></div>
+    <div>
+      <strong>{{ gsc_quality.decision_note }}</strong>
+      <ul class="quality-reasons">{% for reason in gsc_quality.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+    </div>
+  </div>
+  {% if gsc_quality.anomalies %}
+  <div class="anomaly-box"><strong>命中的官方异常</strong>{% for item in gsc_quality.anomalies %}<p>{{ item.title }}：{{ item.effect }}</p>{% endfor %}</div>
+  {% endif %}
+  <div class="policy-grid">{% for item in gsc_quality.policy or [] %}<div><span>{{ loop.index }}</span><p>{{ item }}</p></div>{% endfor %}</div>
+</section>
+
+<section class="settings-section">
+  <div class="settings-section-head"><div><p class="eyebrow">SOURCE ROLES</p><h2>每个数据源能证明什么</h2><p>这里是方法边界，不是供应商功能清单。</p></div></div>
+  <div class="source-catalog">
+    {% for source in source_catalog %}
+    <article><div class="catalog-head"><span class="level-badge">{{ source.level }}</span><div><strong>{{ source.name }}</strong><small>{{ source.role }}</small></div><em>{{ source.status }}</em></div><p><b>可证明：</b>{{ source.proves }}</p><p class="catalog-limit"><b>不能证明：</b>{{ source.does_not_prove }}</p></article>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

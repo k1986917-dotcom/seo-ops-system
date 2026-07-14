@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -24,6 +24,17 @@ from seo_ops.repositories import (
     list_sites,
 )
 from seo_ops.services.ai import AIUnavailable, explain_opportunity
+from seo_ops.services.data_quality import assess_gsc_quality
+from seo_ops.services.external_sources import (
+    SOURCE_CATALOG,
+    configured_sources,
+    test_source_connection,
+)
+from seo_ops.services.settings_store import (
+    NON_SECRET_FIELDS,
+    SECRET_FIELDS,
+    update_local_settings,
+)
 from seo_ops.utils import json_dumps, utc_now
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -48,6 +59,15 @@ def _redirect(path: str, message: str, level: str = "success") -> RedirectRespon
         f"{path}{separator}message={quote_plus(message)}&level={quote_plus(level)}",
         status_code=303,
     )
+
+
+def _require_local_form(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    hostname = urlsplit(origin).hostname
+    if hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise HTTPException(status_code=403, detail="设置只能从本机页面修改")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -97,6 +117,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "version": __version__,
             "ai_enabled": active_settings.ai_enabled,
+            "configured_sources": configured_sources(active_settings),
         }
 
     @app.get("/")
@@ -247,9 +268,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await explain_opportunity(opportunity, active_settings)
             return _redirect("/opportunities", "AI 已依据现有证据生成解释")
         except AIUnavailable as exc:
-            return _redirect("/ai", str(exc), "warning")
-        except Exception as exc:
-            return _redirect("/opportunities", f"AI 调用失败：{exc}", "error")
+            return _redirect("/settings", str(exc), "warning")
+        except Exception:
+            return _redirect("/opportunities", "AI 调用失败；请在设置页测试连接", "error")
 
     @app.get("/method")
     async def method_page(request: Request):
@@ -271,34 +292,150 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
-    @app.get("/ai")
-    async def ai_page(request: Request):
+    @app.get("/settings")
+    async def settings_page(request: Request):
         site_id = active_site_id(request)
+        configured = configured_sources(active_settings)
         with connection(active_settings) as conn:
             site = get_site(conn, site_id)
             sites = list_sites(conn)
             run_count = conn.execute(
                 "SELECT COUNT(*) AS count FROM ai_runs WHERE site_id = ?", (site_id,)
             ).fetchone()["count"]
+            check_rows = conn.execute(
+                "SELECT * FROM source_connections ORDER BY provider"
+            ).fetchall()
+            gsc_quality = assess_gsc_quality(conn, site_id)
+        checks = {row["provider"]: dict(row) for row in check_rows}
+        names = {
+            "ai": "AI Provider",
+            "serpapi": "SerpAPI",
+            "firecrawl": "Firecrawl",
+            "tavily": "Tavily",
+        }
+        connections = []
+        for key, name in names.items():
+            check = checks.get(key, {})
+            last_status = check.get("status")
+            if last_status == "connected":
+                label = "连接正常"
+            elif last_status == "error":
+                label = "测试失败"
+            elif configured[key]:
+                label = "等待测试"
+            else:
+                label = "未配置"
+            connections.append(
+                {
+                    "key": key,
+                    "name": name,
+                    "configured": configured[key],
+                    "last_status": last_status,
+                    "status_label": label,
+                    "last_message": check.get("error_message")
+                    or ("连接已验证" if last_status == "connected" else None),
+                    "checked_at": check.get("last_checked_at"),
+                }
+            )
+
+        status = {
+            "ai": {
+                "configured": configured["ai"],
+                "provider": active_settings.ai_provider,
+                "base_url": active_settings.ai_base_url,
+                "model": active_settings.ai_model,
+                "has_key": bool(active_settings.ai_api_key),
+                "run_count": run_count,
+            },
+            "serpapi": {
+                "configured": configured["serpapi"],
+                "has_key": configured["serpapi"],
+                "country": active_settings.serpapi_country,
+                "language": active_settings.serpapi_language,
+                "device": active_settings.serpapi_device,
+                "location": active_settings.serpapi_location,
+            },
+            "firecrawl": {
+                "configured": configured["firecrawl"],
+                "has_key": configured["firecrawl"],
+                "base_url": active_settings.firecrawl_base_url,
+            },
+            "tavily": {
+                "configured": configured["tavily"],
+                "has_key": configured["tavily"],
+                "base_url": active_settings.tavily_base_url,
+            },
+            "trends": {
+                "provider": active_settings.trends_provider,
+                "geo": active_settings.trends_geo,
+                "timeframe": active_settings.trends_timeframe,
+            },
+        }
         return templates.TemplateResponse(
             request=request,
-            name="ai.html",
+            name="settings.html",
             context=page_context(
                 request,
-                page="ai",
-                page_title="AI 助手",
+                page="settings",
+                page_title="设置与数据连接",
                 site=site,
                 sites=sites,
-                ai_status={
-                    "enabled": active_settings.ai_enabled,
-                    "provider": active_settings.ai_provider,
-                    "model": active_settings.ai_model,
-                    "base_url": active_settings.ai_base_url,
-                    "has_key": bool(active_settings.ai_api_key),
-                    "run_count": run_count,
-                },
+                settings_status=status,
+                configured_count=sum(configured.values()),
+                connections=connections,
+                source_catalog=SOURCE_CATALOG,
+                gsc_quality=gsc_quality,
             ),
         )
+
+    @app.post("/settings")
+    async def save_settings(request: Request):
+        nonlocal active_settings
+        _require_local_form(request)
+        form = await request.form()
+        submitted = {
+            field: str(form.get(field, ""))
+            for field in (*NON_SECRET_FIELDS.keys(), *SECRET_FIELDS.keys())
+        }
+        clear = {field for field in SECRET_FIELDS if form.get(f"clear_{field}") == "1"}
+        try:
+            active_settings = update_local_settings(active_settings, submitted, clear)
+            app.state.settings = active_settings
+        except ValueError as exc:
+            return _redirect("/settings", f"设置未保存：{exc}", "error")
+        except OSError:
+            return _redirect("/settings", "设置未保存：无法写入本地配置文件", "error")
+        return _redirect("/settings", "设置已保存并立即生效；可继续测试连接")
+
+    @app.post("/settings/test/{provider}")
+    async def test_connection(provider: str, request: Request):
+        _require_local_form(request)
+        result = await test_source_connection(provider, active_settings)
+        with connection(active_settings) as conn:
+            conn.execute(
+                """
+                INSERT INTO source_connections(
+                    provider, status, last_checked_at, details_json, error_message
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(provider) DO UPDATE SET
+                    status = excluded.status,
+                    last_checked_at = excluded.last_checked_at,
+                    details_json = excluded.details_json,
+                    error_message = excluded.error_message
+                """,
+                (
+                    provider,
+                    "connected" if result.ok else "error",
+                    utc_now(),
+                    json_dumps(result.details),
+                    None if result.ok else result.message,
+                ),
+            )
+        return _redirect("/settings", result.message, "success" if result.ok else "error")
+
+    @app.get("/ai")
+    async def ai_page_redirect():
+        return RedirectResponse("/settings#ai", status_code=307)
 
     return app
 

@@ -6,6 +6,7 @@ __pycache__/
 .coverage
 htmlcov/
 .env
+.env.tmp
 data/*.db
 data/raw/*
 !data/raw/.gitkeep
@@ -13,4 +14,3 @@ data/snapshots/*
 !data/snapshots/.gitkeep
 logs/*
 !logs/.gitkeep
-
