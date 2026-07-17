@@ -89,7 +89,7 @@ def run_analysis(site_id: int, settings: Settings | None = None) -> AnalysisOutc
                 "UPDATE opportunities SET method_version = ? WHERE analysis_run_id = ?",
                 (METHOD_VERSION, run_id),
             )
-            top_count = base_engine._assign_portfolio(conn, inserted)
+            top_count = base_engine.rebalance_site_portfolio(conn, site_id, run_id)
             conn.execute(
                 """
                 UPDATE analysis_runs
@@ -105,7 +105,7 @@ def run_analysis(site_id: int, settings: Settings | None = None) -> AnalysisOutc
                             "top_count": top_count,
                             "gsc_quality_status": quality["status"],
                             "gsc_independent_windows": quality["independent_windows"],
-                            "notes": "资格门槛与 GSC 稳定性门槛优先；没有合格项时允许 Top 3 不满。",
+                            "notes": "资格门槛与 GSC 稳定性优先；最多 2 篇旧文章和 2 篇新文章，不足不补位。",
                         }
                     ),
                     run_id,

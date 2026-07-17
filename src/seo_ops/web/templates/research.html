@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "research_entries.html" %}
+
+<section class="budget-grid">
+  {% for key, label in [('serpapi','SerpAPI'),('firecrawl','Firecrawl'),('tavily','Tavily'),('ai','AI')] %}
+  <article class="budget-card">
+    <span>{{ label[:1] }}</span>
+    <div><strong>{{ label }}</strong><small>{% if key == 'ai' %}{{ ai_model or '未设置模型' }} · {% endif %}每轮最多 {{ research_budgets[key] }} 次</small></div>
+    <em class="pill {{ 'pill-good' if configured.get(key) else 'pill-neutral' }}">{{ '已配置' if configured.get(key) else '未配置' }}</em>
+  </article>
+  {% endfor %}
+</section>
+
+{% if research_runs %}
+  {% for run in research_runs %}
+  <section class="research-run panel">
+    <div class="research-run-head">
+      <div>
+        <p class="eyebrow">{{ {'gsc':'GSC 信号','topic_gap':'主题缺口','boundary':'边界扩展','manual':'人工方向'}.get(run.seed_type, '主题调研') }} · RUN #{{ run.id }}</p>
+        <h2>{{ run.completed_at or run.started_at }}</h2>
+        <p class="muted">种子：{{ run.seed_queries|join(' · ') }}{% if run.filters.get('dimension_label') %} · {{ run.filters.dimension_label }}{% endif %}{% if run.ai_model %} · AI {{ run.ai_model }}{% endif %}</p>
+      </div>
+      <span class="pill {{ 'pill-good' if run.status == 'success' else 'pill-warning' if run.status == 'partial' else 'pill-bad' }}">{{ {'success':'完成','partial':'部分完成','failed':'失败','running':'运行中'}[run.status] }}</span>
+    </div>
+    <div class="usage-grid">
+      {% for key, label in [('serpapi','SerpAPI'),('firecrawl','Firecrawl'),('tavily','Tavily'),('ai','AI')] %}
+      {% set item = run.usage.get(key, {}) %}
+      <div><strong>{{ label }}</strong><span>真实请求 {{ item.get('actual_requests', 0) }} / 上限 {{ item.get('budget', run.budgets.get(key, 0)) }}</span><small>可用结果 {{ item.get('successful', 0) }}（其中复用 {{ item.get('reused', 0) }}）· 失败 {{ item.get('failed', 0) }}</small></div>
+      {% endfor %}
+    </div>
+
+    {% if run.candidates %}
+    <div class="research-candidate-grid">
+      {% for candidate in run.candidates %}
+      <article class="research-candidate">
+        <div class="candidate-top"><span class="pill {{ 'pill-warning' if candidate.gate_status == 'needs_evidence' else 'pill-bad' }}">{{ '待核验' if candidate.gate_status == 'needs_evidence' else '重叠阻塞' }}</span><small>{{ candidate.intent or '待人工确认' }}</small></div>
+        <h3>{{ candidate.topic }}</h3>
+        <p>{{ candidate.rationale }}</p>
+        <div class="candidate-next"><strong>下一步</strong><span>{{ candidate.recommended_next_step }}</span></div>
+        {% if candidate.decision == 'pending' %}
+        <div class="candidate-decisions">
+          {% if candidate.gate_status != 'blocked' %}
+          <form method="post" action="/research/candidates/{{ candidate.id }}/decision">
+            <input type="hidden" name="decision" value="do">
+            <button class="button button-primary" type="submit">加入新文章建议</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/research/candidates/{{ candidate.id }}/decision">
+            <input type="hidden" name="decision" value="dont_recommend">
+            <button class="button button-ghost" type="submit">不再推荐</button>
+          </form>
+          <form method="post" action="/research/candidates/{{ candidate.id }}/decision">
+            <input type="hidden" name="decision" value="skip">
+            <button class="button button-ghost" type="submit">暂时跳过</button>
+          </form>
+        </div>
+        {% else %}
+        <div class="decision-status">
+          {{ {'do':'已选择：值得做','dont_recommend':'已选择：不再推荐','skip':'已选择：暂时跳过'}.get(candidate.decision) }}
+        </div>
+        {% endif %}
+        <details class="evidence-details"><summary>查看依据（可选）</summary><div class="research-detail">
+          <strong>Evidence IDs</strong><p>{{ candidate.evidence_refs|join(' · ') }}</p>
+          {% if candidate.facts %}<strong>事实</strong><ul>{% for item in candidate.facts %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+          {% if candidate.inference %}<strong>推断</strong><ul>{% for item in candidate.inference %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+          <strong>局限</strong><ul>{% for item in candidate.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+          {% if candidate.source_urls %}<strong>原始网页</strong><ul>{% for url in candidate.source_urls %}<li><a href="{{ url }}" rel="noreferrer">{{ url }}</a></li>{% endfor %}</ul>{% endif %}
+        </div></details>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">本轮没有形成可展示主题；成功快照和失败记录仍已保留。</p>
+    {% endif %}
+  </section>
+  {% endfor %}
+{% else %}
+<section class="empty-state"><div class="empty-icon">⌕</div><h3>还没有外部主题调研</h3><p>点击上方按钮后才会按预算调用；第一方“重新分析”不会消耗这些 API。</p></section>
+{% endif %}
+{% endblock %}

@@ -38,27 +38,71 @@ def assess_gsc_quality(
     site_id: int,
     import_id: int | None = None,
 ) -> dict[str, Any]:
+    archived_snapshot_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM imports
+            WHERE site_id = ? AND source_type = 'gsc' AND status = 'success'
+              AND analysis_active = 0
+            """,
+            (site_id,),
+        ).fetchone()[0]
+    )
+    excluded_snapshot_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM imports
+            WHERE site_id = ? AND source_type = 'gsc' AND status = 'success'
+              AND quality_eligible = 0
+            """,
+            (site_id,),
+        ).fetchone()[0]
+    )
+    trusted_history_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) FROM imports
+            WHERE site_id = ? AND source_type = 'gsc' AND status = 'success'
+              AND quality_eligible = 1 AND analysis_active = 0
+            """,
+            (site_id,),
+        ).fetchone()[0]
+    )
+    active_import = conn.execute(
+        """
+        SELECT id FROM imports
+        WHERE site_id = ? AND source_type = 'gsc' AND status = 'success'
+          AND analysis_active = 1 AND quality_eligible = 1
+        ORDER BY imported_at DESC, id DESC LIMIT 1
+        """,
+        (site_id,),
+    ).fetchone()
+
     imports = conn.execute(
         """
         SELECT id, imported_at, metadata_json
         FROM imports
         WHERE site_id = ? AND source_type = 'gsc' AND status = 'success'
+          AND quality_eligible = 1
         ORDER BY imported_at DESC, id DESC
         """,
         (site_id,),
     ).fetchall()
-    if not imports:
+    if not active_import:
         return {
             "status": "missing",
             "label": "没有 GSC 数据",
             "snapshot_count": 0,
+            "archived_snapshot_count": archived_snapshot_count,
+            "excluded_snapshot_count": excluded_snapshot_count,
+            "trusted_history_count": trusted_history_count,
             "independent_windows": 0,
             "anomalies": [],
             "reasons": ["尚未导入 GSC"],
             "decision_note": "不能生成基于搜索表现的决策",
         }
 
-    selected_id = import_id or int(imports[0]["id"])
+    selected_id = import_id or int(active_import["id"])
     bounds = conn.execute(
         """
         SELECT MIN(dimension_value) AS start_date, MAX(dimension_value) AS end_date
@@ -111,14 +155,23 @@ def assess_gsc_quality(
 
     if comparison_count == 0:
         reasons.append("没有可识别的同期对比导出")
+    if trusted_history_count:
+        reasons.append(
+            f"{trusted_history_count} 个历史可信窗口参与稳定性判断，但不参与当前机会指标"
+        )
+    if excluded_snapshot_count:
+        reasons.append(f"{excluded_snapshot_count} 个历史导入已排除，不参与当前分析或稳定性判断")
     reasons.append("GSC API/导出可能只返回顶部数据，维度聚合也会改变数字")
 
     return {
         "status": status,
         "label": label,
         "snapshot_count": len(imports),
+        "archived_snapshot_count": archived_snapshot_count,
         "independent_windows": independent_windows,
         "comparison_count": comparison_count,
+        "excluded_snapshot_count": excluded_snapshot_count,
+        "trusted_history_count": trusted_history_count,
         "selected_import_id": selected_id,
         "date_start": start.isoformat() if start else None,
         "date_end": end.isoformat() if end else None,

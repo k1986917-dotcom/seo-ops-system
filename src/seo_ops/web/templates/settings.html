@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "workflow_base.html" %}
 {% block content %}
 <section class="settings-hero">
   <div>
@@ -29,6 +29,31 @@
       <label class="secret-field"><span>API Key</span><input type="password" name="ai_api_key" autocomplete="new-password" placeholder="{{ '已配置；留空则保留' if settings_status.ai.has_key else '填入新的 API Key' }}"></label>
       <label class="clear-secret"><input type="checkbox" name="clear_ai_api_key" value="1">清除本地 AI Key</label>
     </div>
+    <div class="subsection-title"><strong>文章制作调用保护</strong><small>与外部主题调研预算分开计算</small></div>
+    <div class="form-grid form-grid-3">
+      <label>
+        <span>每篇文章 AI 调用上限（{{ content_ai_call_limits.min }}–{{ content_ai_call_limits.max }}）</span>
+        <input type="number" name="content_ai_call_limit" min="{{ content_ai_call_limits.min }}" max="{{ content_ai_call_limits.max }}" value="{{ settings_status.ai.content_call_limit }}">
+      </label>
+      <div class="security-note compact-note" role="note">
+        <span>i</span>
+        <div><strong>这是上限，不是必须用满</strong><p>新文章正常 3 次，检查失败才继续修订；旧文章通常只用 1 次。达到上限后会停止，不会无限重试。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="settings-section" id="research-budget">
+    <div class="settings-section-head">
+      <div><p class="eyebrow">PER-RUN BUDGET</p><h2>每轮外部主题调研预算</h2><p>这些数字是一次明确点击最多发出的真实请求数，不要求用满；24 小时复用、URL 去重和提前停止不会消耗预算。</p></div>
+      <span class="pill pill-warning">需人工触发</span>
+    </div>
+    <div class="form-grid form-grid-4">
+      <label><span>SerpAPI（0–{{ research_budget_limits.serpapi }}）</span><input type="number" name="research_serpapi_budget" min="0" max="{{ research_budget_limits.serpapi }}" value="{{ settings_status.research.serpapi }}"></label>
+      <label><span>Firecrawl（0–{{ research_budget_limits.firecrawl }}）</span><input type="number" name="research_firecrawl_budget" min="0" max="{{ research_budget_limits.firecrawl }}" value="{{ settings_status.research.firecrawl }}"></label>
+      <label><span>Tavily（0–{{ research_budget_limits.tavily }}）</span><input type="number" name="research_tavily_budget" min="0" max="{{ research_budget_limits.tavily }}" value="{{ settings_status.research.tavily }}"></label>
+      <label><span>AI 整理（0–{{ research_budget_limits.ai }}）</span><input type="number" name="research_ai_budget" min="0" max="{{ research_budget_limits.ai }}" value="{{ settings_status.research.ai }}"></label>
+    </div>
+    <div class="security-note compact-note" role="note"><span>i</span><div><strong>次数多不等于证据强</strong><p>同一网页被多个工具找到仍是一份底层证据；外部新主题没有第一方需求和 query→page 数据时只会进入“待核验”。</p></div></div>
   </section>
 
   <section class="settings-section">
@@ -96,7 +121,7 @@
 <section class="settings-section quality-section" id="data-quality">
   <div class="settings-section-head"><div><p class="eyebrow">GSC RELIABILITY</p><h2>GSC 信号可信度</h2><p>系统不把一次高曝光或一次下跌直接当成内容机会。</p></div><span class="pill {{ 'pill-good' if gsc_quality.status == 'usable' else ('pill-bad' if gsc_quality.status == 'known_anomaly' else 'pill-warning') }}">{{ gsc_quality.label }}</span></div>
   <div class="quality-layout">
-    <div class="quality-score"><strong>{{ gsc_quality.independent_windows }}</strong><span>独立观察窗口</span><small>共 {{ gsc_quality.snapshot_count }} 个 GSC 导入</small></div>
+    <div class="quality-score"><strong>{{ gsc_quality.independent_windows }}</strong><span>独立观察窗口</span><small>共 {{ gsc_quality.snapshot_count }} 个可信 GSC 导入{% if gsc_quality.excluded_snapshot_count %} · {{ gsc_quality.excluded_snapshot_count }} 个已排除{% endif %}</small></div>
     <div>
       <strong>{{ gsc_quality.decision_note }}</strong>
       <ul class="quality-reasons">{% for reason in gsc_quality.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>

@@ -7,10 +7,14 @@ __pycache__/
 htmlcov/
 .env
 .env.tmp
+.secrets/
+client_secret_*.apps.googleusercontent.com.json
+*:Zone.Identifier
 data/*.db
 data/raw/*
 !data/raw/.gitkeep
 data/snapshots/*
 !data/snapshots/.gitkeep
+data/backups/*
 logs/*
 !logs/.gitkeep

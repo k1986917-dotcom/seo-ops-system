@@ -1,0 +1,113 @@
+{% extends "workflow_base.html" %}
+
+{% macro decision_buttons(kind, item_id) -%}
+<div class="card-decisions">
+  <form method="post" action="{{ '/opportunities/' ~ item_id ~ '/decision' if kind == 'old' else '/research/candidates/' ~ item_id ~ '/decision' }}">
+    <button class="button button-primary" name="decision" value="execute" type="submit">开始执行</button>
+  </form>
+  <form method="post" action="{{ '/opportunities/' ~ item_id ~ '/decision' if kind == 'old' else '/research/candidates/' ~ item_id ~ '/decision' }}">
+    <button class="button button-ghost" name="decision" value="skip" type="submit">暂时跳过</button>
+  </form>
+  <form method="post" action="{{ '/opportunities/' ~ item_id ~ '/decision' if kind == 'old' else '/research/candidates/' ~ item_id ~ '/decision' }}">
+    <button class="button button-ghost" name="decision" value="reject" type="submit">不再推荐</button>
+  </form>
+</div>
+{%- endmacro %}
+
+{% macro old_card(item, featured=false, rank=none) -%}
+<article class="suggestion-card {{ 'featured' if featured else '' }}">
+  <div class="card-kicker">
+    <span class="pill pill-good">{{ '优先建议 ' ~ rank if featured else '候选旧文章' }}</span>
+    <small>旧文章 · {{ item.scope }}</small>
+  </div>
+  <h3>{{ item.content_title }}</h3>
+  <p class="target-ref">{{ item.target_ref }}</p>
+  <div class="suggestion-facts">
+    <span><strong>为什么现在看：</strong>{{ item.why }}</span>
+    <span><strong>准备怎么改：</strong>{{ item.recommended_action }}</span>
+  </div>
+  {{ decision_buttons('old', item.id) }}
+</article>
+{%- endmacro %}
+
+{% macro new_card(item, featured=false, rank=none) -%}
+<article class="suggestion-card {{ 'featured' if featured else '' }}">
+  <div class="card-kicker">
+    <span class="pill pill-good">{{ '优先建议 ' ~ rank if featured else '候选新文章' }}</span>
+    <small>新文章 · {{ item.intent or '搜索意图待最终确认' }}</small>
+  </div>
+  <h3>{{ item.topic }}</h3>
+  <div class="suggestion-facts">
+    <span><strong>为什么值得考虑：</strong>{{ item.rationale }}</span>
+    <span><strong>现有内容重叠：</strong>{{ '已通过强重叠拦截，制作前仍会再检查一次' }}</span>
+  </div>
+  {{ decision_buttons('new', item.id) }}
+</article>
+{%- endmacro %}
+
+{% block content %}
+<section class="intro-strip">
+  <div>
+    <strong>这里只做一个决定：选哪篇开始制作</strong>
+    <p>左边来自 GSC + CMS 的旧文章建议；右边来自外部调研 + CMS + 图谱的新文章建议。打开本页不会调用 API。</p>
+  </div>
+  <span class="pill pill-good">最多 2 旧 + 2 新</span>
+</section>
+
+<section class="lane-board suggestion-board">
+  <div class="workflow-lane old-lane">
+    <header class="lane-head">
+      <div><h2>更新旧文章</h2><p>只推荐确实有数据理由、而且可以在 CMS 中修改的文章</p></div>
+      <span class="lane-count">{{ suggestions.old.total }} 个可选</span>
+    </header>
+    {% if suggestions.old.featured %}
+    <div class="suggestion-stack">
+      {% for item in suggestions.old.featured %}
+        {{ old_card(item, true, loop.index) }}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="lane-empty"><div class="empty-icon">A</div><h3>没有值得强行更新的旧文章</h3><p>这属于正常结果；等新 GSC 数据出现后再判断。</p></div>
+    {% endif %}
+    {% if suggestions.old.more %}
+    <details class="more-suggestions">
+      <summary>其他旧文章候选（{{ suggestions.old.more|length }}）</summary>
+      <div class="suggestion-stack">
+        {% for item in suggestions.old.more %}{{ old_card(item) }}{% endfor %}
+        {% if suggestions.old.hidden_count %}<p class="muted">还有 {{ suggestions.old.hidden_count }} 项低优先级候选未展开，避免页面过长。</p>{% endif %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+
+  <div class="workflow-lane new-lane">
+    <header class="lane-head">
+      <div><h2>制作新文章</h2><p>只显示已完成外部调研并通过明显重复拦截的具体主题</p></div>
+      <span class="lane-count">{{ suggestions.new.total }} 个可选</span>
+    </header>
+    {% if suggestions.new.featured %}
+    <div class="suggestion-stack">
+      {% for item in suggestions.new.featured %}
+        {{ new_card(item, true, loop.index) }}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="lane-empty"><div class="empty-icon">N</div><h3>还没有合格的新文章方向</h3><p>回到第 2 步继续调研，或先从主题图谱判断要深入哪个分支。</p></div>
+    {% endif %}
+    {% if suggestions.new.more %}
+    <details class="more-suggestions">
+      <summary>其他新文章候选（{{ suggestions.new.more|length }}）</summary>
+      <div class="suggestion-stack">
+        {% for item in suggestions.new.more %}{{ new_card(item) }}{% endfor %}
+        {% if suggestions.new.hidden_count %}<p class="muted">还有 {{ suggestions.new.hidden_count }} 项低优先级候选未展开，避免页面过长。</p>{% endif %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+</section>
+
+<section class="next-step-strip">
+  <div><strong>点击“开始执行”后，卡片会从本页消失</strong><p>它只会出现在第 4 步“文章制作”；跳过和不再推荐也会立即从本页移除。</p></div>
+  <a class="button button-secondary" href="/actions">查看文章制作</a>
+</section>
+{% endblock %}

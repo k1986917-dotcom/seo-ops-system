@@ -18,3 +18,21 @@ document.querySelectorAll('.decision-form').forEach((form) => {
   });
 });
 
+
+document.querySelectorAll('form[data-confirm]').forEach((form) => {
+  form.addEventListener('submit', (event) => {
+    if (!window.confirm(form.dataset.confirm || '确认继续吗？')) {
+      event.preventDefault();
+    }
+  });
+});
+
+document.querySelectorAll('form[data-working-label]').forEach((form) => {
+  form.addEventListener('submit', () => {
+    const button = form.querySelector('button[type="submit"]');
+    if (!button) return;
+    button.disabled = true;
+    button.textContent = form.dataset.workingLabel || '处理中…';
+  });
+});
+

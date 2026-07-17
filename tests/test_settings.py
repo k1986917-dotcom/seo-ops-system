@@ -29,21 +29,31 @@ def _settings_form(secret: str) -> dict[str, str]:
         "trends_provider": "serpapi",
         "trends_geo": "US",
         "trends_timeframe": "today 12-m",
+        "research_serpapi_budget": "4",
+        "research_firecrawl_budget": "3",
+        "research_tavily_budget": "5",
+        "research_ai_budget": "1",
+        "content_ai_call_limit": "4",
     }
 
 
 def test_settings_page_saves_secret_without_reflecting_it(settings):
     secret = "unit-test-serpapi-secret"
-    app = create_app(settings)
+    app = create_app(replace(settings, ai_model="deepseek-v4-flash"))
     try:
         with TestClient(app) as client:
             page = client.get("/settings")
+            research = client.get("/research")
             saved = client.post("/settings", data=_settings_form(secret), follow_redirects=True)
             health = client.get("/api/health")
 
         assert page.status_code == 200
         assert "设置与数据连接" in page.text
         assert "Google Trends" in page.text
+        assert "每轮外部主题调研预算" in page.text
+        assert research.status_code == 200
+        assert "每篇文章 AI 调用上限" in page.text
+        assert "deepseek-v4-flash" in page.text
         assert saved.status_code == 200
         assert secret not in saved.text
         assert health.json()["configured_sources"]["serpapi"] is True
@@ -53,6 +63,14 @@ def test_settings_page_saves_secret_without_reflecting_it(settings):
         assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
     finally:
         os.environ.pop("SEO_OPS_SERPAPI_KEY", None)
+        for key in (
+            "SEO_OPS_RESEARCH_SERPAPI_BUDGET",
+            "SEO_OPS_RESEARCH_FIRECRAWL_BUDGET",
+            "SEO_OPS_RESEARCH_TAVILY_BUDGET",
+            "SEO_OPS_RESEARCH_AI_BUDGET",
+            "SEO_OPS_CONTENT_AI_CALL_LIMIT",
+        ):
+            os.environ.pop(key, None)
 
 
 def test_settings_rejects_cross_origin_post(settings):
@@ -64,6 +82,28 @@ def test_settings_rejects_cross_origin_post(settings):
             headers={"Origin": "https://malicious.example"},
         )
     assert response.status_code == 403
+    assert not (settings.project_root / ".env").exists()
+
+
+def test_settings_rejects_research_budget_above_hard_limit(settings):
+    form = _settings_form("")
+    form["research_serpapi_budget"] = "11"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post("/settings", data=form, follow_redirects=True)
+    assert response.status_code == 200
+    assert "serpapi 每轮预算不能超过 10" in response.text
+    assert not (settings.project_root / ".env").exists()
+
+
+def test_settings_rejects_content_ai_limit_above_hard_cap(settings):
+    form = _settings_form("")
+    form["content_ai_call_limit"] = "11"
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.post("/settings", data=form, follow_redirects=True)
+    assert response.status_code == 200
+    assert "每篇文章 AI 调用上限必须在 3–10 之间" in response.text
     assert not (settings.project_root / ".env").exists()
 
 

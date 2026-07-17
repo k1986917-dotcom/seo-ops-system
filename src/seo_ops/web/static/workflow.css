@@ -1,0 +1,541 @@
+.workflow-shell {
+  grid-template-columns: 188px minmax(0, 1fr);
+}
+
+.workflow-sidebar {
+  padding: 22px 12px 16px;
+}
+
+.workflow-brand {
+  margin: 0 7px 26px;
+  gap: 9px;
+}
+
+.workflow-brand .brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 17px;
+}
+
+.workflow-brand strong {
+  font-size: 14px;
+}
+
+.nav-caption {
+  margin: 0 10px 8px;
+  color: #6f887c;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.workflow-nav {
+  gap: 5px;
+}
+
+.workflow-nav .nav-item {
+  gap: 9px;
+  min-height: 50px;
+  padding: 8px 9px;
+}
+
+.workflow-nav .nav-step {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.13);
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.workflow-nav .nav-item.active .nav-step {
+  color: #143326;
+  border-color: #9fdbb9;
+  background: #9fdbb9;
+}
+
+.workflow-sidebar .nav-item .nav-copy {
+  display: block;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.nav-copy small {
+  display: block;
+  margin-top: 1px;
+  color: #728a7f;
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.workflow-secondary {
+  margin-top: auto;
+  gap: 4px;
+}
+
+.workflow-secondary .nav-item {
+  padding: 8px 10px;
+  font-size: 10px;
+}
+
+.workflow-sidebar .sidebar-note {
+  margin-top: 14px;
+  padding: 10px;
+}
+
+.workflow-main {
+  max-width: 1720px;
+  padding: 30px 34px 58px;
+}
+
+.next-step-strip {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-top: 20px;
+  padding: 16px 18px;
+  border: 1px solid #cfe1d7;
+  border-radius: 14px;
+  background: #edf7f1;
+}
+
+.next-step-strip p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.lane-board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.workflow-lane {
+  min-width: 0;
+}
+
+.lane-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding: 15px 17px;
+  border-radius: 14px;
+  color: #e8f3ed;
+  background: #18392c;
+}
+
+.workflow-lane.new-lane .lane-head {
+  background: #263b72;
+}
+
+.lane-head h2 {
+  margin: 0;
+  color: #fff;
+  font-size: 19px;
+}
+
+.lane-head p {
+  margin: 3px 0 0;
+  color: #a8c1b5;
+  font-size: 10px;
+}
+
+.new-lane .lane-head p {
+  color: #b9c4e8;
+}
+
+.lane-count {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #173b2c;
+  background: #b9e2cb;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.new-lane .lane-count {
+  color: #293b70;
+  background: #cdd6ff;
+}
+
+.suggestion-stack,
+.production-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.suggestion-card,
+.production-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(25,43,34,.05);
+}
+
+.suggestion-card.featured {
+  border-color: #b9d7c6;
+}
+
+.new-lane .suggestion-card.featured {
+  border-color: #cbd3f2;
+}
+
+.card-kicker {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.card-kicker small {
+  font-size: 8px;
+}
+
+.suggestion-card h3,
+.production-card h3 {
+  margin-bottom: 7px;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+}
+
+.suggestion-card > p,
+.production-card > p {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.suggestion-facts {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+  padding: 11px;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-size: 9px;
+}
+
+.suggestion-facts strong {
+  color: var(--ink);
+}
+
+.card-decisions {
+  display: grid;
+  grid-template-columns: minmax(100px, 1.35fr) 1fr 1fr;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.card-decisions form,
+.card-decisions button {
+  width: 100%;
+}
+
+.card-decisions .button {
+  min-height: 36px;
+  padding: 7px;
+  font-size: 9px;
+}
+
+.more-suggestions {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255,255,255,.55);
+}
+
+.more-suggestions > summary {
+  padding: 12px 14px;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.more-suggestions .suggestion-stack {
+  padding: 0 10px 10px;
+}
+
+.lane-empty {
+  padding: 34px 18px;
+  border: 1px dashed #c1cbc5;
+  border-radius: 14px;
+  background: rgba(255,255,255,.55);
+  text-align: center;
+}
+
+.lane-empty h3 {
+  margin: 10px 0 5px;
+}
+
+.lane-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.inline-settings {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255,255,255,.75);
+}
+
+.inline-settings label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.inline-settings input,
+.inline-settings select {
+  width: 78px;
+  height: 36px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.research-budget-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(75px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.run-summary {
+  margin-top: 18px;
+}
+
+.run-outcome {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+
+.run-outcome strong,
+.run-outcome small {
+  display: block;
+}
+
+.partial-explanation {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  color: #76521b;
+  background: #fff3df;
+  font-size: 10px;
+}
+
+.previous-runs {
+  margin-top: 13px;
+}
+
+.previous-runs > summary {
+  color: var(--green);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.previous-run-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+}
+
+.production-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.production-card-head {
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.production-card-body {
+  padding: 18px;
+}
+
+.production-flow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+}
+
+.production-flow span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: #edf0ed;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.production-flow span.done {
+  color: var(--green-dark);
+  background: var(--green-soft);
+}
+
+.production-note {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.cms-package {
+  margin-top: 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fbfcfa;
+}
+
+.cms-package > summary {
+  padding: 12px 13px;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.cms-package-fields {
+  padding: 0 13px 13px;
+}
+
+.production-card .deliverable-field textarea.content-output {
+  min-height: 420px;
+}
+
+.production-card .material-grid {
+  grid-template-columns: 1fr;
+}
+
+.material-compact {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--green-soft);
+  font-size: 10px;
+}
+
+.material-compact.warning {
+  color: #76521b;
+  background: #fff3df;
+}
+
+@media (max-width: 1080px) {
+  .lane-board {
+    grid-template-columns: 1fr;
+  }
+
+  .research-budget-form {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
+  }
+
+  .research-budget-form .button {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .workflow-shell {
+    display: block;
+  }
+
+  .workflow-sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    padding: 13px;
+  }
+
+  .workflow-brand {
+    margin-bottom: 10px;
+  }
+
+  .workflow-sidebar > .nav-caption,
+  .workflow-secondary,
+  .workflow-sidebar .sidebar-note,
+  .workflow-sidebar .sidebar-version {
+    display: none;
+  }
+
+  .workflow-nav {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .workflow-nav .nav-item {
+    flex: 0 0 auto;
+    min-height: 40px;
+  }
+
+  .workflow-nav .nav-copy small {
+    display: none;
+  }
+
+  .workflow-main {
+    padding: 23px 16px 44px;
+  }
+}
+
+@media (max-width: 560px) {
+  .next-step-strip,
+  .run-outcome {
+    display: grid;
+  }
+
+  .card-decisions {
+    grid-template-columns: 1fr;
+  }
+
+  .research-budget-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .inline-settings {
+    display: grid;
+  }
+
+  .production-card .deliverable-field textarea.content-output {
+    min-height: 330px;
+  }
+}

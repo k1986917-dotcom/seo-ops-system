@@ -21,6 +21,7 @@ def test_single_gsc_window_is_provisional_and_lowers_confidence(settings):
     with connection(settings) as conn:
         opportunities = list_opportunities(conn, 1)
     protect = next(item for item in opportunities if item["opportunity_type"] == "protect")
-    assert protect["gate_status"] == "passed"
-    assert protect["confidence"] == "medium"
+    assert protect["gate_status"] == "needs_evidence"
+    assert protect["confidence"] == "low"
     assert protect["evidence"]["data_quality"]["status"] == "provisional"
+    assert protect["evidence"]["query_page"]["current"] == []

@@ -1,32 +1,63 @@
-{% extends "base.html" %}
+{% extends "workflow_base.html" %}
 {% block content %}
 <section class="intro-strip">
-  <div><strong>原始文件不会被删除</strong><p>每次导入先保存 SHA-256 与不可变快照；重复文件不会重复入库。</p></div>
-  <span class="pill pill-good">审计可追溯</span>
+  <div><strong>先同步搜索表现，再导入最新 CMS 内容</strong><p>GSC 通过 Google 只读 OAuth 一键同步；文章 JSON 和产品 JSON 仍需从 CMS 导出后上传。成功后会自动刷新内部旧文章分析。</p></div>
+  <span class="pill pill-good">GSC 只读连接</span>
 </section>
 
 <section class="upload-grid">
   <article class="upload-card">
     <div class="upload-badge blue">G</div>
-    <h2>Search Console</h2>
-    <p>支持标准导出和“过去 28 天 / 先前 28 天”对比导出，保留查询、网页、设备、国家等全部维度。</p>
-    <form method="post" action="/imports/gsc" enctype="multipart/form-data" class="upload-form">
-      <input type="hidden" name="site_id" value="{{ site.id }}">
-      <label class="file-drop">
-        <input type="file" name="files" accept=".xlsx" multiple required>
-        <span class="drop-icon">⇧</span>
-        <strong>选择 GSC Excel</strong>
-        <small>可同时选择标准和对比文件</small>
-        <em class="file-name">尚未选择文件</em>
-      </label>
-      <button class="button button-primary full" type="submit">导入 GSC</button>
-    </form>
+    <h2>Search Console 自动同步</h2>
+    <p>同步已最终化的日期、查询、页面以及真实的“查询 + 页面”联合数据；不会请求 {{ gsc_status.trusted_start_date }} 以前的数据。</p>
+    {% if gsc_status.connected %}
+      <div class="connection-summary">
+        <span class="pill pill-good">已连接 · 只读</span>
+        <strong>{{ gsc_status.property_uri }}</strong>
+        <small>可信起始日：{{ gsc_status.trusted_start_date }}</small>
+        {% if gsc_status.last_sync_at %}
+        <small>最近同步：{{ gsc_status.last_sync_at }} · 联合明细 {{ gsc_status.latest_query_page_rows|number }} 条</small>
+        {% else %}
+        <small>尚未同步；首次同步会创建新的活动 GSC 批次。</small>
+        {% endif %}
+      </div>
+      <form method="post" action="/imports/gsc/sync" class="upload-form">
+        <input type="hidden" name="site_id" value="{{ site.id }}">
+        <button class="button button-primary full" type="submit">一键同步 GSC 并刷新分析</button>
+      </form>
+      <a class="text-link" href="/imports/gsc/oauth/start?site_id={{ site.id }}">重新授权</a>
+    {% elif gsc_status.client_configured and gsc_status.client_file_secure %}
+      <div class="connection-summary">
+        <span class="pill pill-neutral">等待首次授权</span>
+        <small>授权 token 只保存在本机受保护文件，不写入数据库或 Git。</small>
+      </div>
+      <a class="button button-primary full" href="/imports/gsc/oauth/start?site_id={{ site.id }}">连接 Google Search Console</a>
+    {% else %}
+      <div class="connection-summary">
+        <span class="pill pill-bad">OAuth 客户端尚未安全配置</span>
+        <small>{{ gsc_status.configuration_error or '请配置本地客户端 JSON，并将权限设为 0600。' }}</small>
+      </div>
+    {% endif %}
+    {% if gsc_status.last_error_message %}<p class="form-error">{{ gsc_status.last_error_message }}</p>{% endif %}
+    <details class="manual-fallback">
+      <summary>保留手工 GSC Excel 导入</summary>
+      <form method="post" action="/imports/gsc" enctype="multipart/form-data" class="upload-form compact-top">
+        <input type="hidden" name="site_id" value="{{ site.id }}">
+        <label class="file-drop">
+          <input type="file" name="files" accept=".xlsx" multiple required>
+          <strong>选择 GSC Excel</strong>
+          <small>仅作为 API 暂不可用时的备用入口</small>
+          <em class="file-name">尚未选择文件</em>
+        </label>
+        <button class="button button-secondary full" type="submit">导入备用 Excel</button>
+      </form>
+    </details>
   </article>
 
   <article class="upload-card">
     <div class="upload-badge violet">C</div>
     <h2>CMS 内容</h2>
-    <p>系统会自动识别 blogs 或 products 导出，保存完整正文、SEO 字段、价格、库存与属性快照。</p>
+    <p>文章 JSON 和产品 JSON 仍需手工导入。系统会自动识别 blogs 或 products，并保存正文、SEO 字段、价格、库存与属性快照。</p>
     <form method="post" action="/imports/cms" enctype="multipart/form-data" class="upload-form">
       <input type="hidden" name="site_id" value="{{ site.id }}">
       <label class="file-drop">
@@ -46,17 +77,40 @@
   {% if imports %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>来源</th><th>文件</th><th>状态</th><th>记录数</th><th>时间</th></tr></thead>
+      <thead><tr><th>来源</th><th>文件</th><th>用途</th><th>状态</th><th>记录数</th><th>时间</th><th>操作</th></tr></thead>
       <tbody>
       {% for item in imports %}
         <tr>
           <td><span class="source-tag">{{ item.source_type }}</span></td>
           <td><strong>{{ item.original_name }}</strong><small class="block mono">{{ item.sha256[:12] }}</small></td>
+          <td>
+            {% if item.source_type == 'gsc' %}
+            {% if item.analysis_active %}
+            <span class="pill pill-good">当前分析</span>
+            {% elif item.quality_eligible %}
+            <span class="pill pill-neutral">可信历史窗口</span>
+            {% else %}
+            <span class="pill pill-bad">已排除 · 历史保留</span>
+            {% endif %}
+            {% else %}
+            <span class="muted">当前内容</span>
+            {% endif %}
+          </td>
           <td><span class="pill {{ 'pill-good' if item.status == 'success' else 'pill-bad' if item.status == 'failed' else 'pill-neutral' }}">{{ item.status }}</span></td>
           <td>{{ item.row_count|number }}</td>
           <td class="muted">{{ item.imported_at }}</td>
+          <td>
+            {% if item.source_type == 'gsc' %}
+            <form method="post" action="/imports/{{ item.id }}/delete" class="inline-form" onsubmit="return confirm('确定删除这次 GSC 导入及其关联旧分析吗？此操作不能撤销。')">
+              <input type="hidden" name="site_id" value="{{ site.id }}">
+              <button class="button button-danger button-compact" type="submit">删除这次导入</button>
+            </form>
+            {% else %}
+            <span class="muted">—</span>
+            {% endif %}
+          </td>
         </tr>
-        {% if item.error_message %}<tr class="error-row"><td colspan="5">{{ item.error_message }}</td></tr>{% endif %}
+        {% if item.error_message %}<tr class="error-row"><td colspan="7">{{ item.error_message }}</td></tr>{% endif %}
       {% endfor %}
       </tbody>
     </table>
@@ -64,6 +118,11 @@
   {% else %}
   <p class="muted">还没有导入记录。</p>
   {% endif %}
+</section>
+
+<section class="next-step-strip">
+  <div><strong>第 1 步完成后，可以继续外部主题调研</strong><p>旧文章分析已经在导入后自动更新；第 2 步只负责寻找新文章的外部信号。</p></div>
+  <a class="button button-primary" href="/research">进入第 2 步</a>
 </section>
 {% endblock %}
 

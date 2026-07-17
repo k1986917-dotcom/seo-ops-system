@@ -1,0 +1,102 @@
+{% extends "workflow_base.html" %}
+{% block content %}
+{% include "research_entries.html" %}
+
+<section class="panel inline-settings">
+  <div>
+    <p class="eyebrow">本页参数</p>
+    <h3>每轮外部调研预算</h3>
+    <p class="muted">这些是防止重复调用的上限，系统找到足够信号后可以提前停止。</p>
+  </div>
+  <form method="post" action="/research/budgets" class="research-budget-form">
+    {% for key, label, field in [
+      ('serpapi','SerpAPI','research_serpapi_budget'),
+      ('firecrawl','Firecrawl','research_firecrawl_budget'),
+      ('tavily','Tavily','research_tavily_budget'),
+      ('ai','AI 整理','research_ai_budget')
+    ] %}
+    <label>{{ label }}（0–{{ research_budget_limits[key] }}）
+      <input type="number" name="{{ field }}" min="0" max="{{ research_budget_limits[key] }}" value="{{ research_budgets[key] }}" required>
+    </label>
+    {% endfor %}
+    <button class="button button-secondary" type="submit">保存预算</button>
+  </form>
+</section>
+
+{% if research_runs %}
+  {% set run = research_runs[0] %}
+  <section class="panel run-summary">
+    <div class="research-run-head">
+      <div>
+        <p class="eyebrow">最近一次 · RUN #{{ run.id }}</p>
+        <h2>{{ {'gsc':'GSC 信号','topic_gap':'主题缺口','boundary':'突破瓶颈','manual':'人工方向'}.get(run.seed_type, '主题调研') }}</h2>
+        <p class="muted">
+          {{ run.completed_at or run.started_at }}
+          {% if run.topic_name %} · 方向：{{ run.topic_name }}{% endif %}
+          {% if run.filters.get('dimension_label') %} · 维度：{{ run.filters.dimension_label }}{% endif %}
+          {% if run.ai_model %} · {{ run.ai_model }}{% endif %}
+        </p>
+      </div>
+      <span class="pill {{ 'pill-good' if run.status == 'success' else 'pill-warning' if run.status == 'partial' else 'pill-bad' }}">
+        {{ {'success':'完成','partial':'部分完成','failed':'失败','running':'运行中'}[run.status] }}
+      </span>
+    </div>
+
+    <div class="usage-grid">
+      {% for key, label in [('serpapi','SerpAPI'),('firecrawl','Firecrawl'),('tavily','Tavily'),('ai','AI 整理')] %}
+      {% set item = run.usage.get(key, {}) %}
+      <div>
+        <strong>{{ label }}</strong>
+        <span>{{ item.get('actual_requests', 0) }} / {{ item.get('budget', run.budgets.get(key, 0)) }}</span>
+        <small>成功 {{ item.get('successful', 0) }} · 复用 {{ item.get('reused', 0) }} · 失败 {{ item.get('failed', 0) }}</small>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="run-outcome">
+      <div>
+        <strong>保存了 {{ run.candidate_count }} 个主题线索</strong>
+        <small>具体文章主题只在第 3 步“文章建议”出现，不需要在本页逐个处理。</small>
+      </div>
+      <a class="button button-primary" href="/opportunities">查看文章建议</a>
+    </div>
+
+    {% if run.status == 'partial' %}
+    <div class="partial-explanation">
+      <strong>“部分完成”是什么意思？</strong>
+      至少一个数据源没有成功返回、或本轮材料不足以形成完整结果；已经成功保存的数据仍然有效。
+      {% for key, label in [('serpapi','SerpAPI'),('firecrawl','Firecrawl'),('tavily','Tavily'),('ai','AI 整理')] %}
+        {% if run.usage.get(key, {}).get('failed', 0) %}{{ label }} 失败 {{ run.usage[key].failed }} 次；{% endif %}
+      {% endfor %}
+      可以直接查看已有建议，也可以稍后再跑一轮。
+    </div>
+    {% elif run.status == 'failed' %}
+    <div class="partial-explanation"><strong>本轮没有完成。</strong>没有把失败结果当成主题建议；请检查页面提示或连接设置后再试。</div>
+    {% endif %}
+
+    {% if research_runs|length > 1 %}
+    <details class="previous-runs">
+      <summary>查看以前的调研概况（{{ research_runs|length - 1 }}）</summary>
+      {% for item in research_runs[1:] %}
+      <div class="previous-run-row">
+        <span>RUN #{{ item.id }} · {{ {'gsc':'GSC','topic_gap':'主题缺口','boundary':'突破瓶颈','manual':'人工方向'}.get(item.seed_type, '调研') }}</span>
+        <span>{{ item.candidate_count }} 个线索</span>
+        <span class="pill {{ 'pill-good' if item.status == 'success' else 'pill-warning' if item.status == 'partial' else 'pill-bad' }}">{{ {'success':'完成','partial':'部分完成','failed':'失败','running':'运行中'}[item.status] }}</span>
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}
+  </section>
+{% else %}
+<section class="empty-state">
+  <div class="empty-icon">⌕</div>
+  <h3>还没有外部主题调研</h3>
+  <p>从上面三种方法选一种。只有你点击按钮才会使用 API；打开页面、导入数据和查看文章建议都不会消耗额度。</p>
+</section>
+{% endif %}
+
+<section class="next-step-strip">
+  <div><strong>下一步：统一看新旧文章建议</strong><p>内部数据产生旧文章建议，外部调研产生新文章建议；第 3 步会分成左右两列。</p></div>
+  <a class="button button-primary" href="/opportunities">进入第 3 步</a>
+</section>
+{% endblock %}

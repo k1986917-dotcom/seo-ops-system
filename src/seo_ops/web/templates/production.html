@@ -1,0 +1,148 @@
+{% extends "workflow_base.html" %}
+
+{% macro cms_fields(action) -%}
+  {% for key, label in [('title','Title (标题)'),('slug','Slug'),('summary','Summary (摘要)')] %}
+  <label class="deliverable-field"><span>{{ label }}</span><textarea readonly>{{ action.deliverable.get(key, '') }}</textarea></label>
+  {% endfor %}
+  <label class="deliverable-field"><span>Content (Markdown)</span><textarea class="content-output" readonly>{{ action.deliverable.get('content', '') }}</textarea></label>
+  {% for key, label in [('tags','Tags (comma separated)'),('seo_title','SEO Title'),('seo_description','SEO Description'),('seo_keywords','SEO Keywords')] %}
+  <label class="deliverable-field"><span>{{ label }}</span><textarea readonly>{{ action.deliverable.get(key, '') }}</textarea></label>
+  {% endfor %}
+{%- endmacro %}
+
+{% macro production_card(action, kind) -%}
+<article class="production-card">
+  <header class="production-card-head">
+    <div class="card-kicker">
+      <span class="pill {{ 'pill-good' if kind == 'new' else 'pill-neutral' }}">{{ '新文章' if kind == 'new' else '旧文章' }}</span>
+      <small>任务 #{{ action.id }}</small>
+    </div>
+    <h3>{{ action.opportunity_title or action.target_ref }}</h3>
+    <p class="target-ref">{{ action.target_ref }}</p>
+    <div class="production-flow">
+      <span class="done">已选择</span>
+      {% if kind == 'new' %}<span class="{{ 'done' if action.deliverable or (action.material_preview and action.material_preview.confirmed) else '' }}">确认素材</span>{% endif %}
+      <span class="{{ 'done' if action.deliverable else '' }}">生成内容</span>
+      <span>人工发布</span>
+    </div>
+  </header>
+
+  <div class="production-card-body">
+    {% if action.deliverable %}
+      <div class="material-compact"><strong>内容包已生成。</strong>先核对事实、链接和 CMS 字段；确认发布后，这张卡会立即离开本页。</div>
+      <details class="cms-package" open>
+        <summary>CMS 内容包（点击收起）</summary>
+        <div class="cms-package-fields">{{ cms_fields(action) }}</div>
+      </details>
+      <div class="task-primary-actions">
+        <form method="post" action="/actions/{{ action.id }}/published" data-confirm="确认已经在 CMS 发布了吗？确认后任务会从本页移除。">
+          <input type="hidden" name="published" value="1">
+          <button class="button button-primary" type="submit">我已发布</button>
+        </form>
+        <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="正在重新制作…">
+          {% if kind == 'new' %}<input type="hidden" name="confirm_materials" value="1">{% endif %}
+          <button class="button button-secondary" type="submit">重新生成</button>
+        </form>
+      </div>
+    {% elif kind == 'old' %}
+      <div class="production-note"><strong>本次任务：</strong>{{ action.planned_change }}<br>系统会先判断只改标题描述、局部段落，还是保持原意图同主题重写；Slug 永远不改。</div>
+      <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="正在生成修改稿…">
+        <button class="button button-primary full" type="submit">生成旧文章修改稿</button>
+      </form>
+    {% else %}
+      {% if action.material_error %}
+      <div class="material-compact warning">{{ action.material_error }}</div>
+      {% elif action.material_preview %}
+      <div class="material-compact {{ '' if action.material_preview.ready else 'warning' }}">
+        <strong>{{ '现有素材达到写作门槛' if action.material_preview.ready else '现有素材还不够' }}</strong><br>
+        已整理 {{ action.material_preview.source_count }} 个来源；整理本身没有调用 API 或 AI。
+      </div>
+      {% if action.material_preview.missing %}
+      <p class="muted">还缺：{{ action.material_preview.missing|join('、') }}</p>
+      {% endif %}
+
+      <details class="evidence-details">
+        <summary>查看 A–H 素材清单（可选）</summary>
+        <div class="material-grid">
+          {% for category in action.material_preview.categories %}
+          <section class="material-category">
+            <div><strong>{{ category.key }} · {{ category.label }}</strong><span class="pill {{ 'pill-good' if category.count else 'pill-neutral' }}">{{ category.count }} 条</span></div>
+            {% if category['items'] %}<ul>{% for item in category['items'][:4] %}<li>{{ item }}</li>{% endfor %}</ul>{% else %}<p class="muted">当前没有。</p>{% endif %}
+          </section>
+          {% endfor %}
+        </div>
+      </details>
+
+      {% if action.material_preview.ready %}
+      <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="正在制作新文章…">
+        <input type="hidden" name="confirm_materials" value="1">
+        <button class="button button-primary full" type="submit">现有素材够用，开始写作</button>
+      </form>
+      {% else %}
+      <button class="button button-primary full" type="button" disabled>补齐关键素材后才能写作</button>
+      {% endif %}
+
+      <details class="manual-material">
+        <summary>我要先补充手工搜索素材</summary>
+        <p class="muted">复制提示词去搜索，保留真实 URL，再把结果粘贴回来。保存这一步不调用 API 或 AI。</p>
+        <label class="deliverable-field"><span>建议搜索提示</span><textarea readonly>{{ action.material_preview.search_prompt }}</textarea></label>
+        <form method="post" action="/actions/{{ action.id }}/materials">
+          <label class="deliverable-field"><span>粘贴素材（必须含公开 URL）</span><textarea name="material_text" required></textarea></label>
+          <button class="button button-secondary" type="submit">保存并重新检查</button>
+        </form>
+      </details>
+      {% endif %}
+    {% endif %}
+  </div>
+</article>
+{%- endmacro %}
+
+{% block content %}
+<section class="intro-strip">
+  <div>
+    <strong>同一页完成制作，发布后自动退出当前任务</strong>
+    <p>左边只处理旧文章，右边只处理新文章。新文章先看现有素材，再决定要不要手工补充；系统不会自动发布。</p>
+  </div>
+  <form method="post" action="/actions/ai-limit" class="inline-settings">
+    <label>每篇文章 AI 调用上限
+      <select name="content_ai_call_limit">
+        {% for value in range(content_ai_call_limits.min, content_ai_call_limits.max + 1) %}
+        <option value="{{ value }}" {{ 'selected' if value == content_ai_call_limit else '' }}>{{ value }} 次</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="button button-secondary" type="submit">保存</button>
+  </form>
+</section>
+
+<section class="lane-board production-board">
+  <div class="workflow-lane old-lane">
+    <header class="lane-head">
+      <div><h2>旧文章制作</h2><p>标题描述、局部修改或原主题重写</p></div>
+      <span class="lane-count">{{ old_actions|length }} 个任务</span>
+    </header>
+    {% if old_actions %}
+    <div class="production-stack">{% for action in old_actions %}{{ production_card(action, 'old') }}{% endfor %}</div>
+    {% else %}
+    <div class="lane-empty"><div class="empty-icon">A</div><h3>没有旧文章制作任务</h3><p>在第 3 步选择旧文章后，它会只出现在这里。</p></div>
+    {% endif %}
+  </div>
+
+  <div class="workflow-lane new-lane">
+    <header class="lane-head">
+      <div><h2>新文章制作</h2><p>确认素材、生成大纲与正文、核对链接</p></div>
+      <span class="lane-count">{{ new_actions|length }} 个任务</span>
+    </header>
+    {% if new_actions %}
+    <div class="production-stack">{% for action in new_actions %}{{ production_card(action, 'new') }}{% endfor %}</div>
+    {% else %}
+    <div class="lane-empty"><div class="empty-icon">N</div><h3>没有新文章制作任务</h3><p>在第 3 步选择新主题后，它会只出现在这里。</p></div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="next-step-strip">
+  <div><strong>发布后的真实状态由下一次 CMS 导入确认</strong><p>点击“我已发布”只关闭当前任务；第 1 步重新导入网站数据后，第 5 步图谱才按真实 URL 显示为已覆盖。</p></div>
+  <a class="button button-secondary" href="/opportunities">返回文章建议</a>
+</section>
+{% endblock %}

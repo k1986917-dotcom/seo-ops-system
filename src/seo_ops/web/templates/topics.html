@@ -1,0 +1,74 @@
+{% extends "workflow_base.html" %}
+
+{% macro render_nodes(nodes, depth=0) %}
+<ul class="topic-level">
+  {% for node in nodes %}
+  <li class="topic-node {{ 'topic-knowledge' if node.node_type == 'knowledge' else '' }}">
+    {% if node.node_type == 'article_topic' %}
+      <div class="topic-article-row">
+        <span class="topic-article-dot"></span>
+        {% if node.articles %}
+          <a href="{{ node.articles[0].canonical_url }}" target="_blank" rel="noreferrer">{{ node.preferred_name }}</a>
+          <span class="topic-kind">{{ '产品' if node.articles[0].content_type == 'product' else '文章' }} · 已覆盖</span>
+        {% else %}
+          <span class="topic-name">{{ node.preferred_name }}</span>
+        {% endif %}
+      </div>
+    {% else %}
+      <details {{ 'open' if depth < 2 else '' }}>
+        <summary>
+          <span class="topic-name">{{ node.preferred_name }}</span>
+          <span class="topic-count">
+            {{ node.article_count }} 篇
+            {% if node.auxiliary_count %} · {{ node.auxiliary_count }} 次辅助引用{% endif %}
+          </span>
+        </summary>
+        {% if node.description %}
+          <p class="topic-description">{{ node.description }}</p>
+        {% endif %}
+        {% if node.children %}
+          {{ render_nodes(node.children, depth + 1) }}
+        {% endif %}
+      </details>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+
+{% block content %}
+<section class="intro-strip">
+  <div>
+    <strong>图谱只把实际导入的文章和产品算作已覆盖</strong>
+    <p>调研候选和制作任务不会提前变成图谱节点。每篇内容只有一个主主题；安全、功率、波长等可作为辅助知识重复出现。</p>
+  </div>
+  <a class="button button-secondary" href="/research">继续找新方向</a>
+</section>
+
+<section class="topic-overview">
+  <article><strong>{{ topic_summary.node_count }}</strong><small>主题节点</small></article>
+  <article><strong>{{ topic_summary.mapped_content_count }}</strong><small>已映射内容</small></article>
+  <article><strong>{{ topic_summary.primary_count }}</strong><small>主要文章主题</small></article>
+  <article><strong>{{ topic_summary.unmapped_content_count }}</strong><small>待人工整理</small></article>
+</section>
+
+<div class="topic-legend">
+  <span>树枝：主题方向</span>
+  <span>绿点：已有文章或产品</span>
+  <span>紫色：通用支撑知识</span>
+  <span>标题可点击打开原页面</span>
+</div>
+
+<section class="panel topic-tree-panel">
+  <div class="section-heading compact">
+    <div>
+      <p class="eyebrow">TOPIC TREE</p>
+      <h2>LaserPointerHub 内容结构</h2>
+    </div>
+    <small class="muted">根据当前 CMS 内容自动同步，可随时人工调整方向</small>
+  </div>
+  <div class="topic-tree">
+    {{ render_nodes(topic_tree) }}
+  </div>
+</section>
+{% endblock %}

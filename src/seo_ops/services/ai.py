@@ -61,7 +61,7 @@ class OpenAICompatibleProvider:
             ],
             "response_format": {"type": "json_object"},
         }
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(150.0, connect=20.0)) as client:
             response = await client.post(self.endpoint, headers=headers, json=payload)
             if response.status_code == 400:
                 payload.pop("response_format", None)

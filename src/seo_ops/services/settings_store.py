@@ -7,7 +7,13 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from seo_ops.config import Settings, get_settings
+from seo_ops.config import (
+    CONTENT_AI_CALL_LIMIT_MAX,
+    CONTENT_AI_CALL_LIMIT_MIN,
+    RESEARCH_BUDGET_LIMITS,
+    Settings,
+    get_settings,
+)
 
 NON_SECRET_FIELDS = {
     "ai_provider": "SEO_OPS_AI_PROVIDER",
@@ -22,6 +28,11 @@ NON_SECRET_FIELDS = {
     "trends_provider": "SEO_OPS_TRENDS_PROVIDER",
     "trends_geo": "SEO_OPS_TRENDS_GEO",
     "trends_timeframe": "SEO_OPS_TRENDS_TIMEFRAME",
+    "research_serpapi_budget": "SEO_OPS_RESEARCH_SERPAPI_BUDGET",
+    "research_firecrawl_budget": "SEO_OPS_RESEARCH_FIRECRAWL_BUDGET",
+    "research_tavily_budget": "SEO_OPS_RESEARCH_TAVILY_BUDGET",
+    "research_ai_budget": "SEO_OPS_RESEARCH_AI_BUDGET",
+    "content_ai_call_limit": "SEO_OPS_CONTENT_AI_CALL_LIMIT",
 }
 
 SECRET_FIELDS = {
@@ -58,7 +69,7 @@ def _optional_url(value: str, *, label: str) -> str | None:
     return cleaned.rstrip("/")
 
 
-def _validate_non_secret(field: str, value: str) -> str | None:
+def _validate_non_secret(field: str, value: str) -> str | int | None:
     if field in {"ai_base_url", "firecrawl_base_url", "tavily_base_url"}:
         return _optional_url(value, label=field)
 
@@ -77,6 +88,29 @@ def _validate_non_secret(field: str, value: str) -> str | None:
         raise ValueError("Google Trends 时间范围无效")
     if field == "trends_geo" and not re.fullmatch(r"[A-Za-z0-9-]{0,12}", cleaned):
         raise ValueError("Google Trends 地区代码无效")
+    if field == "content_ai_call_limit":
+        if not re.fullmatch(r"\d{1,2}", cleaned):
+            raise ValueError("每篇文章 AI 调用上限必须是整数")
+        parsed = int(cleaned)
+        if not CONTENT_AI_CALL_LIMIT_MIN <= parsed <= CONTENT_AI_CALL_LIMIT_MAX:
+            raise ValueError(
+                f"每篇文章 AI 调用上限必须在 {CONTENT_AI_CALL_LIMIT_MIN}–{CONTENT_AI_CALL_LIMIT_MAX} 之间"
+            )
+        return parsed
+    budget_provider = {
+        "research_serpapi_budget": "serpapi",
+        "research_firecrawl_budget": "firecrawl",
+        "research_tavily_budget": "tavily",
+        "research_ai_budget": "ai",
+    }.get(field)
+    if budget_provider:
+        if not re.fullmatch(r"\d{1,3}", cleaned):
+            raise ValueError(f"{budget_provider} 每轮预算必须是非负整数")
+        parsed = int(cleaned)
+        maximum = RESEARCH_BUDGET_LIMITS[budget_provider]
+        if parsed > maximum:
+            raise ValueError(f"{budget_provider} 每轮预算不能超过 {maximum}")
+        return parsed
     if field in {"ai_model", "serpapi_location"}:
         return cleaned or None
     return cleaned
@@ -125,7 +159,7 @@ def update_local_settings(
     """Persist selected local settings without ever returning secret values to a template."""
 
     clear = clear_secrets or set()
-    replacements: dict[str, str | None] = {}
+    replacements: dict[str, str | int | None] = {}
     env_updates: dict[str, str] = {}
     env_removals: set[str] = set()
 
@@ -137,7 +171,7 @@ def update_local_settings(
         if value is None or value == "":
             env_removals.add(env_key)
         else:
-            env_updates[env_key] = value
+            env_updates[env_key] = str(value)
 
     for field, env_key in SECRET_FIELDS.items():
         if field in clear:

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ page_title }} · SEO Ops</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v={{ version }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='settings.css') }}?v={{ version }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='workflow.css') }}?v={{ version }}">
+</head>
+<body>
+  <div class="app-shell workflow-shell">
+    <aside class="sidebar workflow-sidebar">
+      <a class="brand workflow-brand" href="/imports">
+        <span class="brand-mark">S</span>
+        <span><strong>SEO Ops</strong><small>内容运营系统</small></span>
+      </a>
+
+      <p class="nav-caption">按顺序操作</p>
+      <nav class="nav-list workflow-nav" aria-label="主要流程">
+        <a class="nav-item {{ 'active' if page == 'imports' else '' }}" href="/imports">
+          <span class="nav-step">1</span><span class="nav-copy">数据导入<small>更新内部数据</small></span>
+        </a>
+        <a class="nav-item {{ 'active' if page == 'research' else '' }}" href="/research">
+          <span class="nav-step">2</span><span class="nav-copy">主题调研<small>寻找外部信号</small></span>
+        </a>
+        <a class="nav-item {{ 'active' if page == 'opportunities' else '' }}" href="/opportunities">
+          <span class="nav-step">3</span><span class="nav-copy">文章建议<small>选择做哪一篇</small></span>
+        </a>
+        <a class="nav-item {{ 'active' if page == 'actions' else '' }}" href="/actions">
+          <span class="nav-step">4</span><span class="nav-copy">文章制作<small>生成并发布</small></span>
+        </a>
+        <a class="nav-item {{ 'active' if page == 'topics' else '' }}" href="/topics">
+          <span class="nav-step">5</span><span class="nav-copy">主题图谱<small>查看整体覆盖</small></span>
+        </a>
+      </nav>
+
+      <nav class="nav-list workflow-secondary" aria-label="其他功能">
+        <p class="nav-caption">其他</p>
+        <a class="nav-item {{ 'active' if page == 'settings' else '' }}" href="/settings">
+          <span>⚙</span><span class="nav-copy">设置与连接</span>
+        </a>
+        <a class="nav-item {{ 'active' if page == 'method' else '' }}" href="/method">
+          <span>◇</span><span class="nav-copy">方法与证据</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-note">
+        <span class="status-dot"></span>
+        <div><strong>本地安全模式</strong><small>不会自动发布内容</small></div>
+      </div>
+      <div class="sidebar-version">v{{ version }}</div>
+    </aside>
+
+    <main class="main-content workflow-main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">
+            {% if workflow_step %}第 {{ workflow_step }} 步 / 5 · {% endif %}
+            {{ site.name if site else 'SEO OPS' }}
+          </p>
+          <h1>{{ page_title }}</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="pill {{ 'pill-good' if ai_enabled else 'pill-neutral' }}">
+            <span class="status-dot"></span>{{ 'AI 已配置' if ai_enabled else 'AI 可选' }}
+          </span>
+        </div>
+      </header>
+
+      {% if message %}
+      <div class="alert alert-{{ message_level }}" role="status">
+        <span>{{ '✓' if message_level == 'success' else '!' }}</span>{{ message }}
+      </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{{ url_for('static', path='app.js') }}?v={{ version }}" defer></script>
+</body>
+</html>

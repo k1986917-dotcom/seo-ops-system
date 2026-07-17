@@ -1,69 +1,67 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="section-heading compact">
-  <div><p class="eyebrow">EVIDENCE-GATED</p><h2>先过门槛，再比较优先级</h2><p class="muted">补证据任务不会伪装成新文章建议；没有合格项时允许少于三个。</p></div>
+<section class="section-heading compact simple-opportunities">
+  <div><p class="eyebrow">本轮建议</p><h2>最多 2 篇旧文章 + 2 篇新文章</h2><p class="muted">只显示已经达到执行门槛的内容；没有足够信号就空着，不为凑数硬推。</p></div>
   <form method="post" action="/analysis/run">
     <input type="hidden" name="site_id" value="{{ site.id }}">
-    <button class="button button-primary" type="submit">运行新一轮分析</button>
+    <button class="button button-primary" type="submit">刷新旧文章机会</button>
   </form>
 </section>
 
-{% if opportunities %}
+{% if recommendations %}
 <div class="opportunity-list">
-  {% for op in opportunities %}
-  <article class="opportunity-card {{ 'is-top' if op.portfolio_slot else '' }}">
+  {% for op in recommendations %}
+  <article class="opportunity-card is-top">
     <div class="op-main">
       <div class="op-labels">
-        {% if op.portfolio_slot %}<span class="slot">{{ op.portfolio_slot }}</span>{% endif %}
-        <span class="pill {{ 'pill-good' if op.gate_status == 'passed' else 'pill-warning' if op.gate_status == 'needs_evidence' else 'pill-bad' }}">{{ {'passed':'门槛通过','needs_evidence':'需要补证据','blocked':'已阻塞'}[op.gate_status] }}</span>
-        <span class="rule-key">{{ op.rule_key }} · {{ op.method_version }}</span>
+        <span class="slot">{{ op.portfolio_slot }}</span>
+        <span class="pill pill-good">{{ '制作新文章' if op.opportunity_type == 'create' else '更新旧文章' }}</span>
       </div>
       <h2>{{ op.title }}</h2>
       <p class="op-action">{{ op.recommended_action }}</p>
       <p class="target-ref">{{ op.target_ref }}</p>
-      <div class="gate-reasons">
-        {% for reason in op.gate_reasons %}<span>✓ {{ reason }}</span>{% endfor %}
-      </div>
 
       <details class="evidence-details">
-        <summary>查看原始证据与限制</summary>
-        <pre>{{ op.evidence|tojson(indent=2) }}</pre>
+        <summary>为什么推荐（可选）</summary>
+        <ul>{% for reason in op.gate_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+        {% if op.evidence.limitations %}<strong>目前的局限</strong><ul>{% for item in op.evidence.limitations %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
       </details>
 
-      {% if op.ai_explanation %}
-      <div class="ai-explanation">
-        <span class="ai-star">✦</span>
-        <div><strong>AI 证据解释</strong><p>{{ op.ai_explanation.summary }}</p>
-          {% if op.ai_explanation.cautions %}<small>注意：{{ op.ai_explanation.cautions|join('；') }}</small>{% endif %}
-        </div>
-      </div>
-      {% endif %}
     </div>
 
     <aside class="op-score">
-      <div class="score-ring" style="--score: {{ op.strength }}"><strong>{{ op.strength|round|int }}</strong><small>机会强度</small></div>
-      <dl>
-        <div><dt>可信度</dt><dd>{{ {'high':'高','medium':'中','low':'低'}[op.confidence] }}</dd></div>
-        <div><dt>工作量</dt><dd>{{ op.effort }}</dd></div>
-        <div><dt>排序值</dt><dd>{{ op.priority }}</dd></div>
-      </dl>
-      {% if ai_enabled and not op.ai_explanation %}
-      <form method="post" action="/opportunities/{{ op.id }}/ai-explain"><button class="button button-secondary full" type="submit">✦ AI 解释证据</button></form>
-      {% endif %}
+      <div class="decision-status"><strong>{{ '新文章' if op.opportunity_type == 'create' else '旧文章' }}</strong><br><small>可信度：{{ {'high':'高','medium':'中','low':'低'}[op.confidence] }}</small></div>
       {% if op.status == 'proposed' %}
       <form method="post" action="/opportunities/{{ op.id }}/decision" class="decision-form">
-        <input name="reason" placeholder="决定原因（建议填写）">
-        <div><button class="button button-primary" name="decision" value="accepted" type="submit">接受</button><button class="button button-ghost" name="decision" value="rejected" type="submit">拒绝</button></div>
+        <div>
+          <button class="button button-primary" name="decision" value="accepted" type="submit">{{ '开始制作新文章' if op.opportunity_type == 'create' else '开始修改旧文章' }}</button>
+          <button class="button button-ghost" name="decision" value="rejected" type="submit">拒绝</button>
+        </div>
       </form>
       {% else %}
-      <span class="decision-status">当前状态：{{ op.status }}</span>
+      <a class="decision-status" href="/actions">当前状态：{{ op.status }} · 查看任务</a>
       {% endif %}
     </aside>
   </article>
   {% endfor %}
 </div>
 {% else %}
-<section class="empty-state"><div class="empty-icon">◎</div><h3>还没有机会分析</h3><p>先导入 GSC 和 CMS 数据，再运行第一轮分析。</p><a class="button button-primary" href="/imports">去导入数据</a></section>
+<section class="empty-state"><div class="empty-icon">◎</div><h3>本轮没有足够信号</h3><p>这不表示主题已经穷尽。可以继续外部调研，或从主题图谱选择一个分支继续细化。</p><div class="topbar-actions"><a class="button button-primary" href="/research">继续外部调研</a><a class="button button-secondary" href="/topics">查看主题图谱</a></div></section>
 {% endif %}
-{% endblock %}
 
+{% if signals %}
+<details class="panel evidence-details">
+  <summary>查看分析线索（{{ signals|length }}，日常使用可忽略）</summary>
+  <div class="source-list">
+    {% for op in signals %}
+    <div class="source-row">
+      <span class="source-icon">{{ 'G' if op.target_kind == 'query' else 'A' }}</span>
+      <div><strong>{{ op.title }}</strong><small>{{ op.recommended_action }}</small></div>
+      <span class="pill {{ 'pill-warning' if op.gate_status == 'needs_evidence' else 'pill-bad' }}">{{ '待观察' if op.gate_status == 'needs_evidence' else '不建议执行' }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% endblock %}

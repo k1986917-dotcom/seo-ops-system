@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote_plus, urlsplit
@@ -10,35 +11,92 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from seo_ops import __version__
-from seo_ops.config import Settings, get_settings
+from seo_ops.config import (
+    CONTENT_AI_CALL_LIMIT_MAX,
+    CONTENT_AI_CALL_LIMIT_MIN,
+    RESEARCH_BUDGET_LIMITS,
+    Settings,
+    get_settings,
+)
 from seo_ops.db import connection, init_db
-from seo_ops.ingest import import_cms_bytes, import_gsc_bytes
+from seo_ops.ingest import (
+    ImportDeletionError,
+    delete_gsc_import,
+    import_cms_bytes,
+    import_gsc_bytes,
+)
 from seo_ops.opportunities import run_analysis
 from seo_ops.repositories import (
-    dashboard_summary,
     get_opportunity,
     get_site,
+    list_actions,
     list_imports,
-    list_opportunities,
+    list_research_runs,
     list_rules,
     list_sites,
 )
+from seo_ops.services.action_workflow import (
+    ActionWorkflowError,
+    record_opportunity_decision,
+    set_action_cancelled,
+    set_action_published,
+    update_action_step,
+)
 from seo_ops.services.ai import AIUnavailable, explain_opportunity
+from seo_ops.services.article_suggestions import (
+    ArticleSuggestionError,
+    decide_new_article_suggestion,
+    decide_old_article_suggestion,
+    list_article_suggestions,
+)
+from seo_ops.services.content_production import (
+    ContentProductionError,
+    generate_content_deliverable,
+)
 from seo_ops.services.data_quality import assess_gsc_quality
+from seo_ops.services.external_evidence import (
+    EvidenceCollectionUnavailable,
+    collect_query_evidence,
+)
 from seo_ops.services.external_sources import (
     SOURCE_CATALOG,
     configured_sources,
     test_source_connection,
+)
+from seo_ops.services.gsc_oauth import (
+    GSCError,
+    OAuthStateStore,
+    build_authorization_url,
+    complete_authorization,
+    gsc_connection_status,
+    sync_gsc,
+)
+from seo_ops.services.material_workflow import (
+    MaterialWorkflowError,
+    build_material_preview,
+    save_manual_material,
+)
+from seo_ops.services.research_workflow import (
+    ResearchUnavailable,
+    boundary_dimensions,
+    configured_research_budgets,
+    research_topic_options,
+    run_topic_research,
 )
 from seo_ops.services.settings_store import (
     NON_SECRET_FIELDS,
     SECRET_FIELDS,
     update_local_settings,
 )
+from seo_ops.services.topic_graph import sync_topic_graph, topic_tree
 from seo_ops.utils import json_dumps, utc_now
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+# OAuth authorization codes arrive in the root callback query string.
+# Uvicorn's default access log includes that query string, so disable it.
+logging.getLogger("uvicorn.access").disabled = True
 
 
 def _percent(value: float | None) -> str:
@@ -67,11 +125,12 @@ def _require_local_form(request: Request) -> None:
         return
     hostname = urlsplit(origin).hostname
     if hostname not in {"127.0.0.1", "localhost", "::1"}:
-        raise HTTPException(status_code=403, detail="设置只能从本机页面修改")
+        raise HTTPException(status_code=403, detail="该操作只能从本机页面发起")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
+    oauth_states = OAuthStateStore()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -92,12 +151,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates.env.filters["number"] = _number
 
     def page_context(request: Request, **values):
+        page = values.get("page")
+        workflow_steps = {
+            "imports": 1,
+            "research": 2,
+            "opportunities": 3,
+            "actions": 4,
+            "topics": 5,
+        }
         return {
             "request": request,
             "version": __version__,
             "ai_enabled": active_settings.ai_enabled,
             "message": request.query_params.get("message"),
             "message_level": request.query_params.get("level", "success"),
+            "workflow_step": workflow_steps.get(page),
             **values,
         }
 
@@ -121,24 +189,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/")
-    async def dashboard(request: Request):
-        site_id = active_site_id(request)
+    async def workflow_start(request: Request):
+        oauth_error = request.query_params.get("error")
+        oauth_state = request.query_params.get("state")
+        if oauth_error:
+            oauth_states.discard(oauth_state)
+            return _redirect(
+                "/imports",
+                "Google 授权未完成，请重新点击连接",
+                "error",
+            )
+        code = request.query_params.get("code")
+        if code or oauth_state:
+            if not code or not oauth_state:
+                return _redirect("/imports", "Google 授权回调不完整", "error")
+            try:
+                outcome = await complete_authorization(
+                    code,
+                    oauth_state,
+                    active_settings,
+                    oauth_states,
+                )
+                return _redirect(
+                    "/imports",
+                    f"{outcome.message}；已匹配 {outcome.property_uri}",
+                )
+            except GSCError as exc:
+                return _redirect("/imports", str(exc), "error")
+        return RedirectResponse("/imports", status_code=307)
+
+    @app.get("/imports/gsc/oauth/start")
+    async def start_gsc_oauth(site_id: int):
         with connection(active_settings) as conn:
             site = get_site(conn, site_id)
-            sites = list_sites(conn)
-            summary = dashboard_summary(conn, site_id)
-        return templates.TemplateResponse(
-            request=request,
-            name="dashboard.html",
-            context=page_context(
-                request,
-                page="dashboard",
-                page_title="今日工作台",
-                site=site,
-                sites=sites,
-                summary=summary,
-            ),
-        )
+        if not site:
+            return _redirect("/imports", "站点不存在", "error")
+        try:
+            authorization_url = build_authorization_url(
+                site_id,
+                active_settings,
+                oauth_states,
+            )
+            return RedirectResponse(authorization_url, status_code=302)
+        except GSCError as exc:
+            return _redirect("/imports", str(exc), "error")
 
     @app.get("/imports")
     async def imports_page(request: Request):
@@ -147,6 +241,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             site = get_site(conn, site_id)
             sites = list_sites(conn)
             history = list_imports(conn, site_id)
+        gsc_status = gsc_connection_status(site_id, active_settings)
         return templates.TemplateResponse(
             request=request,
             name="imports.html",
@@ -157,8 +252,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 site=site,
                 sites=sites,
                 imports=history,
+                gsc_status=gsc_status,
             ),
         )
+
+    @app.get("/topics")
+    async def topics_page(request: Request):
+        site_id = active_site_id(request)
+        summary = sync_topic_graph(site_id, active_settings)
+        tree = topic_tree(site_id, active_settings)
+        with connection(active_settings) as conn:
+            site = get_site(conn, site_id)
+            sites = list_sites(conn)
+        return templates.TemplateResponse(
+            request=request,
+            name="topics.html",
+            context=page_context(
+                request,
+                page="topics",
+                page_title="主题图谱",
+                site=site,
+                sites=sites,
+                topic_summary=summary,
+                topic_tree=tree,
+            ),
+        )
+
+    @app.post("/imports/gsc/sync")
+    async def sync_gsc_data(
+        request: Request,
+        site_id: int = Form(...),
+    ):
+        _require_local_form(request)
+        try:
+            outcome = await sync_gsc(site_id, active_settings)
+            message = (
+                f"{outcome.message}；可信日期 {outcome.actual_start_date} 至 "
+                f"{outcome.actual_end_date}"
+            )
+            try:
+                analysis = run_analysis(site_id, active_settings)
+                message += f"；内部旧文章分析已更新（{analysis.top_count} 项优先建议）"
+            except ValueError:
+                message += "；GSC 已保存，导入文章和产品 JSON 后会形成旧文章建议"
+            return _redirect("/imports", message)
+        except GSCError as exc:
+            return _redirect("/imports", str(exc), "error")
 
     @app.post("/imports/gsc")
     async def upload_gsc(site_id: int = Form(...), files: list[UploadFile] = File(...)):
@@ -172,6 +311,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         failures = [outcome for outcome in outcomes if outcome.status == "failed"]
         message = "；".join(outcome.message for outcome in outcomes)
+        if not failures:
+            try:
+                analysis = run_analysis(site_id, active_settings)
+                message += f"；内部旧文章分析已自动更新（{analysis.top_count} 项优先建议）"
+            except ValueError:
+                message += "；GSC 已保存，导入 CMS 内容后会形成旧文章建议"
         return _redirect("/imports", message, "error" if failures else "success")
 
     @app.post("/imports/cms")
@@ -186,7 +331,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         failures = [outcome for outcome in outcomes if outcome.status == "failed"]
         message = "；".join(outcome.message for outcome in outcomes)
+        if not failures:
+            sync_topic_graph(site_id, active_settings)
+            try:
+                analysis = run_analysis(site_id, active_settings)
+                message += f"；主题图谱和旧文章分析已自动更新（{analysis.top_count} 项优先建议）"
+            except ValueError:
+                message += "；主题图谱已更新，导入 GSC 后会自动分析旧文章"
         return _redirect("/imports", message, "error" if failures else "success")
+
+    @app.post("/imports/{import_id}/delete")
+    async def delete_import(
+        import_id: int,
+        request: Request,
+        site_id: int = Form(...),
+    ):
+        _require_local_form(request)
+        try:
+            outcome = delete_gsc_import(site_id, import_id, active_settings)
+            return _redirect("/imports", outcome.message)
+        except ImportDeletionError as exc:
+            return _redirect("/imports", str(exc), "error")
 
     @app.post("/analysis/run")
     async def analysis_run(site_id: int = Form(...)):
@@ -206,57 +371,295 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with connection(active_settings) as conn:
             site = get_site(conn, site_id)
             sites = list_sites(conn)
-            opportunities = list_opportunities(conn, site_id)
+        suggestions = list_article_suggestions(site_id, active_settings)
         return templates.TemplateResponse(
             request=request,
-            name="opportunities.html",
+            name="suggestions.html",
             context=page_context(
                 request,
                 page="opportunities",
-                page_title="机会与任务",
+                page_title="文章建议",
                 site=site,
                 sites=sites,
-                opportunities=opportunities,
+                suggestions=suggestions,
             ),
         )
 
     @app.post("/opportunities/{opportunity_id}/decision")
     async def decide_opportunity(
         opportunity_id: int,
+        request: Request,
         decision: str = Form(...),
         reason: str = Form(""),
     ):
-        if decision not in {"accepted", "rejected"}:
-            return _redirect("/opportunities", "不支持的决定", "error")
+        _require_local_form(request)
+        try:
+            if decision in {"accepted", "rejected"}:
+                outcome = record_opportunity_decision(
+                    opportunity_id, decision, reason, active_settings
+                )
+                target = "/actions" if decision == "accepted" else "/opportunities"
+                return _redirect(target, outcome.message)
+            outcome = decide_old_article_suggestion(
+                opportunity_id, decision, reason, active_settings
+            )
+        except (ActionWorkflowError, ArticleSuggestionError) as exc:
+            return _redirect("/opportunities", str(exc), "error")
+        target = "/actions" if outcome.action_id else "/opportunities"
+        return _redirect(target, outcome.message)
+
+    @app.post("/opportunities/{opportunity_id}/evidence/collect")
+    async def collect_opportunity_evidence(opportunity_id: int, request: Request):
+        _require_local_form(request)
+        return_path = (
+            "/actions" if request.query_params.get("return_to") == "/actions" else "/opportunities"
+        )
+        try:
+            outcome = await collect_query_evidence(opportunity_id, active_settings)
+        except EvidenceCollectionUnavailable as exc:
+            target = "/settings" if "配置" in str(exc) else return_path
+            return _redirect(target, str(exc), "warning")
+        except Exception:
+            return _redirect(
+                return_path,
+                "外部证据采集失败；未改变机会分数或资格门槛",
+                "error",
+            )
+        level = "success" if outcome.status == "success" else "warning"
+        if outcome.status == "failed":
+            level = "error"
+        return _redirect(return_path, outcome.message, level)
+
+    @app.get("/actions")
+    async def actions_page(request: Request):
+        site_id = active_site_id(request)
         with connection(active_settings) as conn:
-            opportunity = get_opportunity(conn, opportunity_id)
-            if not opportunity:
-                return _redirect("/opportunities", "机会不存在", "error")
-            conn.execute(
-                "UPDATE opportunities SET status = ? WHERE id = ?",
-                (decision, opportunity_id),
+            site = get_site(conn, site_id)
+            sites = list_sites(conn)
+            all_actions = list_actions(conn, site_id)
+        current_actions = [
+            item
+            for item in all_actions
+            if item["decision"] == "accepted"
+            and item["workflow_status"] in {"planned", "in_progress"}
+        ]
+        for item in current_actions:
+            item["material_preview"] = None
+            item["material_error"] = None
+            if item["action_type"] == "create" and not item["deliverable"]:
+                try:
+                    item["material_preview"] = build_material_preview(
+                        int(item["id"]), active_settings
+                    )
+                except MaterialWorkflowError as exc:
+                    item["material_error"] = str(exc)
+        return templates.TemplateResponse(
+            request=request,
+            name="production.html",
+            context=page_context(
+                request,
+                page="actions",
+                page_title="文章制作",
+                site=site,
+                sites=sites,
+                old_actions=[item for item in current_actions if item["action_type"] != "create"],
+                new_actions=[item for item in current_actions if item["action_type"] == "create"],
+                content_ai_call_limit=active_settings.content_ai_call_limit,
+                content_ai_call_limits={
+                    "min": CONTENT_AI_CALL_LIMIT_MIN,
+                    "max": CONTENT_AI_CALL_LIMIT_MAX,
+                },
+            ),
+        )
+
+    @app.post("/actions/ai-limit")
+    async def save_action_ai_limit(request: Request):
+        nonlocal active_settings
+        _require_local_form(request)
+        form = await request.form()
+        submitted = {"content_ai_call_limit": str(form.get("content_ai_call_limit", ""))}
+        try:
+            active_settings = update_local_settings(active_settings, submitted, set())
+            app.state.settings = active_settings
+        except (ValueError, OSError) as exc:
+            return _redirect("/actions", f"文章 AI 上限未保存：{exc}", "error")
+        return _redirect("/actions", "每篇文章 AI 调用上限已保存")
+
+    @app.post("/actions/{action_id}/generate")
+    async def generate_action_content(
+        action_id: int,
+        request: Request,
+        confirm_materials: str = Form(""),
+    ):
+        _require_local_form(request)
+        try:
+            await generate_content_deliverable(
+                action_id,
+                active_settings,
+                confirm_materials=confirm_materials == "1",
             )
-            conn.execute(
-                """
-                INSERT INTO actions(
-                    opportunity_id, site_id, action_type, target_ref, decision,
-                    decision_reason, planned_change, baseline_json, decided_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    opportunity_id,
-                    opportunity["site_id"],
-                    opportunity["opportunity_type"],
-                    opportunity["target_ref"],
-                    decision,
-                    reason.strip() or None,
-                    opportunity["recommended_action"],
-                    json_dumps(opportunity["evidence"].get("current", {})),
-                    utc_now(),
-                ),
+        except (ContentProductionError, AIUnavailable) as exc:
+            return _redirect("/actions", str(exc), "error")
+        except Exception:
+            return _redirect(
+                "/actions",
+                "文章制作失败；任务已保留，失败阶段已记录，可以安全重试",
+                "error",
             )
-        label = "已接受并建立基线" if decision == "accepted" else "已拒绝并记录原因"
-        return _redirect("/opportunities", label)
+        return _redirect("/actions", "已生成可直接粘贴到 CMS 的内容包")
+
+    @app.post("/actions/{action_id}/materials")
+    async def add_action_material(
+        action_id: int,
+        request: Request,
+        material_text: str = Form(...),
+    ):
+        _require_local_form(request)
+        try:
+            message = save_manual_material(action_id, material_text, active_settings)
+        except MaterialWorkflowError as exc:
+            return _redirect("/actions", str(exc), "error")
+        return _redirect("/actions", message)
+
+    @app.post("/actions/{action_id}/steps/{step_id}")
+    async def action_step(
+        action_id: int,
+        step_id: int,
+        request: Request,
+        completed: str = Form(...),
+    ):
+        _require_local_form(request)
+        try:
+            message = update_action_step(
+                action_id,
+                step_id,
+                completed=completed == "1",
+                settings=active_settings,
+            )
+        except ActionWorkflowError as exc:
+            return _redirect("/actions", str(exc), "error")
+        return _redirect("/actions", message)
+
+    @app.get("/research")
+    async def research_page(request: Request):
+        site_id = active_site_id(request)
+        with connection(active_settings) as conn:
+            site = get_site(conn, site_id)
+            sites = list_sites(conn)
+            runs = list_research_runs(conn, site_id, include_candidates=False)
+        return templates.TemplateResponse(
+            request=request,
+            name="research_flow.html",
+            context=page_context(
+                request,
+                page="research",
+                page_title="外部主题调研",
+                site=site,
+                sites=sites,
+                research_runs=runs,
+                research_budgets=configured_research_budgets(active_settings),
+                research_budget_limits=RESEARCH_BUDGET_LIMITS,
+                configured=configured_sources(active_settings),
+                ai_model=active_settings.ai_model,
+                topic_options=research_topic_options(site_id, active_settings),
+                boundary_dimensions=boundary_dimensions(),
+            ),
+        )
+
+    @app.post("/research/budgets")
+    async def save_research_budgets(request: Request):
+        nonlocal active_settings
+        _require_local_form(request)
+        form = await request.form()
+        submitted = {
+            field: str(form.get(field, ""))
+            for field in (
+                "research_serpapi_budget",
+                "research_firecrawl_budget",
+                "research_tavily_budget",
+                "research_ai_budget",
+            )
+        }
+        try:
+            active_settings = update_local_settings(active_settings, submitted, set())
+            app.state.settings = active_settings
+        except (ValueError, OSError) as exc:
+            return _redirect("/research", f"预算未保存：{exc}", "error")
+        return _redirect("/research", "每轮调研预算已保存；它们是上限，不会强制用完")
+
+    @app.post("/research/run")
+    async def research_run(
+        request: Request,
+        site_id: int = Form(...),
+        seed_type: str = Form("auto"),
+        topic_id: str = Form(""),
+        dimension_key: str = Form(""),
+    ):
+        _require_local_form(request)
+        try:
+            outcome = await run_topic_research(
+                site_id,
+                active_settings,
+                seed_type=seed_type,
+                topic_id=int(topic_id) if topic_id.isdigit() else None,
+                dimension_key=dimension_key or None,
+            )
+        except ResearchUnavailable as exc:
+            return _redirect("/research", str(exc), "error")
+        level = "success" if outcome.status == "success" else "warning"
+        if outcome.status == "failed":
+            level = "error"
+        return _redirect("/research", outcome.message, level)
+
+    @app.post("/research/candidates/{candidate_id}/decision")
+    async def research_candidate_decision(
+        candidate_id: int,
+        request: Request,
+        decision: str = Form(...),
+        reason: str = Form(""),
+    ):
+        _require_local_form(request)
+        try:
+            outcome = decide_new_article_suggestion(candidate_id, decision, reason, active_settings)
+        except ArticleSuggestionError as exc:
+            return _redirect("/opportunities", str(exc), "error")
+        target = "/actions" if outcome.action_id else "/opportunities"
+        return _redirect(target, outcome.message)
+
+    @app.post("/actions/{action_id}/published")
+    async def action_published(
+        action_id: int,
+        request: Request,
+        published: str = Form(...),
+    ):
+        _require_local_form(request)
+        is_published = published == "1"
+        try:
+            message = set_action_published(
+                action_id,
+                published=is_published,
+                settings=active_settings,
+            )
+        except ActionWorkflowError as exc:
+            return _redirect("/actions", str(exc), "error")
+        return _redirect("/actions", message)
+
+    @app.post("/actions/{action_id}/status")
+    async def action_status(
+        action_id: int,
+        request: Request,
+        cancelled: str = Form(...),
+    ):
+        _require_local_form(request)
+        try:
+            message = set_action_cancelled(
+                action_id,
+                cancelled=cancelled == "1",
+                settings=active_settings,
+            )
+        except ActionWorkflowError as exc:
+            return _redirect("/actions", str(exc), "error")
+        return _redirect("/actions", message)
 
     @app.post("/opportunities/{opportunity_id}/ai-explain")
     async def ai_explain(opportunity_id: int):
@@ -341,6 +744,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status = {
             "ai": {
                 "configured": configured["ai"],
+                "content_call_limit": active_settings.content_ai_call_limit,
                 "provider": active_settings.ai_provider,
                 "base_url": active_settings.ai_base_url,
                 "model": active_settings.ai_model,
@@ -370,6 +774,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "geo": active_settings.trends_geo,
                 "timeframe": active_settings.trends_timeframe,
             },
+            "research": configured_research_budgets(active_settings),
         }
         return templates.TemplateResponse(
             request=request,
@@ -381,10 +786,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 site=site,
                 sites=sites,
                 settings_status=status,
+                content_ai_call_limits={
+                    "min": CONTENT_AI_CALL_LIMIT_MIN,
+                    "max": CONTENT_AI_CALL_LIMIT_MAX,
+                },
                 configured_count=sum(configured.values()),
                 connections=connections,
                 source_catalog=SOURCE_CATALOG,
                 gsc_quality=gsc_quality,
+                research_budget_limits=RESEARCH_BUDGET_LIMITS,
             ),
         )
 
@@ -396,6 +806,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         submitted = {
             field: str(form.get(field, ""))
             for field in (*NON_SECRET_FIELDS.keys(), *SECRET_FIELDS.keys())
+            if field in form
         }
         clear = {field for field in SECRET_FIELDS if form.get(f"clear_{field}") == "1"}
         try:

@@ -11,16 +11,29 @@
   </article>
   <article class="metric-card">
     <span class="metric-icon amber">D</span>
-    <div><p>数据源</p><strong>{{ summary.sources|length }}/3</strong><small>GSC · Blog · Product</small></div>
+    <div><p>第一方导入</p><strong>{{ summary.sources|length }}/3</strong><small>GSC · Blog · Product</small></div>
+  </article>
+  <article class="metric-card">
+    <span class="metric-icon blue">E</span>
+    <div><p>外部连接</p><strong>{{ summary.connected_external }}/4</strong><small>已存证 {{ summary.external_evidence_count }} 项</small></div>
   </article>
   <article class="metric-card">
     <span class="metric-icon green">O</span>
-    <div><p>当前机会</p><strong>{{ summary.opportunity_count }}</strong><small>先过门槛，再排序</small></div>
+    <div><p>值得做的机会</p><strong>{{ summary.opportunity_count }}</strong><small>最多 2 篇旧文 + 2 篇新文</small></div>
   </article>
 </section>
 
+<section class="research-cta panel">
+  <div>
+    <p class="eyebrow">第一阶段 · 主题调研</p>
+    <h2>信号不足时，继续寻找新方向</h2>
+    <p class="muted">可从 GSC、主题缺口或边界扩展开始；系统按已设预算搜索并避免重复推荐。</p>
+  </div>
+  <a class="button button-secondary" href="/research">开始外部调研</a>
+</section>
+
 <section class="section-heading">
-  <div><p class="eyebrow">FOCUS</p><h2>本轮最值得做的事</h2></div>
+  <div><p class="eyebrow">本轮建议</p><h2>最多四项，不足不补位</h2></div>
   {% if summary.sources %}
   <form method="post" action="/analysis/run">
     <input type="hidden" name="site_id" value="{{ site.id }}">
@@ -84,4 +97,3 @@
   </article>
 </section>
 {% endblock %}
-

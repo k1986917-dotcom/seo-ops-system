@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>{{ page_title }} · SEO Ops</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', path='settings.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v={{ version }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='settings.css') }}?v={{ version }}">
 </head>
 <body>
   <div class="app-shell">
@@ -26,6 +26,15 @@
         <a class="nav-item {{ 'active' if page == 'opportunities' else '' }}" href="/opportunities">
           <span>◎</span>机会与任务
         </a>
+        <a class="nav-item {{ 'active' if page == 'topics' else '' }}" href="/topics">
+          <span>⌘</span>主题图谱
+        </a>
+        <a class="nav-item {{ 'active' if page == 'research' else '' }}" href="/research">
+          <span>⌕</span>外部主题调研
+        </a>
+        <a class="nav-item {{ 'active' if page == 'actions' else '' }}" href="/actions">
+          <span>✓</span>文章任务
+        </a>
         <a class="nav-item {{ 'active' if page == 'method' else '' }}" href="/method">
           <span>◇</span>方法与证据
         </a>
@@ -36,7 +45,7 @@
 
       <div class="sidebar-note">
         <span class="status-dot"></span>
-        <div><strong>本地安全模式</strong><small>不会自动发布或删除</small></div>
+        <div><strong>本地安全模式</strong><small>不会自动发布站点内容</small></div>
       </div>
       <div class="sidebar-version">v{{ version }}</div>
     </aside>
@@ -64,6 +73,6 @@
       {% block content %}{% endblock %}
     </main>
   </div>
-  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+  <script src="{{ url_for('static', path='app.js') }}?v={{ version }}" defer></script>
 </body>
 </html>
