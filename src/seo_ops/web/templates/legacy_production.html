@@ -1,0 +1,138 @@
+{% macro legacy_card(action) %}
+{% set l = action.legacy or {} %}
+{% set stage = l.get("stage", "r0_pending") %}
+{% set files = l.get("files", {}) %}
+
+<div class="legacy-card">
+  <div class="legacy-header">
+    <h4>{{ action.target_ref }}</h4>
+    <span class="legacy-badge">{{ l.get("stage_name", stage) }}</span>
+  </div>
+
+  <div class="legacy-progress">
+    {% set st = ["R0","R1","R2","R3","R4","W0","W1","W1b","W2","W3"] %}
+    {% set labels = ["提示词","结果","收集","分析","评分","校验","草稿","预检","后处理","注册"] %}
+    {% for i in range(10) %}
+      <div class="legacy-dot {{ 'done' if l.get('stage_step', 0) > i else '' }} {{ 'active' if l.get('stage_step', 0) == i else '' }}">
+        <span class="dot-label">{{ st[i] }}</span>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% if stage == "r0_pending" %}
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/r0">
+      <p class="legacy-hint">系统将为该主题生成搜索提示词。请复制到 Perplexity / ChatGPT / Kimi 搜索，然后把完整结果粘贴回来。</p>
+      <button type="submit" class="button">生成搜索提示词</button>
+    </form>
+
+  {% elif stage == "r0_prompt" %}
+    <details open>
+      <summary>📋 搜索提示词（点击展开/折叠）</summary>
+      <pre class="legacy-prompt">{{ l.get("prompt_content", "") or "（提示词加载中...）" }}</pre>
+    </details>
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/r1">
+      <label class="legacy-label">将搜索 AI 返回的完整内容粘贴到这里：</label>
+      <textarea name="search_results" rows="16" class="legacy-textarea"
+        placeholder="粘贴 Section 1-8 的完整搜索 AI 返回结果..."></textarea>
+      <button type="submit" class="button">保存搜索结果并继续</button>
+    </form>
+
+  {% elif stage == "r1_results" %}
+    <p>✅ 搜索结果已保存。等待 AI 分析。</p>
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/r1">
+      <label class="legacy-label">需要修改搜索结果？重新粘贴：</label>
+      <textarea name="search_results" rows="10" class="legacy-textarea"></textarea>
+      <button type="submit" class="button">重新保存</button>
+    </form>
+
+  {% elif stage == "r2_collect" %}
+    <p>✅ 数据已收集</p>
+    {% if files.get("research_data") %}
+      <p class="legacy-muted">数据包: {{ files.research_data }}</p>
+    {% endif %}
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/r3">
+      <p class="legacy-hint">AI 将分析搜索结果，生成素材包和简报。此步骤可能耗时 20–90 秒。</p>
+      <button type="submit" class="button">开始 AI 分析</button>
+    </form>
+
+  {% elif stage in ("r3_ai_analyze", "r4_score") %}
+    <p>⏳ 素材包不完整或评分未完成</p>
+    {% if files.get("material_pack") %}
+      <p class="legacy-muted">素材包: {{ files.material_pack }}</p>
+    {% endif %}
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/r3">
+      <button type="submit" class="button">继续 / 重新分析</button>
+    </form>
+
+  {% elif stage == "r5_write_ready" %}
+    <div class="legacy-result">
+      <p>🎯 Research 完成</p>
+      {% if files.get("research_score") %}
+        <p class="legacy-muted">评分报告已生成</p>
+        {% if l.get("score_preview") %}
+          <pre class="legacy-prompt">{{ l.score_preview }}</pre>
+        {% endif %}
+      {% endif %}
+      {% if files.get("brief") %}
+        <p class="legacy-muted">调研简报已生成</p>
+      {% endif %}
+    </div>
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/w0">
+      <label class="legacy-label">作者（必填，默认 LaserPointerHub）：</label>
+      <input type="text" name="author" value="LaserPointerHub" class="legacy-input" required>
+      <button type="submit" class="button">校验素材并生成草稿</button>
+    </form>
+
+  {% elif stage in ("w0_validate", "w1_draft") %}
+    <p>✅ 草稿已生成</p>
+    {% if l.get("draft_preview") %}
+      <details>
+        <summary>预览草稿</summary>
+        <pre class="legacy-prompt">{{ l.draft_preview }}</pre>
+      </details>
+    {% endif %}
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/w1b">
+      <label class="legacy-label">页面层级（可选，自动检测）：</label>
+      <select name="tier" class="legacy-input">
+        <option value="">自动检测</option>
+        <option value="Pillar Page">Pillar Page</option>
+        <option value="Cluster Content">Cluster Content</option>
+        <option value="Product Roundup">Product Roundup</option>
+      </select>
+      <button type="submit" class="button">运行预检</button>
+    </form>
+
+  {% elif stage == "w1b_pre_check" %}
+    <p>预检完成。{{ "有 " + (fail_count|string if fail_count else "0") + " 项需修复" if fail_count else "全部通过" }}</p>
+    <details>
+      <summary>查看预检报告</summary>
+      <pre class="legacy-prompt">{{ l.get("pre_check_report", "") }}</pre>
+    </details>
+    <div class="legacy-actions">
+      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline">
+        <p class="legacy-hint">先运行检查（不加 --apply），通过后再写回</p>
+        <button type="submit" class="button">运行后处理检查</button>
+      </form>
+      {% if not fail_count %}
+      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2?apply=1" style="display:inline; margin-left:0.5rem">
+        <button type="submit" class="button button-secondary">写回链接字段 (--apply)</button>
+      </form>
+      {% endif %}
+    </div>
+
+  {% elif stage == "w2_post_process" %}
+    <p>✅ 后处理通过，链接字段已写回</p>
+    <details>
+      <summary>查看后处理报告</summary>
+      <pre class="legacy-prompt">{{ l.get("post_process_report", "") }}</pre>
+    </details>
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/w3">
+      <button type="submit" class="button">注册文章</button>
+    </form>
+
+  {% elif stage == "w3_register" %}
+    <p>✅ 文章注册完成<br><span class="legacy-muted">已写入 internal-links-map，素材包已清理，生成回溯链接候选</span></p>
+  {% endif %}
+
+</div>
+{% endmacro %}

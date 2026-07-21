@@ -48,6 +48,7 @@ from seo_ops.services.article_suggestions import (
     decide_new_article_suggestion,
     decide_old_article_suggestion,
     list_article_suggestions,
+    review_new_article_candidate,
 )
 from seo_ops.services.content_production import (
     ContentProductionError,
@@ -70,6 +71,17 @@ from seo_ops.services.gsc_oauth import (
     complete_authorization,
     gsc_connection_status,
     sync_gsc,
+)
+from seo_ops.services.legacy_sync import sync_all as legacy_sync_all
+from seo_ops.services.legacy_workflow import (
+    get_legacy_display_data,
+    stage_r0_generate_prompt,
+    stage_r1_save_and_collect,
+    stage_r3_ai_analyze,
+    stage_w0_validate_and_draft,
+    stage_w1b_pre_check,
+    stage_w2_post_process,
+    stage_w3_register,
 )
 from seo_ops.services.material_workflow import (
     MaterialWorkflowError,
@@ -446,7 +458,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for item in current_actions:
             item["material_preview"] = None
             item["material_error"] = None
+            item["legacy"] = None
             if item["action_type"] == "create" and not item["deliverable"]:
+                try:
+                    topic = item.get("target_ref", "") or ""
+                    item["legacy"] = get_legacy_display_data(topic, LEGACY_WS)
+                except Exception:
+                    item["legacy"] = None
+            if not item["deliverable"] and item["action_type"] != "create":
                 try:
                     item["material_preview"] = build_material_preview(
                         int(item["id"]), active_settings
@@ -540,13 +559,127 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _redirect("/actions", str(exc), "error")
         return _redirect("/actions", message)
 
+    # ── Legacy workflow helpers ─────────────────────────────────────
+
+    def _get_action_or_404(action_id: int):
+        with connection(active_settings) as conn:
+            row = conn.execute(
+                "SELECT * FROM actions WHERE id = ?", (action_id,)
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Action not found")
+        return dict(row)
+
+    def _update_legacy_stage(action_id: int, stage: str | None):
+        with connection(active_settings) as conn:
+            conn.execute(
+                "UPDATE actions SET legacy_stage = ?, updated_at = ? WHERE id = ?",
+                (stage, utc_now().isoformat(), action_id),
+            )
+            conn.commit()
+
+    LEGACY_WS = Path("data/legacy_workflow/laserpointerhub")
+
+    # ── Legacy stage routes ─────────────────────────────────────────
+
+    @app.post("/actions/{action_id}/legacy/stage/r0")
+    async def legacy_r0(action_id: int, request: Request):
+        _require_local_form(request)
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        if not topic:
+            return _redirect("/actions", "无法获取文章主题", "error")
+        legacy_sync_all(LEGACY_WS)
+        result = stage_r0_generate_prompt(topic, LEGACY_WS)
+        _update_legacy_stage(action_id, result.get("stage"))
+        return _redirect("/actions", "搜索提示词已生成")
+
+    @app.post("/actions/{action_id}/legacy/stage/r1")
+    async def legacy_r1(action_id: int, request: Request):
+        _require_local_form(request)
+        form = await request.form()
+        search_text = form.get("search_results", "") or ""
+        if not search_text.strip():
+            return _redirect("/actions", "请粘贴搜索结果")
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        result = stage_r1_save_and_collect(topic, search_text, LEGACY_WS)
+        _update_legacy_stage(action_id, result.get("stage"))
+        msg = result.get("error") or "数据已收集，等待 AI 分析"
+        return _redirect("/actions", msg, "error" if not result.get("success") else "success")
+
+    @app.post("/actions/{action_id}/legacy/stage/r3")
+    async def legacy_r3(action_id: int, request: Request):
+        _require_local_form(request)
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        result = stage_r3_ai_analyze(topic, LEGACY_WS, active_settings)
+        _update_legacy_stage(action_id, result.get("stage"))
+        msg = result.get("error") or "AI 分析完成，素材包和简报已生成"
+        return _redirect("/actions", msg, "error" if not result.get("success") else "success")
+
+    @app.post("/actions/{action_id}/legacy/stage/w0")
+    async def legacy_w0(action_id: int, request: Request):
+        _require_local_form(request)
+        form = await request.form()
+        author = form.get("author", "") or "LaserPointerHub"
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        result = stage_w0_validate_and_draft(topic, author, LEGACY_WS, active_settings)
+        _update_legacy_stage(action_id, result.get("stage"))
+        msg = result.get("error") or "草稿已生成，等待预检"
+        return _redirect("/actions", msg, "error" if not result.get("success") else "success")
+
+    @app.post("/actions/{action_id}/legacy/stage/w1b")
+    async def legacy_w1b(action_id: int, request: Request):
+        _require_local_form(request)
+        tier = request.query_params.get("tier", "")
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        result = stage_w1b_pre_check(topic, tier, LEGACY_WS)
+        _update_legacy_stage(action_id, result.get("stage"))
+        fail_count = result.get("fail_count", 0)
+        if fail_count > 0:
+            return _redirect("/actions", f"预检完成：{fail_count} 项需要修复", "error")
+        return _redirect("/actions", "预检通过")
+
+    @app.post("/actions/{action_id}/legacy/stage/w2")
+    async def legacy_w2(action_id: int, request: Request):
+        _require_local_form(request)
+        do_apply = request.query_params.get("apply") == "1"
+        do_force = request.query_params.get("force") == "1"
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        result = stage_w2_post_process(topic, apply=do_apply, force=do_force, workspace=LEGACY_WS)
+        _update_legacy_stage(action_id, result.get("stage"))
+        if not result.get("gate_passed") and not do_apply:
+            return _redirect("/actions", "后处理发现问题，请修复后重试", "error")
+        msg = "链接字段已写回并注册" if do_apply else "后处理检查通过"
+        return _redirect("/actions", msg)
+
+    @app.post("/actions/{action_id}/legacy/stage/w3")
+    async def legacy_w3(action_id: int, request: Request):
+        _require_local_form(request)
+        action = _get_action_or_404(action_id)
+        topic = action.get("target_ref", "") or ""
+        result = stage_w3_register(topic, LEGACY_WS)
+        _update_legacy_stage(action_id, result.get("stage"))
+        return _redirect("/actions", "注册完成" if result.get("success") else (result.get("error") or "注册失败"),
+                          "error" if not result.get("success") else "success")
+
     @app.get("/research")
     async def research_page(request: Request):
         site_id = active_site_id(request)
         with connection(active_settings) as conn:
             site = get_site(conn, site_id)
             sites = list_sites(conn)
-            runs = list_research_runs(conn, site_id, include_candidates=False)
+            runs = list_research_runs(
+                conn,
+                site_id,
+                limit=1,
+                include_candidates=False,
+                include_audit=True,
+            )
         return templates.TemplateResponse(
             request=request,
             name="research_flow.html",
@@ -625,6 +758,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _redirect("/opportunities", str(exc), "error")
         target = "/actions" if outcome.action_id else "/opportunities"
         return _redirect(target, outcome.message)
+
+    @app.post("/research/candidates/{candidate_id}/review")
+    async def research_candidate_review(
+        candidate_id: int,
+        request: Request,
+        review_decision: str = Form(...),
+        reason: str = Form(...),
+    ):
+        _require_local_form(request)
+        try:
+            outcome = review_new_article_candidate(
+                candidate_id,
+                review_decision,
+                reason,
+                active_settings,
+            )
+        except ArticleSuggestionError as exc:
+            return _redirect("/opportunities", str(exc), "error")
+        return _redirect("/opportunities", outcome.message)
 
     @app.post("/actions/{action_id}/published")
     async def action_published(

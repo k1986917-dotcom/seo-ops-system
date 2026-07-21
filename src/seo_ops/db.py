@@ -1045,7 +1045,13 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         conn.executescript(MIGRATION_12)
         version = 12
     if version < 13:
-        conn.executescript(MIGRATION_13)
+        action_columns_v13 = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(actions)").fetchall()
+        }
+        if "legacy_stage" not in action_columns_v13:
+            conn.executescript(MIGRATION_13)
+        else:
+            conn.execute("PRAGMA user_version = 13")
         version = 13
 
 

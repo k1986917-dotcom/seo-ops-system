@@ -1,5 +1,7 @@
 {% extends "workflow_base.html" %}
 
+{% import 'legacy_production.html' as legacy %}
+
 {% macro cms_fields(action) -%}
   {% for key, label in [('title','Title (标题)'),('slug','Slug'),('summary','Summary (摘要)')] %}
   <label class="deliverable-field"><span>{{ label }}</span><textarea readonly>{{ action.deliverable.get(key, '') }}</textarea></label>
@@ -21,7 +23,7 @@
     <p class="target-ref">{{ action.target_ref }}</p>
     <div class="production-flow">
       <span class="done">已选择</span>
-      {% if kind == 'new' %}<span class="{{ 'done' if action.deliverable or (action.material_preview and action.material_preview.confirmed) else '' }}">确认素材</span>{% endif %}
+      <span class="{{ 'done' if action.deliverable or (action.material_preview and action.material_preview.confirmed) else '' }}">确认素材</span>
       <span class="{{ 'done' if action.deliverable else '' }}">生成内容</span>
       <span>人工发布</span>
     </div>
@@ -40,16 +42,17 @@
           <button class="button button-primary" type="submit">我已发布</button>
         </form>
         <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="正在重新制作…">
-          {% if kind == 'new' %}<input type="hidden" name="confirm_materials" value="1">{% endif %}
+          <input type="hidden" name="confirm_materials" value="1">
           <button class="button button-secondary" type="submit">重新生成</button>
         </form>
       </div>
-    {% elif kind == 'old' %}
-      <div class="production-note"><strong>本次任务：</strong>{{ action.planned_change }}<br>系统会先判断只改标题描述、局部段落，还是保持原意图同主题重写；Slug 永远不改。</div>
-      <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="正在生成修改稿…">
-        <button class="button button-primary full" type="submit">生成旧文章修改稿</button>
-      </form>
     {% else %}
+      {% if kind == 'new' and action.legacy and action.legacy.stage %}
+        {{ legacy.legacy_card(action) }}
+      {% else %}
+      {% if kind == 'old' %}
+      <div class="production-note"><strong>本次任务：</strong>{{ action.planned_change }}<br>旧文章保留 Slug 和主要意图，并同时使用查询—页面联合证据与已确认素材。</div>
+      {% endif %}
       {% if action.material_error %}
       <div class="material-compact warning">{{ action.material_error }}</div>
       {% elif action.material_preview %}
@@ -62,7 +65,7 @@
       {% endif %}
 
       <details class="evidence-details">
-        <summary>查看 A–H 素材清单（可选）</summary>
+        <summary>查看写作素材清单（可选）</summary>
         <div class="material-grid">
           {% for category in action.material_preview.categories %}
           <section class="material-category">
@@ -74,9 +77,9 @@
       </details>
 
       {% if action.material_preview.ready %}
-      <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="正在制作新文章…">
+      <form method="post" action="/actions/{{ action.id }}/generate" data-working-label="{{ '正在生成修改稿…' if kind == 'old' else '正在制作新文章…' }}">
         <input type="hidden" name="confirm_materials" value="1">
-        <button class="button button-primary full" type="submit">现有素材够用，开始写作</button>
+        <button class="button button-primary full" type="submit">{{ '现有素材够用，生成旧文章修改稿' if kind == 'old' else '现有素材够用，开始写作' }}</button>
       </form>
       {% else %}
       <button class="button button-primary full" type="button" disabled>补齐关键素材后才能写作</button>
@@ -92,6 +95,7 @@
         </form>
       </details>
       {% endif %}
+      {% endif %} {# endif for legacy routing #}
     {% endif %}
   </div>
 </article>
@@ -101,7 +105,7 @@
 <section class="intro-strip">
   <div>
     <strong>同一页完成制作，发布后自动退出当前任务</strong>
-    <p>左边只处理旧文章，右边只处理新文章。新文章先看现有素材，再决定要不要手工补充；系统不会自动发布。</p>
+    <p>左边只处理旧文章，右边只处理新文章。所有任务先核对现有素材，再决定要不要手工补充；系统不会自动发布。</p>
   </div>
   <form method="post" action="/actions/ai-limit" class="inline-settings">
     <label>每篇文章 AI 调用上限

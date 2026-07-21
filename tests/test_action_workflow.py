@@ -21,6 +21,7 @@ from seo_ops.services.ai import AIResponse
 from seo_ops.services.content_production import (
     ContentProductionError,
     _external_material_record,
+    _normalize_existing_deliverable,
     _source_role,
     generate_content_deliverable,
 )
@@ -107,6 +108,23 @@ def _passed_opportunity(settings):
         )
 
 
+def _confirm_old_article_materials(action_id, settings) -> None:
+    save_manual_material(
+        action_id,
+        "\n".join(
+            (
+                "A User pain point: Readers need a clear answer before changing an existing laser guide.",
+                "https://www.reddit.com/r/lasers/comments/example/reader_question",
+                "E Authoritative source: Use the official laser-product safety guidance for factual boundaries.",
+                "https://www.fda.gov/radiation-emitting-products/laser-products-and-instruments",
+                "G Real search question: Why did my example laser guide lose clicks?",
+                "https://www.reddit.com/r/lasers/comments/example/reader_question",
+            )
+        ),
+        settings,
+    )
+
+
 def test_evidence_signal_cannot_enter_execution(settings):
     opportunity = _prepare(settings)
     with pytest.raises(ActionWorkflowError, match="分析线索"):
@@ -141,8 +159,8 @@ def test_action_can_be_cancelled_resumed_and_rendered(settings):
         page = client.get("/actions")
     assert page.status_code == 200
     assert "文章制作" in page.text
-    assert "生成旧文章修改稿" in page.text
-    assert "先看现有素材，再决定要不要手工补充" in page.text
+    assert "旧文章保留 Slug 和主要意图" in page.text
+    assert "所有任务先核对现有素材" in page.text
 
 
 def test_page_execution_and_publish_timestamps_follow_actual_steps(settings):
@@ -179,12 +197,11 @@ class FakeContentAI:
         self.calls.append(str(user_payload.get("stage") or "existing_draft"))
         candidates = user_payload["available_internal_links"]
         valid_link = candidates[0]["canonical_url"] if candidates else ""
-        section = " ".join(
-            [
-                "This focused replacement explains the original topic with clear steps, practical context, and careful limits for readers."
-            ]
-            * 7
+        sentence = (
+            "This focused replacement explains the original topic with clear steps, practical "
+            "context, and careful limits for readers."
         )
+        section = f"{sentence} {sentence} {sentence}\n\n{sentence} {sentence} {sentence} {sentence}"
         return AIResponse(
             provider="fake",
             model="deepseek-v4-flash",
@@ -232,8 +249,17 @@ def test_content_generation_locks_slug_and_filters_invented_links(settings):
     opportunity = _passed_opportunity(settings)
     outcome = record_opportunity_decision(opportunity["id"], "accepted", settings=settings)
     provider = FakeContentAI()
+    with pytest.raises(ContentProductionError, match="素材还缺少"):
+        asyncio.run(generate_content_deliverable(outcome.action_id, settings, provider=provider))
+    assert provider.calls == []
+    _confirm_old_article_materials(outcome.action_id, settings)
     result = asyncio.run(
-        generate_content_deliverable(outcome.action_id, settings, provider=provider)
+        generate_content_deliverable(
+            outcome.action_id,
+            settings,
+            provider=provider,
+            confirm_materials=True,
+        )
     )
 
     with connection(settings) as conn:
@@ -268,6 +294,7 @@ def test_old_article_generation_rechecks_joint_evidence_before_ai(settings):
         settings=settings,
     )
     provider = FakeContentAI()
+    _confirm_old_article_materials(outcome.action_id, settings)
 
     with pytest.raises(ContentProductionError, match="缺少查询—页面联合证据"):
         asyncio.run(
@@ -275,6 +302,7 @@ def test_old_article_generation_rechecks_joint_evidence_before_ai(settings):
                 outcome.action_id,
                 settings,
                 provider=provider,
+                confirm_materials=True,
             )
         )
 
@@ -285,6 +313,7 @@ def test_old_article_chinese_output_never_reaches_deliverable(settings):
     opportunity = _passed_opportunity(settings)
     outcome = record_opportunity_decision(opportunity["id"], "accepted", settings=settings)
     provider = ChineseContentAI()
+    _confirm_old_article_materials(outcome.action_id, settings)
 
     with pytest.raises(ContentProductionError, match="读者可见字段必须全部为英语"):
         asyncio.run(
@@ -292,6 +321,7 @@ def test_old_article_chinese_output_never_reaches_deliverable(settings):
                 outcome.action_id,
                 settings,
                 provider=provider,
+                confirm_materials=True,
             )
         )
 
@@ -302,6 +332,32 @@ def test_old_article_chinese_output_never_reaches_deliverable(settings):
             (outcome.action_id,),
         ).fetchone()
     assert action["actual_change"] is None
+
+
+def test_old_article_delivery_rejects_market_and_price_filler():
+    result, issues = _normalize_existing_deliverable(
+        {
+            "change_type": "partial_update",
+            "title": "Example Laser Guide",
+            "slug": "must-be-locked",
+            "summary": "A clearer guide for the same reader task.",
+            "content": (
+                "## Replacement section\n\n"
+                "This update explains the reader decision with a price range, a clear boundary, "
+                "and enough practical detail to replace the weak section without changing scope."
+            ),
+            "tags": "laser pointer, guide",
+            "seo_title": "Example Laser Guide",
+            "seo_description": "A focused description for the same example laser guide reader task.",
+            "seo_keywords": "example laser guide",
+            "operator_note": "Replace the named section only.",
+        },
+        existing={"title": "Example Laser Guide", "slug": "example-laser-guide", "body": ""},
+        allowed_urls=set(),
+    )
+
+    assert result["slug"] == "example-laser-guide"
+    assert "旧文章修改稿不应加入市场或价格内容" in issues
 
 
 def test_source_roles_distinguish_authority_from_question_signals():
@@ -823,8 +879,8 @@ def test_new_article_generation_returns_all_cms_fields_and_clean_slug(settings):
     app = create_app(settings)
     with TestClient(app) as client:
         checkpoint_page = client.get("/actions")
-    assert "先看现有素材，再决定要不要手工补充" in checkpoint_page.text
-    assert "补齐关键素材后才能写作" in checkpoint_page.text
+    assert "所有任务先核对现有素材，再决定要不要手工补充" in checkpoint_page.text
+    assert "生成搜索提示词" in checkpoint_page.text
 
     manual_text = (
         "A 用户痛点：Photographers need a repeatable stop rule. "
@@ -854,7 +910,7 @@ def test_new_article_generation_returns_all_cms_fields_and_clean_slug(settings):
     assert preview["confirmed"] is False
     with TestClient(app) as client:
         ready_page = client.get("/actions")
-    assert "现有素材够用，开始写作" in ready_page.text
+    assert "生成搜索提示词" in ready_page.text
 
     result = asyncio.run(
         generate_content_deliverable(

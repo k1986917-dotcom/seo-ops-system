@@ -4,6 +4,9 @@ import sqlite3
 from dataclasses import replace
 
 from seo_ops.db import MIGRATION_2, SCHEMA, init_db
+from seo_ops.ingest import import_cms_bytes
+from seo_ops.rules.research_workflow import MULTI_SOURCE_TOPIC_RESEARCH_RULE
+from tests.helpers import product_export_bytes
 
 
 def test_v2_database_migrates_without_losing_actions(settings, tmp_path):
@@ -38,7 +41,7 @@ def test_v2_database_migrates_without_losing_actions(settings, tmp_path):
 
     conn = sqlite3.connect(legacy_path)
     conn.row_factory = sqlite3.Row
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
     rows = conn.execute(
         "SELECT decision, workflow_status, plan_version FROM actions ORDER BY id"
     ).fetchall()
@@ -53,6 +56,7 @@ def test_v2_database_migrates_without_losing_actions(settings, tmp_path):
         "research_runs",
         "research_run_items",
         "research_candidates",
+        "research_seed_observations",
         "topic_nodes",
         "topic_aliases",
         "topic_relations",
@@ -98,7 +102,7 @@ def test_v4_database_migration_activates_and_trusts_only_latest_gsc_import(setti
 
     conn = sqlite3.connect(legacy_path)
     conn.row_factory = sqlite3.Row
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
     rows = conn.execute(
         """
         SELECT original_name, analysis_active, quality_eligible
@@ -163,4 +167,31 @@ def test_init_db_deprecates_prior_active_rule_version(settings):
     conn.close()
 
     assert statuses["0.4.9"] == "deprecated"
-    assert statuses["0.6.1"] == "active"
+    assert statuses[str(MULTI_SOURCE_TOPIC_RESEARCH_RULE["version"])] == "active"
+
+
+def test_v11_migration_repairs_laserpointerhub_product_urls(settings):
+    import_cms_bytes(1, "products.json", product_export_bytes(), settings)
+    conn = sqlite3.connect(settings.database_path)
+    conn.execute("UPDATE sites SET product_path_template = '/products/{slug}' WHERE id = 1")
+    conn.execute(
+        "UPDATE content_items SET canonical_url = 'https://laserpointerhub.com/products/demo' "
+        "WHERE content_type = 'product'"
+    )
+    conn.execute("PRAGMA user_version = 10")
+    conn.commit()
+    conn.close()
+
+    init_db(settings)
+
+    conn = sqlite3.connect(settings.database_path)
+    site_template = conn.execute("SELECT product_path_template FROM sites WHERE id = 1").fetchone()[
+        0
+    ]
+    product_url = conn.execute(
+        "SELECT canonical_url FROM content_items WHERE content_type = 'product'"
+    ).fetchone()[0]
+    conn.close()
+
+    assert site_template == "/p-{sku}.html"
+    assert product_url == "https://laserpointerhub.com/p-DEMO-1.html"
