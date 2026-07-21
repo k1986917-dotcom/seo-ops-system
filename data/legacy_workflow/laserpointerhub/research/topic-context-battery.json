@@ -1,0 +1,12 @@
+{
+  "slug": "battery",
+  "topic": "battery",
+  "source": "heuristic",
+  "intent": "混合型",
+  "tier": "Pillar Page",
+  "primary_keyword": "battery",
+  "cluster": "",
+  "cannibal_risk": "",
+  "signals": {},
+  "updated": "2026-06-05"
+}

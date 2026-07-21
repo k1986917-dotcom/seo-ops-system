@@ -1,0 +1,13 @@
+{
+  "slug": "laser-pointer-mounts-brackets-guide",
+  "topic": "",
+  "source": "plan",
+  "intent": "信息型",
+  "tier": "Pillar Page",
+  "primary_keyword": "laser-pointer-mounts-brackets-guide",
+  "cluster": "",
+  "cannibal_risk": "",
+  "signals": {},
+  "updated": "2026-06-12",
+  "guidance": "accessories pillar Line 172 deep-dive 占位符。聚焦三轴兼容性矩阵（laser body直径×望远镜接口×开关类型→产品映射）、冷天可靠性、开关逻辑（momentary vs constant-on vs pressure switch）、何时不该用mounted laser（机场/imagers/冬季）。差异化于accessories pillar的30行概述，扩展为完整cluster page。"
+}

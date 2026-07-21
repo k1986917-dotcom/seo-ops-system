@@ -1,0 +1,19 @@
+{
+  "slug": "quality",
+  "topic": "quality",
+  "source": "plan",
+  "intent": "混合型",
+  "tier": "Pillar Page",
+  "primary_keyword": "quality",
+  "cluster": "无匹配集群",
+  "cannibal_risk": "🔴 高",
+  "signals": {
+    "pain": "quality×11",
+    "cluster_gap": "无匹配集群",
+    "demand": "弱先验",
+    "origin": "痛点:quality×11"
+  },
+  "updated": "2026-07-18",
+  "plan_score": 0.5843,
+  "guidance": "tag-level overlap with nichia-diodes-blue-lasers-performan. Ensure differentiation."
+}

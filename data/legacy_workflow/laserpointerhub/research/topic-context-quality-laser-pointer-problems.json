@@ -1,0 +1,18 @@
+{
+  "slug": "quality-laser-pointer-problems",
+  "topic": "quality laser pointer problems",
+  "source": "plan",
+  "intent": "混合型",
+  "tier": "Cluster Content",
+  "primary_keyword": "quality laser pointer problems",
+  "cluster": "无匹配集群",
+  "cannibal_risk": "🟡 中",
+  "signals": {
+    "pain": "quality×11",
+    "cluster_gap": "无匹配集群",
+    "demand": "弱先验",
+    "origin": "痛点:quality×11"
+  },
+  "updated": "2026-06-03",
+  "plan_score": 0.605
+}
