@@ -15,8 +15,11 @@ from seo_ops.rules.gsc_workflow import (
     GSC_QUERY_PAGE_SYNC_RULE,
     OLD_ARTICLE_GSC_READINESS_RULE,
 )
-from seo_ops.rules.research_workflow import MULTI_SOURCE_TOPIC_RESEARCH_RULE
-from seo_ops.utils import json_dumps, utc_now
+from seo_ops.rules.research_workflow import (
+    CANDIDATE_QUALIFICATION_RULE,
+    MULTI_SOURCE_TOPIC_RESEARCH_RULE,
+)
+from seo_ops.utils import json_dumps, json_loads, utc_now
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -554,6 +557,35 @@ PRAGMA user_version = 9;
 """
 
 
+MIGRATION_10 = """
+ALTER TABLE research_candidates ADD COLUMN qualification_status TEXT
+    CHECK(qualification_status IN
+        ('qualified','needs_evidence','needs_human_review','blocked','stale'));
+ALTER TABLE research_candidates ADD COLUMN qualification_version TEXT;
+ALTER TABLE research_candidates ADD COLUMN cms_fingerprint TEXT;
+ALTER TABLE research_candidates ADD COLUMN evidence_fingerprint TEXT;
+ALTER TABLE research_candidates ADD COLUMN closest_existing_json TEXT;
+ALTER TABLE research_candidates ADD COLUMN evidence_demand_json TEXT;
+ALTER TABLE research_candidates ADD COLUMN evidence_gap_json TEXT;
+ALTER TABLE research_candidates ADD COLUMN evidence_material_json TEXT;
+ALTER TABLE research_candidates ADD COLUMN recommended_disposition TEXT
+    CHECK(recommended_disposition IS NULL OR recommended_disposition IN
+        ('new_article','update_existing','covered_existing','insufficient_evidence'));
+ALTER TABLE research_candidates ADD COLUMN human_review_reason TEXT;
+ALTER TABLE research_candidates ADD COLUMN human_reviewed_at TEXT;
+ALTER TABLE research_candidates ADD COLUMN qualified_at TEXT;
+ALTER TABLE research_candidates ADD COLUMN stale_after TEXT;
+ALTER TABLE research_candidates ADD COLUMN previous_assessment_json TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_research_candidates_qual
+    ON research_candidates(site_id, qualification_status, id);
+CREATE INDEX IF NOT EXISTS idx_research_candidates_decision_qual
+    ON research_candidates(site_id, decision, qualification_status);
+
+PRAGMA user_version = 10;
+"""
+
+
 DEFAULT_RULES = [
     {
         "rule_key": "protect_click_loss",
@@ -639,6 +671,7 @@ DEFAULT_RULES = [
     EXTERNAL_QUERY_REVIEW_RULE,
     NEW_ARTICLE_CANDIDATE_RULE,
     MULTI_SOURCE_TOPIC_RESEARCH_RULE,
+    CANDIDATE_QUALIFICATION_RULE,
     GSC_QUERY_PAGE_SYNC_RULE,
     OLD_ARTICLE_GSC_READINESS_RULE,
     OLD_ARTICLE_CONTENT_QUALITY_RULE,
@@ -721,6 +754,222 @@ def _apply_migration_8(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_migration_10(conn: sqlite3.Connection) -> None:
+    """Add candidate qualification state machine columns.
+
+    Existing candidates are marked 'stale' so the new qualifier must
+    re-evaluate them against current CMS content before they can be
+    promoted again.  Original 'gate_status' is preserved for audit.
+    """
+    candidate_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(research_candidates)").fetchall()
+    }
+    additions = {
+        "qualification_status": (
+            "ALTER TABLE research_candidates ADD COLUMN qualification_status TEXT "
+            "CHECK(qualification_status IN "
+            "('qualified','needs_evidence','needs_human_review','blocked','stale'))"
+        ),
+        "qualification_version": (
+            "ALTER TABLE research_candidates ADD COLUMN qualification_version TEXT"
+        ),
+        "cms_fingerprint": ("ALTER TABLE research_candidates ADD COLUMN cms_fingerprint TEXT"),
+        "evidence_fingerprint": (
+            "ALTER TABLE research_candidates ADD COLUMN evidence_fingerprint TEXT"
+        ),
+        "closest_existing_json": (
+            "ALTER TABLE research_candidates ADD COLUMN closest_existing_json TEXT"
+        ),
+        "evidence_demand_json": (
+            "ALTER TABLE research_candidates ADD COLUMN evidence_demand_json TEXT"
+        ),
+        "evidence_gap_json": ("ALTER TABLE research_candidates ADD COLUMN evidence_gap_json TEXT"),
+        "evidence_material_json": (
+            "ALTER TABLE research_candidates ADD COLUMN evidence_material_json TEXT"
+        ),
+        "recommended_disposition": (
+            "ALTER TABLE research_candidates ADD COLUMN recommended_disposition TEXT "
+            "CHECK(recommended_disposition IS NULL OR recommended_disposition IN "
+            "('new_article','update_existing','covered_existing','insufficient_evidence'))"
+        ),
+        "human_review_reason": (
+            "ALTER TABLE research_candidates ADD COLUMN human_review_reason TEXT"
+        ),
+        "human_reviewed_at": ("ALTER TABLE research_candidates ADD COLUMN human_reviewed_at TEXT"),
+        "qualified_at": ("ALTER TABLE research_candidates ADD COLUMN qualified_at TEXT"),
+        "stale_after": ("ALTER TABLE research_candidates ADD COLUMN stale_after TEXT"),
+        "previous_assessment_json": (
+            "ALTER TABLE research_candidates ADD COLUMN previous_assessment_json TEXT"
+        ),
+    }
+    for name, statement in additions.items():
+        if name not in candidate_columns:
+            try:
+                conn.execute(statement)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" in str(exc).lower():
+                    continue
+                raise
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_research_candidates_qual
+            ON research_candidates(site_id, qualification_status, id);
+        CREATE INDEX IF NOT EXISTS idx_research_candidates_decision_qual
+            ON research_candidates(site_id, decision, qualification_status);
+        PRAGMA user_version = 10;
+        """
+    )
+    conn.execute(
+        "UPDATE research_candidates SET qualification_status = 'stale' "
+        "WHERE qualification_status IS NULL"
+    )
+    _cancel_stale_candidate_derivatives(conn)
+
+
+def _cancel_stale_candidate_derivatives(conn: sqlite3.Connection) -> None:
+    """Stop unstarted work derived only from an invalidated candidate."""
+
+    candidate_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(research_candidates)").fetchall()
+    }
+    if "qualification_status" not in candidate_columns:
+        return
+    now = utc_now()
+    conn.execute(
+        """
+        UPDATE opportunities
+        SET status = 'cancelled'
+        WHERE rule_key = 'research_topic_candidate'
+          AND (
+              status = 'proposed'
+              OR (
+                  status = 'accepted'
+                  AND EXISTS (
+                      SELECT 1 FROM actions
+                      WHERE actions.opportunity_id = opportunities.id
+                        AND actions.workflow_status = 'planned'
+                  )
+              )
+          )
+          AND EXISTS (
+              SELECT 1 FROM research_candidates stale
+              WHERE stale.site_id = opportunities.site_id
+                AND stale.topic = opportunities.target_ref
+                AND stale.qualification_status = 'stale'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM research_candidates current
+              WHERE current.site_id = opportunities.site_id
+                AND current.topic = opportunities.target_ref
+                AND current.qualification_status = 'qualified'
+          )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE actions
+        SET workflow_status = 'cancelled',
+            decision_reason = COALESCE(decision_reason, '')
+                || ' | 候选资格失效，未开始任务自动取消',
+            completed_at = COALESCE(completed_at, ?)
+        WHERE workflow_status = 'planned'
+          AND opportunity_id IN (
+              SELECT id FROM opportunities
+              WHERE rule_key = 'research_topic_candidate'
+                AND status = 'cancelled'
+          )
+        """,
+        (now,),
+    )
+
+
+def _apply_migration_11(conn: sqlite3.Connection) -> None:
+    """Use LaserPointerHub's verified SKU product route for derived links."""
+
+    conn.execute(
+        """
+        UPDATE sites
+        SET product_path_template = '/p-{sku}.html', updated_at = ?
+        WHERE slug = 'laserpointerhub'
+          AND product_path_template <> '/p-{sku}.html'
+        """,
+        (utc_now(),),
+    )
+    rows = conn.execute(
+        """
+        SELECT ci.id, ci.slug, s.domain, cs.metadata_json
+        FROM content_items ci
+        JOIN sites s ON s.id = ci.site_id
+        LEFT JOIN content_snapshots cs ON cs.id = (
+            SELECT latest.id FROM content_snapshots latest
+            WHERE latest.content_item_id = ci.id
+            ORDER BY latest.captured_at DESC, latest.id DESC LIMIT 1
+        )
+        WHERE s.slug = 'laserpointerhub' AND ci.content_type = 'product'
+        """
+    ).fetchall()
+    for row in rows:
+        metadata = json_loads(row["metadata_json"], {})
+        sku = str(metadata.get("sku") or row["slug"] or "").strip()
+        if not sku:
+            continue
+        domain = str(row["domain"]).strip().rstrip("/")
+        if not domain.startswith(("http://", "https://")):
+            domain = f"https://{domain}"
+        conn.execute(
+            "UPDATE content_items SET canonical_url = ? WHERE id = ?",
+            (f"{domain}/p-{sku}.html", row["id"]),
+        )
+    conn.execute("PRAGMA user_version = 11")
+
+
+MIGRATION_12 = """
+CREATE TABLE IF NOT EXISTS research_seed_observations (
+    id INTEGER PRIMARY KEY,
+    site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    research_run_id INTEGER NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+    topic_id INTEGER REFERENCES topic_nodes(id) ON DELETE SET NULL,
+    dimension_key TEXT,
+    source_kind TEXT NOT NULL,
+    source_url TEXT,
+    source_title TEXT,
+    observed_text TEXT NOT NULL,
+    source_quote TEXT,
+    evidence_ref TEXT,
+    task_card_json TEXT NOT NULL DEFAULT '{}',
+    follow_up_query TEXT NOT NULL,
+    normalized_query TEXT NOT NULL,
+    provisional_topic TEXT,
+    semantic_cluster TEXT NOT NULL DEFAULT 'emerging',
+    anchor_fit TEXT NOT NULL DEFAULT 'core'
+        CHECK(anchor_fit IN ('core','adjacent','off_anchor')),
+    status TEXT NOT NULL DEFAULT 'observed'
+        CHECK(status IN ('observed','consumed','discarded')),
+    consumed_by_run_id INTEGER REFERENCES research_runs(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    consumed_at TEXT,
+    UNIQUE(site_id, research_run_id, evidence_ref, normalized_query)
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_seed_observations_frontier
+    ON research_seed_observations(
+        site_id, status, semantic_cluster, topic_id, dimension_key, id DESC
+    );
+CREATE INDEX IF NOT EXISTS idx_research_seed_observations_source
+    ON research_seed_observations(site_id, source_kind, research_run_id DESC);
+
+PRAGMA user_version = 12;
+"""
+
+MIGRATION_13 = """
+ALTER TABLE actions ADD COLUMN legacy_stage TEXT;
+
+PRAGMA user_version = 13;
+"""
+
+
 def _apply_migrations(conn: sqlite3.Connection) -> None:
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if version == 0:
@@ -785,6 +1034,19 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         version = 8
     if version < 9:
         conn.executescript(MIGRATION_9)
+        version = 9
+    if version < 10:
+        _apply_migration_10(conn)
+        version = 10
+    if version < 11:
+        _apply_migration_11(conn)
+        version = 11
+    if version < 12:
+        conn.executescript(MIGRATION_12)
+        version = 12
+    if version < 13:
+        conn.executescript(MIGRATION_13)
+        version = 13
 
 
 def init_db(settings: Settings | None = None) -> None:
@@ -796,8 +1058,11 @@ def init_db(settings: Settings | None = None) -> None:
         now = utc_now()
         conn.execute(
             """
-            INSERT INTO sites(slug, name, domain, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?)
+            INSERT INTO sites(
+                slug, name, domain, blog_path_template, product_path_template,
+                created_at, updated_at
+            )
+            VALUES(?, ?, ?, '/blog/{slug}', '/p-{sku}.html', ?, ?)
             ON CONFLICT(slug) DO NOTHING
             """,
             ("laserpointerhub", "LaserPointerHub", "laserpointerhub.com", now, now),
@@ -831,3 +1096,4 @@ def init_db(settings: Settings | None = None) -> None:
                     rule.get("review_after", "2026-10-14"),
                 ),
             )
+        _cancel_stale_candidate_derivatives(conn)
