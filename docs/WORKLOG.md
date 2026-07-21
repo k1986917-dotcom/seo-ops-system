@@ -1,5 +1,40 @@
 # 工作日志
 
+## 2026-07-21 — Legacy Research + Write 1:1 复原首次实施
+
+### 背景
+运营者确认将当前新文章制作通道（素材确认 → 三次 AI 自动写）替换为旧 research + write Skill 的 1:1 复原。旧文章更新通道不变。作者自动填 `LaserPointerHub`（组织名）。搜索提示词恢复旧 8 段格式，Section 3 从"市场数据"改为"常见误区与真实教训"。
+
+### 完成
+- 数据同步层 `legacy_sync.py`：从 SQLite 生成 5 个 Legacy 工作区文件（published-index.json、65 篇 published/*.md、live_products_report.md、internal-links-map.md、seo-data-manual.md）。每次 Legacy 会话启动前自动刷新。
+- Legacy 工作流服务 `legacy_workflow.py`：阶段检测（文件系统 12 状态机）、增强 8 段搜索提示词生成（含素材库总结、"what we know"上下文、Section 3 误区替换）、旧脚本 subprocess 包装（同步 + SSE 流式）、AI 集成（严格按 research/SKILL.md Step 0-6 和 write/SKILL.md 结构指令）、全部 R0-W3 阶段转移函数。
+- Legacy 工作区建立：5 个静态文件 + 3 个素材库种子（旧项目快照）+ 26 个 topic-context 文件 + 5 个数据库同步文件。
+- 数据库迁移 MIGRATION_13：`actions.legacy_stage TEXT`，safe-guard 防止重复添加。
+- 网页集成：8 个 Legacy 阶段路由（`/actions/{id}/legacy/stage/r0–w3`），`legacy_production.html` 10 步向导模板，`legacy.css` 样式，`production.html` 修改——有 Legacy 数据的新文章显示向导卡片，旧文章和已生成内容的新文章保持原有 UI。
+- 测试：17 个新测试通过（阶段检测 9、搜索提示词 3、数据同步 5），迁移断言更新到 v13，旧测试回归通过。
+
+### 验证
+- `ruff check src/seo_ops/services/legacy_sync.py src/seo_ops/services/legacy_workflow.py src/seo_ops/web/app.py`：通过
+- `python -m pytest tests/test_legacy_workflow.py -q`：17 passed
+- `python -m pytest tests/test_migrations.py -q`：4 passed
+- 数据同步实测：65 blogs、15 products、20 GSC rows 正确生成
+- 搜索提示词实测：5005 字符，8 段完整，Section 3 正确为"Misconceptions"
+- 应用模块加载：OK
+
+### 未完成 / 遗留
+- Legacy 路由可访问但尚未真实端到端测试（需要实际触发新文章制作）
+- SSE 流式日志端点已定义但未在模板中连接（后续迭代）
+- Legacy 工作区文件 `.gitignore` 未配置（103 个文件当前 track 在 Git 中）
+- `register` 后的 `--apply` 草稿同步（旧脚本改旧项目文件，复制到工作区）
+- 旧项目脏状态可能导致未来 `_copy_research_products()` 行为不确定（建议后续仅从 workspace 同步文件到旧项目，或完全隔离）
+
+### 下一步
+1. 重启本地服务到当前源码，用真实新文章制作任务端到端验证 Legacy 全流程
+2. 运营者确认 UI 体验和产物质量
+3. 迭代：SSE 实时日志连接、作者 UI 改善、异常重试按钮
+
+---
+
 ## 2026-07-15 — GSC 活动批次链路复核与旧行动归档修复
 
 ### 完成
@@ -558,3 +593,498 @@
 - 本轮没有再次生成真实 AI 新文或旧文修改稿，因此 U-006/U-009 仍不能关闭。
 - U-010 的“中文/重复/偏题调研候选”已用真实 RUN #1 页面复验解决，但词形规则不是完整语义模型，后续仍需观察新的真实样本。
 - 下一步只需从当前第 3 页各选一篇旧文和新文进行真实成稿质量复验；不要重新设计五步架构，也不需要重复当前 GSC 或调研调用。
+
+## 2026-07-17 — 0.10.0 调研资格门、真实回放与产品链接修复
+
+### 背景与范围
+
+- 运营者要求不再处理旧数据细节，优先改善调研产生的新旧文章主题质量，并要求修改后真实调研验证；同时指出主题图谱产品链接错误。
+- 五步主流程保持不变。本轮只收紧调研候选资格、重复/灰色归类、旧结果失效和产品 canonical；没有重新设计导航、GSC 或文章制作架构。
+
+### 实现
+
+- 新增 `candidate_qualification 0.9.2`：候选分开保存需求、缺口、页面材料和最接近旧文检查。只有三门同时通过且关系为独立/相邻未覆盖时才是 `qualified`。
+- 需求只接受 GSC、SERP/PAA 和 Trends evidence；Tavily/论坛是资料发现，Firecrawl 是页面材料，二者不能冒充搜索需求。材料至少需要两个 evidence、两条 URL 和一份页面采集；敏感主题必须有官方或研究来源。
+- 最接近旧文使用去除领域通用词后的核心意图词、词形归一、标题身份、结构化小标题和正文覆盖；修复“按使用场景选颜色”误匹配功率文章而不是颜色文章的反例。
+- 同意图或强正文覆盖归入旧文章判断；灰色关系进入人工复核。人工只能确认页面职责，不能补证据；规则/CMS/证据指纹变化后旧资格失效。
+- 失效的 pending 候选不再阻塞新一轮发现；只由失效候选产生且尚未开始的机会/行动在启动或 CMS 变化时取消。真实旧行动 #1 已移入 cancelled，历史和证据保留。
+- SQLite v10 增加资格状态与审计字段；v11 将 LaserPointerHub 产品模板和既有 canonical 修复为 `/p-{sku}.html`。主题图谱只映射活动内容。
+- 文章建议页只把 `qualified` 放入新文章栏，另显示灰色人工复核、旧文归类及证据不足/失效计数；打开页面不调用外部 API。
+
+### 真实数据与调研
+
+- 修改前用 SQLite backup API 创建 `data/backups/seo_ops-before-research-quality-20260717T132353Z.db`，原始导入与快照均未删除。
+- 恢复 OAuth GSC #6 为唯一活动批次；意外测试导入 #7/#8 的 3 项测试内容设为 inactive，原记录和快照保留。重建后活动内容为 65 Blog + 15 Product，图谱映射 80 项。
+- 沙箱内 RUN #4 因网络策略全部失败，系统正确保存失败记录且候选为 0；随后经授权真实运行 RUN #5，预算为 SerpAPI 2、Firecrawl 2、Tavily 3、AI 1。
+- RUN #5 实际成功为 SerpAPI 1/2、Firecrawl 2/2、Tavily 3/3、AI 1/1，得到唯一主题 `DIY laser pointer storage cases: repurposing containers for protection`。
+- 该线索有页面材料但没有引用 SERP/PAA/GSC 的需求事实；逐段对照现有 `Laser Pointer Case & Storage Guide` 后，正文已覆盖无盒、软袋、硬盒、泡棉、防尘、撞击与误触等页面职责。最终状态为 `blocked + covered_existing`，本轮新文章为 0，不创建新 URL。
+- RUN #5 的 7 个外部响应快照逐字节检查当前四个 API 密钥，泄漏为 0。
+
+### 产品链接与页面验收
+
+- 真实库 15 个活动产品 canonical 全部为 `/p-{SKU}.html`；主题图谱实际 HTML 中有 15 个 SKU 产品链接，`/products/` 残留为 0。
+- 8787 已被旧 0.9.0 进程占用，因此按端口占用规则在 `http://127.0.0.1:8788` 启动 0.10.0。
+- 真实 HTTP：`/api/health`、`/opportunities`、`/actions`、`/topics` 均为 200；文章建议页显示 0 个合格新主题和 1 个旧文归类。
+
+### 验证
+
+- `.venv/bin/pytest -q`：61 项全部通过；仅有 FastAPI TestClient/httpx 的第三方弃用警告。
+- `.venv/bin/ruff format --check src tests tools`：53 files already formatted。
+- `.venv/bin/ruff check src tests tools`：All checks passed；`git diff --check` 通过。
+- 真实库：schema 11，`quick_check=ok`，外键违规 0，活动 GSC 仅 #6，活动内容 65 + 15，错误产品链接 0。
+
+### 遗留与下一步
+
+- 当前新文章为 0 是资格门的预期结果，不应为了测试写作或维持发文量而降低门槛。下一步优先从 16 个真实旧文建议中选择一篇有 query→page 联合证据的页面，复验旧文成稿质量。
+- U-006/U-009 的第一篇真实旧文/新文成稿质量仍未关闭；新文必须等待未来出现 `qualified` 主题。
+- 8787 仍运行旧 0.9.0；本轮没有终止未知来源的旧进程，0.10.0 使用 8788。
+
+## 2026-07-17 — 0.10.1 新主题发现前沿、证据 lineage 与真实复验
+
+### 问题定位
+
+- 运营者明确指出“现状无法发现新主题，理想状态必须能发现新主题”。保留 0.10.0 的严格
+  资格门，单独检查发现阶段，没有用降低需求/缺口/材料门槛换数量。
+- 真实执行显示四个独立瓶颈：SerpAPI 会把预算用于第一个查询的 SERP + Trends；Tavily
+  被第一组泛化 PAA 占满；Firecrawl 连续抓同一资料查询的前三条；分支相关性要求同时
+  命中 presentation + classroom，导致只命中一个明确场景词的有效候选在资格前被丢弃。
+- 后续真实样本又暴露查询超过 100 字符、Title Case `Laser` 被解析成 `aser`、
+  `alternatives` 内的 `na` 被误判为 `N/A`、`External:45` 大小写导致事实丢失，以及产品
+  规格文本误判为旧文章正文覆盖。
+
+### 实现
+
+- `multi_source_topic_research 0.7.3` 先把 SerpAPI 预算分配给不同具体前沿；图谱/边界入口
+  先逐条为前沿补 Tavily 来源，GSC 入口继续优先补真实 PAA；需求问题按 SERP 轮询，
+  Firecrawl 按不同资料查询和结果名次轮询。
+- Tavily 与 Firecrawl 的 `input_refs` 形成需求 → 资料发现 → 页面采集 lineage。确定性 PAA
+  候选会在精确资料查询完成后附加 source evidence，再只附加该 source 产生的 page capture；
+  AI 候选同样不能沿宽泛 SERP 混入无关正文。
+- 待补证据候选取得更强证据后可以让旧 pending 判定标记 `stale` 并写入新结果；相同证据
+  仍不足时不重复堆积候选。
+- 分支门降为命中一个明确核心场景词，同时要求保留 `laser` 站点锚点；受控归一 educator、
+  teaching、school 为 classroom。泛 presentation mistakes 因脱离激光对象被阻断。
+- `candidate_qualification 0.9.4` 修正 intent 占位词边界和 evidence 大小写规范化；最接近
+  旧文章只比较活动 Blog 正文，Product 继续用于图谱和内链但不再阻断信息文章。
+- 新增 ADR-0015；源码版本升为 0.10.1，五步导航、GSC、文章制作和 SQLite schema 均未重构。
+
+### 真实运行
+
+- RUN #6 在第二个边界查询因超过供应商 100 字符上限中断；改为按词边界截断后保存回归。
+- RUN #8：SerpAPI 实际 3/成功 4/复用 1，Tavily 5/5，Firecrawl 3 次中 2 成功，AI 1/1；
+  发现 `Alternatives to Laser Pointers for Classroom and Presentation Use`，但正文只支持学校
+  安全而非替代工具，正确保持 `needs_evidence`。
+- RUN #9：4 个 SERP 全部复用成功，Tavily 实际 5、Firecrawl 3/3、AI 1/1；资料和正文已
+  跨前沿分散，但 AI 的 3 个主题全部被旧 0.50 分支门误删，由此定位而非继续增加 API。
+- RUN #10：4 个 SERP 复用、Tavily 实际 5、Firecrawl 实际 3、AI 1，保存上限 8 个候选。
+  最终严格重判中，`Why are laser pointers not allowed in school?` 同时具备真实 PAA、精确
+  source discovery、LIA 页面正文和未覆盖 Blog 缺口，状态为 `qualified + new_article`。
+- RUN #10 的泛 `What are some common mistakes to avoid in presentations?` 被站点锚点阻断；
+  PowerPoint 虚拟指针纠正为待补需求事实，不再被天文/SOS 产品规格误判为旧文覆盖。
+- 当前真实 pending 候选汇总为 1 qualified、5 needs_evidence、13 blocked；没有为了数量
+  接受证据不足、正文不匹配、旧文已覆盖或偏离站点对象的候选。
+
+### 验证
+
+- 调研与迁移针对性回归：22 项全部通过，覆盖多前沿分配、查询长度、跨资料查询抓取、
+  无 AI 的 PAA 资格、证据升级失效、大小写 evidence、alternatives intent、Title Case
+  分支、站点偏离和产品不冒充旧文章。
+- `.venv/bin/pytest --collect-only -q -o addopts=''`：67 tests collected；全量 pytest 退出码 0。
+- `.venv/bin/ruff format --check src tests tools`：53 files already formatted；
+  `.venv/bin/ruff check src tests tools` 与 `git diff --check` 通过。
+- 8788 已重启为 0.10.1；`/api/health`、`/opportunities`、`/actions`、`/topics` 均为 200，
+  文章建议页实际包含合格学校禁用原因主题。主题图谱 HTML 有 15 个 `/p-{SKU}.html`
+  产品链接且 `/products/` 为 0；8787 旧进程未改动。
+- 真实库 `quick_check=ok`、外键违规 0、schema 11、活动内容 65 Blog + 15 Product；活动规则
+  为 `multi_source_topic_research 0.7.3` 与 `candidate_qualification 0.9.4`。
+
+### 遗留与下一步
+
+- 当前已经有 1 个合格新主题，下一步可进入文章制作复验英文成稿；仍不得把 5 个
+  `needs_evidence` 主题人工放行。
+- PowerPoint 虚拟指针方向值得后续补一条能引用 PAA/SERP 的需求事实；现有资料和页面材料
+  已保存，不需要把产品页误当文章覆盖。
+- U-006/U-009 的新旧文章实际成稿质量仍需分别复验；本轮只验证到调研与文章建议边界。
+
+## 2026-07-17 — 0.10.2 自然语言假设、运营禁区与真实复验
+
+### 完成内容
+
+- 将图谱/边界入口从“分支标签 + 通用词”改为自然语言验证假设；假设只决定 SERP 检索问题，
+  不作为需求或文章事实。确定性候选保留该种子与 SERP、Tavily、Firecrawl 的 lineage。
+- 新增学校/课堂/未成年人及明显伤害、武器化、破坏性用途的运营禁区；明确没有禁止高功率主题。
+- 修正分支门：保留 laser 站点锚点和核心场景关系，但不要求标题机械重复标签；夜钓等跨分支
+  内容仍会阻断。
+- 技术子题覆盖需命中特定技术对象的旧文标题、小标题或正文；仅有 high-power、laser、safety
+  等泛词时改为人工复核。
+- 同意图且材料齐全的调研候选会生成 `research_existing_content_gap` 旧文优化机会，且明确标注
+  为 CMS 意图比对，不声称 GSC 查询属于该页面。
+- 新增 ADR-0016，规则更新为 `multi_source_topic_research 0.8.0` 与
+  `candidate_qualification 0.9.5`；源码版本升为 0.10.2，SQLite schema 未变化。
+
+### 真实验证
+
+- 隔离数据库用途分支：SerpAPI 2/2、Tavily 2/2、Firecrawl 2/2，保存 8 个候选。只有
+  `How to Use a 405nm Laser Pointer for Fluorescent Minerals` 与
+  `Are Laser Pointers Safe for Dogs and Other Pets?` 为 `qualified + new_article`；其余 6 个
+  因材料或意图关系不足保持 `needs_evidence`。
+- 隔离数据库高功率安全分支：三个外部来源各成功 1 次。`How to Safely Terminate a High-Power
+  Laser Pointer Beam` 为 `needs_human_review`，没有被禁区阻断；Class 3R 安全线索为
+  `blocked + covered_existing`。
+- 生产候选重判结果：`blocked: 19`、`needs_evidence: 4`；3 个学校主题全部阻断。`PRAGMA
+  quick_check=ok`，外键违规 0。
+- 随后在生产库实际运行用途分支 RUN #15：SerpAPI 2/2、Tavily 2/2、Firecrawl 2/2、AI 0。
+  第 3 步现有 `qualified: 2`、`blocked: 19`、`needs_evidence: 10`；两个可见新文章建议为
+  `How to Use a 405nm Laser Pointer for Fluorescent Minerals` 与
+  `Are Laser Pointers Safe for Dogs and Other Pets?`。另 6 个狗相关长尾问题均保持待补证据。
+
+### 验证与遗留
+
+- `.venv/bin/pytest tests/test_research_workflow.py -q -o addopts=''`：21 passed。
+- 新增回归覆盖学校/未成年人禁区、高功率未禁、泛词不得冒充技术覆盖、自然种子，以及同意图线索
+  进入旧文优化机会；`.venv/bin/ruff format --check src tests tools`、
+  `.venv/bin/ruff check src tests tools`、`git diff --check` 均通过。
+- `pytest --collect-only -q -o addopts=''` 收集 70 项。此执行环境运行完整套件会在既有较慢的
+  action/web 测试中被外层运行器提前终止，未得到完整退出码；本轮未把它误报为全量通过。
+- 外层主机上既有 8788 仍返回旧 0.10.1；当前源码可通过 `.venv/bin/uvicorn seo_ops.web.app:app
+  --host 127.0.0.1 --port 8788` 启动 0.10.2。下次在持久终端启动后复核 health 与五个页面。
+
+## 2026-07-18 — 0.10.3 最小禁区与产品决策隔离复验
+
+### 完成内容
+
+- 根据运营者确认，主题范围硬拦截只保留学校/课堂和未成年人；移除对高功率、技术、户外、专业、
+  燃烧、切割和自卫词项的自动范围阻断。英语、明确主意图、需求、缺口、页面材料和重复检查不变。
+- 修复没有结构化自然语言假设的分支将“分支标签 + specific owner task”写入候选池的问题。
+  该类种子现在仅作为 `discovery_only` 检索，不得生成确定性文章标题。
+- 将隔离验证过的产品决策检索加入购买、电池、光学和散热分支：USB/可更换电池、21700/18650、
+  固定/可调焦、铜/铝热管理。它们仍先经过正文重叠和三类证据门；新增回归保证铜/铝线索在
+  缺页面材料时只能为 `needs_evidence`。
+- 新增 ADR-0017；`candidate_qualification` 升为 `0.9.6`，源码升为 `0.10.3`，SQLite schema 未变化。
+
+### 隔离真实复验
+
+- 使用生产库副本、美国英语桌面 SERP 运行两轮共 8 次真实 SerpAPI 查询；没有写入生产数据库、
+  原始导入或 CMS 快照。
+- 第一轮：可充电电池充电、可调焦/发散、绿蓝天文可见性、光束变暗排障均获得 PAA/自然结果，
+  但分别与现有充电、电池、光学、天文颜色、清洁或寿命文章同意图/已覆盖子题，正确去向是旧文
+  更新或产品内链。
+- 第二轮：21700/18650、固定/可调焦、铜/铝散热、USB/可更换电池。前、二、四项仍为旧文更新；
+  铜/铝热管理有具体产品能力、PAA 和对手页面，但尚缺至少两份页面级写作材料，保持补证据而非
+  直接产生新 URL。
+
+### 验证与遗留
+
+- `.venv/bin/pytest tests/test_research_workflow.py -q -o addopts=''`：22 passed。
+- 下一步先采集铜/铝热管理的独立页面材料并对照现有“铜 vs 不锈钢”正文；只有确认独立主要意图
+  后才允许新建。Semrush Keyword Gap 尚未接入，当前竞争对手结论仅来自采集时的自然 SERP。
+
+## 2026-07-18 — 0.10.4 统一素材门与非市场化制作
+
+### 完成内容
+
+- 移除素材包 B（市场/产品）类别；手工搜索提示词、写作提示词和成稿检查不再收集或生成市场规模、
+  价格、竞品报价、零售商比较、折扣、排行榜、Quick Specs 或 CTA 填充。
+- 旧文章制作改为与新文章共用确认素材门：A、E、G、至少两个可追溯来源及敏感主题的官方/研究
+  来源不足时不调用 AI；原有 query + page 联合证据和 click-loss 上一窗口门保持。
+- 旧稿提示词现在传入确认材料、来源清单和限制；确定性检查新增泛化锚文本、标题跳级、长段落和
+  市场/价格内容拦截。原 Slug、主要意图、英语和第一手经验限制保持。
+- 回放当前 CMS 正文确认铜/铝壳散热比较已被多篇文章直接讨论，移除该研究自然语言假设及其回归，
+  并新增 ADR-0018。
+- 源码版本升为 `0.10.4`；SQLite schema 未变化。
+
+### 验证
+
+- `.venv/bin/pytest tests/test_action_workflow.py::test_content_generation_locks_slug_and_filters_invented_links tests/test_action_workflow.py::test_old_article_generation_rechecks_joint_evidence_before_ai tests/test_action_workflow.py::test_old_article_chinese_output_never_reaches_deliverable tests/test_action_workflow.py::test_old_article_delivery_rejects_market_and_price_filler -q -o addopts=''`：4 passed（仅第三方 TestClient 弃用警告）。
+- `.venv/bin/pytest tests/test_research_workflow.py -q -o addopts=''`：22 passed；`.venv/bin/pytest tests/test_topic_graph.py -q -o addopts=''`：2 passed；`.venv/bin/python -m compileall -q src tests`、`.venv/bin/ruff format --check src tests tools`、`.venv/bin/ruff check src tests tools` 与 `git diff --check` 均通过。
+- 全量 `tests/test_action_workflow.py` 与 `tests/test_research_workflow.py` 在此执行环境只输出首个进度点后被外层提前结束，未取得可靠退出码，不能视为全量通过。
+
+### 遗留
+
+- 仍需用一篇真实旧文和一篇真实新文完成受控 AI 成稿复验；不得把自动结构检查或历史成稿当作流量效果证据。
+
+## 2026-07-18 — 运行时服务修复
+
+- 用户反馈文章建议页无法打开。确认 `8788` 上仍运行 0.10.1 的遗留 `seo-ops` 进程；当前源码内
+  `list_article_suggestions()` 和 ASGI `/opportunities` 均可正常返回。
+- 停止实际监听 8788 的旧进程，显式设置 `SEO_OPS_PORT=8788` 启动当前服务。此前启动脚本默认
+  端口为 8787，首次重启误落到 8787，已停止该进程。
+- 验证：`GET /api/health` 返回 `version: 0.10.4`；`GET /opportunities` 返回 HTTP 200，渲染 HTML
+  含 `v0.10.4` 和“文章建议”。
+
+## 2026-07-18 — 0.10.5 意图去重优先与计划式探索
+
+### 完成内容
+
+- 将 `candidate_qualification` 升为 `1.0.0`：同主意图与正文已覆盖子题继续阻断；相邻或独立方向不再因尚缺需求/页面材料被拒绝，缺失信息作为写作准备提示保存。
+- 将旧 workflow plan 的多视角探索方法接入无结构化假设分支：按边界维度产生多个不同的检索问题，仍只以 SERP 返回的具体问题生成候选。
+- 更新文章建议文案、方法治理、数据契约、交接和变更记录；新增 ADR-0019。
+
+### 验证
+
+- 隔离规则原型：同意图与已覆盖子题被拦截，`adjacent`/`distinct` 方向放行，`uncertain` 转人工复核。
+- `.venv/bin/python -m compileall -q src tests` 通过。
+- `.venv/bin/pytest` 的 7 个定向调研回归用例通过：覆盖多视角探索不伪造主题、无材料的独立/相邻方向保留、同意图与正文覆盖仍阻断、以及无结构化分支边界。
+- 全量 `tests/test_research_workflow.py` 在此执行器约 14 秒上限被中断，未将其记为通过。
+- `.venv/bin/pytest tests/test_simplified_workflow.py -q -o addopts=''`：4 passed（有 1 条既有 TestClient/httpx 弃用警告）。
+
+### 遗留
+
+- 尚未用真实外部 API 对新的多视角种子做生产调研；需由运营者在界面主动触发，不能静默消耗额度。
+
+## 2026-07-18 — 0.10.6 种子池、公开语言代理与纯重复资格
+
+### 完成内容
+
+- 将 `candidate_qualification` 升为 `1.1.2`：只有与活动博客同主意图或正文已覆盖子题会阻断。
+  范围、英语、占位 intent、弱需求、少材料、关系不确定和跨分支均改为诊断/准备度；规则版本变化会
+  触发旧候选重判。
+- 将 `multi_source_topic_research` 升为 `0.11.2`、`topic-hypothesis` 升为 `0.10.1`。无结构化
+  假设的分支先用旧 Plan 问题链构造确定性种子，第二条叠加论坛、评论、问答词并记录
+  `public_third_party_language_probe`；提示词明确它是公开市场代理，不是本站第一方反馈。
+- 种子锚点改为“核心对象”判断：激光笔仍是任务核心时允许跨受众、场景和分支，不自动降权；
+  只有替换成激光水平仪、切割机等其他核心对象时软降权。AI 锚点元数据改为 inference 首项，
+  避免 8 条推断时被截断并在重判后丢失。
+- 文章建议把 AI 成型角度与 PAA/Related/Tavily 直接线索分栏；原始线索继续可见但不能开始制作。
+  旧 Plan 的接受/拒绝记录加入软排序，不成为隐藏门。新增 ADR-0020，ADR-0019 标为已取代。
+
+### 三轮真实外部测试与问题修复
+
+- 所有真实测试均使用生产数据库副本，未写生产库。三轮分别为
+  `use-professional × audience`、`buy-quality × failure`、`ops-accessories × ecosystem`：
+  SerpAPI 6/6、Tavily 9/9、AI 3/3；Firecrawl 共 6 次实际请求，记录 5 次成功页面采集、
+  2 次失败事件和 1 次 24 小时复用。三轮状态为 partial、success、partial。
+- 10 个 AI 成型角度中 7 个通过非重复判定、3 个因 CMS 已覆盖回流旧文。有效样本包括树艺师
+  指示具体树枝、卖家虚标功率的常见说法与验证、工业机械对准；原始 PAA 同时暴露航空法规、
+  泛安全和相邻产品噪声。
+- 第一版暴露三个问题：长分支标签导致搜索偏移、PAA/标题冒充推荐、分支词匹配误罚树艺师角度。
+  随后缩短 focus、分离 raw lead、传入结构化 seed context，并按运营者确认取消核心对象未变时的
+  跨分支降权。
+- 额外真实定向复测 `ops-accessories × ecosystem` 完成 SerpAPI 2/2、Tavily 3/3、
+  Firecrawl 2/2、AI 1/1，确认精简种子可正常完成；它仍产出 CO₂ 对准等相邻工作流，因此最终规则
+  不把“跨分支”误当重复，而只在核心产品被替换时软降权。
+- 最新 `1.1.2` 在三轮保存证据上本地重放：树艺师主题仍为 `distinct/new_article`，优先级由旧
+  误罚的 71.6 恢复为 91.6；三轮本身的 10 个成型角度和 14 条原始搜索线索保持分栏。此前显示的
+  18 条是隔离副本中连同历史待处理记录在内的站点总数，不属于本次三轮的计数。
+- 三条不含站点私有上下文的公开语言种子另做真实网页抽查，检出建筑检查员指示高处违规点、
+  围栏施工固定、望远镜安装架与外接开关兼容、卖家虚标/退货等具体语言。再次启动完整
+  `0.11.2` 外部链路时，执行环境因会发送生产副本标题/H2/反馈上下文而拒绝；未绕过该策略。
+
+### 验证结果
+
+- `.venv/bin/pytest tests/test_research_workflow.py tests/test_simplified_workflow.py -q`：34 passed。
+- `.venv/bin/pytest -q`：80 passed（仅 1 条既有 Starlette TestClient/httpx 弃用警告）。
+- 全量测试首次发现 3 个旧断言：制作页旧文案、迁移测试写死 `0.7.3`、泛 FAQ 必须隐藏；
+  已分别同步到当前文案、当前规则常量和“仅重复硬拦截”政策后重跑通过。
+- `.venv/bin/ruff format --check src tests tools`、`.venv/bin/ruff check src tests tools` 与
+  `git diff --check` 通过。
+
+## 2026-07-18 — 0.10.6 四轮最小预算方法验收
+
+### 目的与隔离
+
+- 运营者要求验证方法效果，不新增功能、不清理生产记录。复制生产 SQLite 到
+  `/tmp/seo-ops-method-check-lj98wZ` 后，测试副本仅清除派生调研状态并保留 GSC/CMS 输入；
+  生产库 SHA-256 在测试前后均为 `ff16d78ecd68fc6568834531f27ee576c89e46869560213a58a22cbf2c7027f3`。
+- 每轮严格限制 SerpAPI、Tavily、Firecrawl、AI 各 1 次；四轮交替覆盖旧 Plan 主问题链和
+  `public_third_party_language_probe`，而不是只依赖一次偶然成功。
+
+### 结果
+
+- 四轮 `use-professional × audience`、`buy-quality × failure`、`ops-accessories × ecosystem`、
+  `use-photography × failure` 均为 success；各服务实际/成功调用均为 4/4。
+- 共得到 29 条候选：7 个 AI 成型角度、5 个非重复新方向、2 个正文已覆盖而回流旧文、22 条原始
+  SERP/PAA/相关搜索线索。树艺师检查/园林使用再次出现，说明该角度并非单次偶然。
+- 但附件分支产出了手枪激光瞄具兼容和 CNC 路由器安装；它们满足“非重复”而仍偏离本站手持激光笔
+  的实际意图。公开语言探针也产生品牌词、论坛词和安全噪声。原始线索已正确分栏，但当前核心对象
+  识别和排序不足以把“非重复”自动等同于“适合本站”。
+
+### 结论
+
+- 方法已证明能在极小预算下稳定发现少量新任务，但尚不宜无审查地据此清空历史并自动信任所有
+  `qualified` 结果。若后续优化，应保留重复资格的宽松原则，同时将“手持激光笔仍是主要工具”作为
+  可见的软相关性排序，而非重新引入范围硬门。
+
+## 2026-07-18 — 0.10.7 任务卡正式接入与三轮最小预算复验
+
+### 完成内容
+
+- 将旧 Plan 的前沿选择落地为可审计的 `角色 × 单一任务 × 条件` 任务卡；卡先只做 CMS 同主意图/正文覆盖预筛，需求、范围、材料、意图表述与弱信号均不构成新硬门。
+- 将卡的角色、任务、条件、来源基础和预筛结果写入调研运行并传给 AI；提示词要求忠实包装，不能把卡未声明的风险、改装、维修、测量、替代产品或法律主张补进去。
+- 若某分支只剩一两张未重复任务卡，保留任务卡为首个精确种子，再用旧 Plan 的两条独立问题链补足至多三个探索种子；新增单元回归覆盖此路径。
+
+### 正式接入后真实复验
+
+- 所有轮次使用生产 SQLite 副本，保留 CMS/GSC 输入、清空副本内派生调研状态。源库 SHA-256 在三轮前后均为 `d9351b82dd2181a786bd4a7fee91cf00f6cff305ab7c7ebd27e703d3859e5cb6`，未写生产数据。
+- 每轮限制 SerpAPI、Tavily、Firecrawl、AI 各 `1` 次，且三轮全部 `success`、各服务实际/成功均为 `1/1`：
+  - `use-professional × audience`：`Using a Laser Pointer to Mark Pruning Locations From the Ground`，`qualified/new_article`；
+  - `operation × failure`：`Laser 303 Mode Hopping vs Dimming Fault: Symptom Diagnosis for Owners`，`qualified/new_article`；
+  - `use-presentations × journey`：`Why a Green Laser Pointer Dot Appears Overly Bright or Blooms on Camera or TV Images`，`qualified/new_article`。
+- 三个运行的 `filters_json` 均保存了对应的任务卡和 `qualified` CMS 预筛；同时出现的 PAA/Related 原始线索仍被正常路由为旧文覆盖或原始线索，未冒充成型主题。
+
+### 验证
+
+- `.venv/bin/python -m compileall -q src/seo_ops`：通过。
+- `.venv/bin/ruff check src/seo_ops/services/research_workflow.py tests/test_research_workflow.py`：通过。
+- `.venv/bin/pytest tests/test_research_workflow.py -q`：31 passed。
+
+### 最终工程验证与遗留
+
+- `.venv/bin/pytest -q`：84 passed（仅 1 条既有 Starlette TestClient/httpx 弃用警告）。
+- `.venv/bin/ruff format --check src tests tools`、`.venv/bin/ruff check src tests tools` 与 `git diff --check`：通过。
+- 已停止唯一仍加载 `0.10.6` 的本地 `seo-ops` 进程并在同一端口启动当前源码；`GET /api/health` 返回 `version: 0.10.7`，`/research` 与 `/opportunities` 均为 HTTP 200。
+- 任务卡不能保证已经饱和的市场无限产生可发布主题；若卡耗尽或连续两轮不产生独立成型主题，应补充可追溯的新前沿卡，不能放宽重复判定或制造主题。
+
+## 2026-07-18 — 0.10.7 后续审计：静态任务卡未通过完整续池验收
+
+### 审计范围与隔离
+
+- 运营者要求先验证方法效果；因此没有新增生产功能、没有清理 GSC/JSON/CMS，也没有把本次外部调用写入生产 SQLite。所有试验使用 `/tmp` 下从生产库复制出的独立数据库和快照目录。
+- 复核对象包括旧 Plan 的真实来源库、0.10.7 静态任务卡、当前 65 篇博客正文，以及 Google 与行业公开方法论。Google 的要求是人本、有原创附加价值的内容；它并不支持靠批量主题卡生成大量低价值页面。
+
+### 实测结果
+
+- 旧痛点库可解析出 156 条带 URL 的历史公开线索。直接按单条线索生成卡得到 8/24、7/26 等表面“合格”结果；语义簇版本得到 7/20。它们都没有达到可交付质量：把多个任务拼在一起，或将物流、泛收纳等旧文已覆盖内容误判成新文章。
+- 当前 CMS 的人工正文复核显示，语义簇中“长期收纳”“充电器红绿灯排障”“望远镜固定”“TV 屏幕可见性”已分别由现有收纳、充电器、支架和演示文章的主标题或 H2 直接回答。现有词面型预筛把其中多张标成 `uncertain/qualified`，证明它不能独立承担主意图去重。
+- 额外执行一次不依赖旧库的实时来源对照：SerpAPI、Tavily 各成功一次；选择 Reddit 结果的 Firecrawl 页面抓取因提供商拒绝而失败；AI 从 14 条结果抽出 10 个卡片，其中“建筑师、教师、天文”等至少部分角色并没有对应的来源片段。该轮只自然得到一个较清晰的新角色线索（博物馆讲解），不足以支撑五轮稳定产新主题的结论。
+
+### 结论与未执行项
+
+- 此方法未通过“每轮稳定找出新主题”的前置验收。为避免用偶然成功或 AI 补全伪造效果，没有继续花费 API 去跑五轮，也没有继续落地代码。
+- 早先记录的三轮 0.10.7 成功，只能说明预先挑出的卡可以被下游证据链消费，不能证明“来源发现与卡池续期”完整有效；本条审计对该结论作出更正。
+- 后续若继续，应先验证一个完整但隔离的来源观察原型：来源 URL + 采集时间 + 原话片段 + 可追溯卡字段；以 CMS 的“对象 × 主任务/结果”而非单词重合做重复判定；再进行五轮真实验证。若该原型仍不能每轮给出经人工复核的独立主题，则保持不实现。
+
+## 2026-07-19 — 0.10.8 来源观察续池、单轮冷却与两轮真实复测
+
+### 完成内容
+
+- 新增 SQLite v12 `research_seed_observations`，将 PAA/相关搜索、资料发现和 AI 可核对摘录保存为独立观察；字段包括来源类别、URL、标题、摘录、evidence ID、后续查询、可选任务卡、语义簇、核心对象诊断和消费状态。
+- 调研种子优先消费未使用的来源观察，旧 Plan 任务卡和独立问题链继续补足。来源类别覆盖商业/竞争候选页、论坛/社区、评价、社媒/视频、官方/参考以及 PAA/相关搜索；来源 URL 决定类别，不把查询标签写成事实。
+- 加入立即上一轮主攻簇的单轮软冷却；冷却和相邻/偏移对象都只影响排序，不构成资格门。核心对象以原始标题/摘录判定，不能因生成查询含 `laser pointer` 被误升级。
+- 将无页面直接支持的具体推荐降为 `raw_lead`，并新增候选池“对象 + 动作 + 场景”强重复去重；文章建议页把主题折叠为标题优先，详情按需展开。
+
+### 实际验证
+
+- 先进行单元/集成回归：`.venv/bin/python -m compileall -q src tests` 通过；`.venv/bin/pytest -q tests/test_research_workflow.py tests/test_migrations.py tests/test_simplified_workflow.py tests/test_web.py` 通过。新增测试覆盖：单轮冷却不变成禁词、冷却只读取立即前一轮、来源观察下一轮续用、生成查询不能升级偏移来源、核心来源优先和候选主任务强重复去重。
+- 所有联网测试均复制生产 SQLite、保留导入 CMS/GSC、仅清理副本派生研究状态。最终副本路径为 `/tmp/seo-ops-source-continuation-xu1ntupv`；生产 SQLite SHA-256 前后均为 `ec2cdd03c85918dd1b014c3446c011d148533b00a2ef2d34357209f50f45b0e6`。
+- 最终两轮前在副本写入一条仅供调度的已完成 `battery_charging` 记录。两轮均为 `success`：每轮 SerpAPI 实际记录 3、Tavily 8、Firecrawl 4、AI 1；第二轮复用 2 次 Firecrawl 页面。SerpAPI 账户端点在本次最终运行前后显示 55→54，和运行审计的逐请求计数不完全一致，未据此推断真实计费。
+- 第一轮继承电池软冷却，保存 24 条来源观察，得到 `Using a Green Laser Pointer to Indicate Pruning Locations From the Ground as an Arborist`。第二轮继承第一轮 `use_case_tasks` 冷却，实际消费 3 条第一轮观察，得到 `Why Laser Beams Appear to Stop Suddenly Outdoors` 与 `Using a Laser Pointer for Antenna and Machinery Alignment` 两个不同的成型方向。
+- 中途真实测试发现 LightBurn 连续框选和激光瞄具可能因生成查询被误升为核心、树艺师主题可能换标题重复；已改为来源标题/摘录锚定、核心优先排序与候选主任务去重，再完成上述最终两轮。最终种子中不再让这些偏移来源占核心位。
+
+### 遗留
+
+- 两轮成功证明来源观察闭环能稳定产生不同方向，但不证明小众市场无限有可发布主题；正常运营运行仍需由运营者在文章建议页核对品牌适配与制作材料。
+- 本地常驻服务若仍加载 0.10.7，需要重启后才会使用 0.10.8 和 SQLite v12 迁移。
+
+## 2026-07-19 — 0.10.9 开放入口还原、主意图聚类与两轮正常实测
+
+### 问题定位与实现
+
+- 对照成功原型报告 `/tmp/seo-ops-open-scheduler-v2-rlxu9lam/report.json`，确认其中 58 条观察、24 个种子、17 个包装候选和 6 个意图簇均是实际输出，不是预设限额；唯一有意的数量控制是选择 5 个种子继续深挖，其他种子不应消失。
+- 正式接入的真实偏差是 `_open_scheduler_family_specs()` 把自动选中的分支词加入全部十二类查询。散热实测因此从 60 条观察只抽出 5 个同方向种子；这是一层原型不存在的语义限流。
+- 将十二类入口恢复为成功原型的原始宽查询，分支仅保留给旧 Plan 任务卡与审计；AI 种子提示明确要求返回所有来源支持的独立意图，上一轮冷却只能影响排序，不能删除种子。
+- 所有未被 CMS `same_intent` / `covered_subtopic` 拦截的种子继续进入折叠候选池；选择 5 个做 SerpAPI/Tavily/Firecrawl/AI 深挖只控制额度。候选工程保险丝提高到 200，来源观察保险丝提高到 500，删除未使用且容易误解的 `open_scheduler_initial_family_limit`。
+- 恢复成功原型最后的主意图聚类。`_ai_intent_deduplicate_pool()` 只能分组输入 ID：合并本轮同页面职责换说法、标记已有候选池同意图，并合并 evidence/facts；不同问题、任务、症状、决策、受众、地区、条件和结果必须保留。失败时保留原池并记录失败，不让 AI 改资格或创造主题。
+
+### 两轮真实外部测试
+
+- 使用 `/tmp/seo-ops-open-cooldown-normal-rcXUao/seo_ops.db` 生产副本，保留真实 CMS/GSC，不指定 topic_id、不模拟前序。生产库 SHA-256 前后均为 `8181b15b5f5cd1c0747acebf3b3323a9004c471a215ac08b7cfabec77a403c1f`。
+- 第一轮自然选择 `use-outdoor`：SerpAPI 2/2、Tavily 17/17、Firecrawl 6/7、AI 6/6；58 条初始观察，15 个种子提案，1 个 CMS 重复，14 个来源种子可见，聚类前形成 13 条主题与 14 条 raw lead，共 30 个候选。
+- 第二轮自然轮到 `use-astronomy`：SerpAPI 2/2、Tavily 计划 17 且复用 12 个首轮入口、Firecrawl 5/7、AI 6/6；58 条初始观察，AI 原始返回 48 个种子、验证后保留 45 个，8 个 CMS 重复，37 个来源种子可见，聚类前形成 37 条主题与 9 条 raw lead，共 51 个候选。
+- SerpAPI 账户端点本次显示 52→48，与两轮各 2 次吻合。两轮均因部分 Firecrawl 页面失败诚实记录为 `partial`；生产库未修改。
+
+### 聚类前置验证与代码路径复验
+
+- 先对两轮已存真实成型候选各调用一次 AI-only 聚类，不再调用搜索 API：第一轮 13→11；第二轮识别店铺评价、天文活动规则、校园规则等本轮簇，并识别 12 个与第一轮同意图变体，37→17。该结果证明数量收敛不必恢复分支限流。
+- 落地后对两轮完整候选池调用正式代码路径：第一轮 16 个成型/路由候选合并 3 个换说法；第二轮 42 个成型/路由候选合并 10 个本轮换说法并识别 14 个上一轮同意图。扣除原已路由旧文项后，仍约有 10 与 14 个独立成型方向进入最终资格检查。
+
+### 验证命令与遗留
+
+- `.venv/bin/pytest -q tests/test_research_workflow.py`：40 passed。
+- `.venv/bin/ruff check src/seo_ops/services/research_workflow.py tests/test_research_workflow.py`：通过；新增回归覆盖开放入口不受电池/散热方向收窄、所有来源种子可见且只深挖 5 个、同意图换说法合并且不同细化意图保留。
+- `.venv/bin/python -m compileall -q src tests`、`.venv/bin/ruff format --check src tests tools`（53 files already formatted）、`.venv/bin/ruff check src tests tools` 与 `git diff --check`：全部通过。
+- `.venv/bin/pytest -q`：109 passed，仅有 1 条既有 Starlette TestClient/httpx 弃用警告；所有临时测试脚本已删除。
+- 已重启本地常驻服务；`GET /api/health` 返回 `version: 0.10.9`，`/research` 与 `/opportunities` 均为 HTTP 200。
+- 使用应用内浏览器真实打开调研页和文章建议页：调研页显示 0.10.9 与当前预算，文章建议页渲染 17 个折叠条目，浏览器控制台无 warning/error；该页面检查没有触发外部调研或消耗搜索额度。
+
+## 2026-07-19 — 调研页实际过程账与入口文案简化
+
+### 完成
+
+- 移除“查看以前的调研概况”折叠列表和结果区重复的“查看文章建议”按钮；历史 `research_runs` 与来源观察仍完整保存，未删除任何审计记录。
+- 运营者复核后移除没有本轮数据的固定“八步流程”说明；过程账只保留可展开的实际记录。入口/冷却/深挖种子、来源 URL/原话、CMS 预筛、主意图去重/路由和异常均由本轮保存的对象直接渲染，缺失时明确说明缺失，不用模板话术补齐。
+- 过程账逐项显示实际深挖种子、保存的来源 URL/原话、CMS 重复预筛及所匹配的现有文章、AI 归类的本轮换说法/历史同意图、保存阶段的路由或跳过理由，以及提供商错误代码/消息。
+- 旧运行缺少这些对象时，页面明确说明不能事后回填或还原，不虚构数据；`partial`/`failed` 运行直接列出失败提供商和系统记录。新增审计只记录已经发生的调研动作，不改变种子选择、资格、去重或 API 调用。
+- 同步调研入口名称、最新运行标题和按钮文案：覆盖较少方向显示为“突破主题瓶颈”，已有分支加维度显示为“补主题缺口”；未调整任何调度或 API 调用逻辑。
+
+### 验证
+
+- `.venv/bin/pytest -q tests/test_web.py tests/test_research_workflow.py`：通过（仅既有 Starlette TestClient/httpx 弃用提示）。
+- `.venv/bin/ruff format --check src tests`、`.venv/bin/ruff check src tests`、`.venv/bin/pytest -q` 与 `git diff --check`：通过。
+- 重启本地 `seo-ops` 服务以加载当前后端读取逻辑；`GET /api/health` 返回 200。应用内浏览器打开当前 `/research`：入口名称/按钮已按运营者定义显示，泛“8 步”说明不再出现，RUN #16 的 5 个实际深挖种子和 134 条保存的来源线索均能显示，浏览器控制台无警告或错误。本单元未触发新的外部 API 调用。
+
+## 2026-07-19 — 文章建议结果池与非选择数据的完整去向
+
+### 完成内容
+
+- 将文章建议页收敛为两栏最终选择：左栏为可执行的旧文章更新，右栏为可执行的独立新文章。各栏前两项直接展开，其余候选逐条折叠，取消“最多 2 + 2”与隐藏低优先级条目的行为；右栏显示累计待选与最近成功/部分成功调研实际形成的独立新主题数。
+- 从该页面移除原始搜索线索、已归旧文、人工复核、调研池计数和重复的“查看文章制作”入口。它们不再要求运营者逐个处理，也没有被删除：原始公开语言继续保存在 `research_seed_observations`，下轮会作为可续用种子；`covered_existing` 是最终重复结论，只留审计；`update_existing` 自动建成左栏旧文优化建议。
+- 补齐旧状态生命周期：每次读取文章建议时，`needs_evidence` / `needs_human_review` 会无外部调用地按当前 `candidate_qualification 1.1.3` 的重复唯一规则重判。结果必须成为新文、旧文更新或正文已覆盖三者之一；同时回填所有既有 `update_existing` 的旧文建议，避免候选从右栏消失却未进入左栏。
+
+### 验证与真实状态
+
+- 新增回归覆盖原始线索保留在来源观察续池、旧人工复核自动进入新文栏、旧待证据同主意图自动进入旧文栏，以及页面仅含两栏最终结果。
+- `.venv/bin/ruff format --check src/seo_ops/services/article_suggestions.py src/seo_ops/services/research_workflow.py tests/test_simplified_workflow.py tests/test_web.py` 与对应 `ruff check`：通过。
+- `.venv/bin/pytest -q tests/test_simplified_workflow.py -rA`：9 passed；`.venv/bin/pytest -q tests/test_web.py tests/test_research_workflow.py -rA`：47 passed（均仅有既有 Starlette TestClient/httpx 弃用提示）。
+- 重启已核实的本地服务到 `127.0.0.1:8788`；health 与 `/opportunities` 均返回 200。真实页面显示左栏累计待选 17、右栏“累计待选 23（本轮新增 13）”；全部 21 个其余新主题和 15 个其余旧文均逐条可展开，浏览器控制台无错误。为了补齐既有生命周期，系统在真实派生数据中新增了缺失的 1 条 `research_existing_content_gap` 旧文建议；没有调用任何外部调研或 AI API，也没有改动 GSC、JSON、CMS 原始导入或来源观察。
+
+## 2026-07-19 — 旧 Research + Write 1:1 复原交接方案
+
+### 完成内容
+
+- 按运营者明确要求新增 `docs/LEGACY_RESEARCH_WRITE_RESTORATION_HANDOFF.md`，将下一开发任务锁定为旧 `research + write` Skill 的 1:1 复原，不允许把任务解释成优化、删减、重构或重新设计。
+- 交接文档登记旧两个 Skill、四个主脚本、动态加载/子进程依赖、六份写作 Context、三类素材库、产品报告、发布索引、正文和 topic-context 的事实源层级；旧 Python 脚本的实际行为优先于概括性文字。
+- 逐阶段登记旧 Research 的 prompt、search results、collect、AI Step 0–6、scorer、material pack/brief/score 和 archive，以及旧 Write 的 validate、draft、pre-check、post-process、`--apply`、人工 `--force` 与 register。
+- 单独登记旧内链、产品链接和外链装配链，并按当前旧脚本记录实际动态上下限、外链必达门、frontmatter 写回和 register 实际 top 2 回溯候选；没有新增链接计划模型。
+- 登记同构兼容工作区、命令行先行、网页只包装旧命令、黄金样例、20 项回归测试、完整验收清单、禁止偏航和下一位 AI 的第一步。
+- 更新 `HANDOFF.md`，明确该方案已获确认但尚未实施；第一工作单元只能做旧资产清单、SHA-256、依赖闭包和黄金样例选择，不能先改当前内容生成代码。
+
+### 验证
+
+- `git diff --check -- HANDOFF.md docs/WORKLOG.md docs/LEGACY_RESEARCH_WRITE_RESTORATION_HANDOFF.md`：通过。
+- 文档标题、状态、事实源、Research/Write 阶段、链接装配、实施单元、验收清单和下一位 AI 第一动作均由文本检查确认存在。
+- 本单元只新增和更新交接文档；没有修改应用代码、数据库、原始导入、旧 `/home/laoma/seo-workflow`、常驻服务或外部 API/AI 用量。
+
+### 下一步
+
+1. 下一位 AI 完整读取两个旧 Skill、四个旧主脚本及依赖闭包。
+2. 提交旧资产清单、SHA-256 和三类黄金样例给运营者确认。
+3. 确认后按交接文档单元 A → F 实施，任何优化另开任务。
+
+## 2026-07-19 — 独立 Research + Write V2 SEO 与 AI 搜索优化建议
+
+### 完成内容
+
+- 按运营者要求新增 docs/RESEARCH_WRITE_V2_SEO_AI_SEARCH_OPTIMIZATION_PROPOSAL.md；没有修改旧复原文档、旧 Research/Write Skill、旧脚本或旧工作流产物。
+- 明确 Legacy 与 Optimized 双模式边界：先完成 1:1 复原验收，V2 才能作为可选增强层另行批准和实施；V2 使用独立目录、版本与运行记录，同一文章只允许在人工选稿后执行一次 register。
+- 依据 2026-07-19 可核对的 Google、Microsoft Bing 与 OpenAI 官方资料，登记生成式搜索的当前方法基线、抓取资格、非同质化内容、结构清晰度、OAI-SearchBot、AI 引用/引荐测量和 Commerce policy 边界。
+- 提出 V2 Research sidecar：只读基线、技术资格审计、query/fan-out map、AI 引用版图、Claim Ledger、Information Gain Gate、页面职责去重和 Answer Brief。
+- 提出 V2 Write sidecar：真实身份门、任务型大纲、答案单元、信任信号、适用结构化数据、双层 QA 和完整 CMS 交付包。
+- 单独设计 V2 内链、产品链接、外链与回溯链接装配；链接由页面关系、读者任务和事实声明决定，不把数量当排名公式。
+- 登记 Google Search Console 生成式搜索、Bing AI Performance 与 ChatGPT utm_source=chatgpt.com 的分平台效果观察，以及 7/28/56 天验证边界。
+- 登记 Phase 0–6 实施顺序、18 项 V2 验收标准及 7 条 proposed 规则；所有 proposed 规则均未激活。
+
+### 验证与边界
+
+- 本工作单元仅新增独立建议文档并更新交接记录；未修改应用代码、数据库、原始导入、旧 seo-workflow、复原方案、常驻服务或外部业务系统。
+- OpenAI 官方文档 MCP 在当前会话不可用，按 openai-docs skill 要求尝试添加时因本机 codex.exe Access is denied 失败；随后仅使用 Google、Microsoft 与 OpenAI 官方网页作为资料来源，没有使用第三方 SEO 说法作为规则事实。
+- 文档章节检查已确认 16 个一级章节存在，Claim Ledger、Information Gain Gate、链接装配、OAI-SearchBot 与 7/28/56 天观察等关键内容均可检索。
+- git diff --check -- HANDOFF.md docs/WORKLOG.md：通过；新增 V2 文档未发现行尾空白。
+- 原复原文档仍为 24,746 bytes，SHA-256 为 9d0967ab6d69e392b3aefdf5d33234527c3eaba30bf4a57414169d38d9483bde；本单元未修改该文件。
+- 本单元为文档新增，无应用代码或行为变化，因此未运行 pytest。
+
+### 下一步
+
+1. 仍先执行 Legacy 复原方案单元 A → F；V2 不得混入复原提交。
+2. 只有运营者另行批准 V2 后，才从 Phase 1 数据协议和三类黄金样例开始。
+3. V2 实施前把 proposed 规则按 METHOD_GOVERNANCE 正式登记，并重新核对届时官方文档。
