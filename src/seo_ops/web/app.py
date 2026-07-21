@@ -74,6 +74,7 @@ from seo_ops.services.gsc_oauth import (
 )
 from seo_ops.services.legacy_sync import sync_all as legacy_sync_all
 from seo_ops.services.legacy_workflow import (
+    generate_topic_context_from_research,
     get_legacy_display_data,
     stage_r0_generate_prompt,
     stage_r1_save_and_collect,
@@ -101,7 +102,7 @@ from seo_ops.services.settings_store import (
     update_local_settings,
 )
 from seo_ops.services.topic_graph import sync_topic_graph, topic_tree
-from seo_ops.utils import json_dumps, utc_now
+from seo_ops.utils import json_dumps, json_loads, utc_now
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
@@ -564,11 +565,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _get_action_or_404(action_id: int):
         with connection(active_settings) as conn:
             row = conn.execute(
-                "SELECT * FROM actions WHERE id = ?", (action_id,)
+                """SELECT a.*, o.evidence_json AS opportunity_evidence_json
+                   FROM actions a
+                   LEFT JOIN opportunities o ON o.id = a.opportunity_id
+                   WHERE a.id = ?""",
+                (action_id,),
             ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Action not found")
-        return dict(row)
+        result = dict(row)
+        # Parse opportunity evidence for convenience
+        raw = result.pop("opportunity_evidence_json", None)
+        if raw:
+            try:
+                result["opportunity_evidence"] = json_loads(str(raw))
+            except Exception:
+                result["opportunity_evidence"] = None
+        else:
+            result["opportunity_evidence"] = None
+        return result
+
+    def _get_action_topic(action: dict) -> str:
+        return (action.get("target_ref", "") or "").strip()
 
     def _update_legacy_stage(action_id: int, stage: str | None):
         with connection(active_settings) as conn:
@@ -586,10 +604,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def legacy_r0(action_id: int, request: Request):
         _require_local_form(request)
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         if not topic:
             return _redirect("/actions", "无法获取文章主题", "error")
         legacy_sync_all(LEGACY_WS)
+        generate_topic_context_from_research(
+            topic, LEGACY_WS,
+            opportunity_evidence=action.get("opportunity_evidence"),
+            action_id=action_id,
+        )
         result = stage_r0_generate_prompt(topic, LEGACY_WS)
         _update_legacy_stage(action_id, result.get("stage"))
         return _redirect("/actions", "搜索提示词已生成")
@@ -602,7 +625,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not search_text.strip():
             return _redirect("/actions", "请粘贴搜索结果")
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         result = stage_r1_save_and_collect(topic, search_text, LEGACY_WS)
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "数据已收集，等待 AI 分析"
@@ -612,7 +635,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def legacy_r3(action_id: int, request: Request):
         _require_local_form(request)
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         result = stage_r3_ai_analyze(topic, LEGACY_WS, active_settings)
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "AI 分析完成，素材包和简报已生成"
@@ -624,7 +647,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         form = await request.form()
         author = form.get("author", "") or "LaserPointerHub"
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         result = stage_w0_validate_and_draft(topic, author, LEGACY_WS, active_settings)
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "草稿已生成，等待预检"
@@ -635,7 +658,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_local_form(request)
         tier = request.query_params.get("tier", "")
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         result = stage_w1b_pre_check(topic, tier, LEGACY_WS)
         _update_legacy_stage(action_id, result.get("stage"))
         fail_count = result.get("fail_count", 0)
@@ -649,7 +672,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         do_apply = request.query_params.get("apply") == "1"
         do_force = request.query_params.get("force") == "1"
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         result = stage_w2_post_process(topic, apply=do_apply, force=do_force, workspace=LEGACY_WS)
         _update_legacy_stage(action_id, result.get("stage"))
         if not result.get("gate_passed") and not do_apply:
@@ -661,7 +684,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def legacy_w3(action_id: int, request: Request):
         _require_local_form(request)
         action = _get_action_or_404(action_id)
-        topic = action.get("target_ref", "") or ""
+        topic = _get_action_topic(action)
         result = stage_w3_register(topic, LEGACY_WS)
         _update_legacy_stage(action_id, result.get("stage"))
         return _redirect("/actions", "注册完成" if result.get("success") else (result.get("error") or "注册失败"),

@@ -18,9 +18,10 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional
+from typing import Any
 
 LEGACY_MODULES_DIR = Path("/home/laoma/seo-workflow/data_sources/modules")
 LEGACY_PROJECT_ROOT = Path("/home/laoma/seo-workflow")
@@ -36,10 +37,10 @@ def _slugify(topic: str) -> str:
 
 
 def _today_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
-def _latest_file(glob_pattern: str, directory: Path) -> Optional[Path]:
+def _latest_file(glob_pattern: str, directory: Path) -> Path | None:
     candidates = sorted(directory.glob(glob_pattern),
                         key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
@@ -156,6 +157,126 @@ def stage_step(stage_key: str) -> int:
         return 0
 
 
+# ── Enriched Topic-Context from Research Data ──────────────────────────
+
+def generate_topic_context_from_research(topic: str, workspace: Path,
+                                          opportunity_evidence: dict | None = None,
+                                          action_id: int | None = None) -> dict:
+    """Create an enriched topic-context.json from the new system's research data.
+
+    This replaces the bare heuristic topic-context the old script would generate,
+    giving the Legacy Research AI richer signals than source=heuristic.
+    """
+
+    slug = _slugify(topic)
+    today = _today_str()
+
+    ctx = {
+        "slug": slug,
+        "topic": topic,
+        "source": "research",
+        "intent": "混合型",
+        "tier": "Cluster Content",
+        "primary_keyword": topic,
+        "cluster": "",
+        "cannibal_risk": "",
+        "signals": {},
+        "guidance": "",
+        "updated": today,
+    }
+
+    if not opportunity_evidence or not action_id:
+        # Fallback: heuristic
+        ctx["source"] = "heuristic"
+        ctx["intent"] = _detect_intent(topic)
+        ctx["tier"] = _detect_tier(topic)
+    else:
+        # Use research data to enrich
+        intent = (opportunity_evidence.get("intent") or "").strip()
+        if intent:
+            ctx["intent"] = intent
+
+        facts = opportunity_evidence.get("facts") or []
+        if facts:
+            ctx["signals"]["facts"] = len(facts)
+            ctx["guidance"] = "; ".join(str(f) for f in facts[:3])[:300]
+
+        inference = (opportunity_evidence.get("program_inference") or {})
+        if isinstance(inference, dict):
+            research_inf = inference.get("research_inference") or []
+            overlap = inference.get("content_overlap") or {}
+            ctx["signals"]["inference_count"] = len(research_inf) if isinstance(research_inf, list) else 0
+            if isinstance(overlap, dict):
+                ctx["cannibal_risk"] = str(overlap.get("risk") or overlap.get("relationship") or "")
+
+        source_urls = opportunity_evidence.get("source_urls") or []
+        if isinstance(source_urls, list):
+            ctx["signals"]["source_count"] = len(source_urls)
+
+        limitations = opportunity_evidence.get("limitations") or ""
+        if limitations and str(limitations).strip():
+            ctx["guidance"] = (ctx.get("guidance", "") + " | 局限: " + str(limitations))[:500]
+
+        # Try to get richer data from research_candidates table
+        candidate_id = opportunity_evidence.get("research_candidate_id")
+        if candidate_id:
+            try:
+                from seo_ops.db import connection as db_conn
+                with db_conn() as conn:
+                    rc = conn.execute(
+                        """SELECT rationale, qualification_status, recommended_disposition,
+                                  closest_existing_json, evidence_demand_json,
+                                  evidence_gap_json, evidence_material_json
+                           FROM research_candidates WHERE id = ?""",
+                        (int(candidate_id),),
+                    ).fetchone()
+                    if rc:
+                        rc = dict(rc)
+                        ctx["signals"]["qualification"] = rc.get("qualification_status") or ""
+                        ctx["signals"]["disposition"] = rc.get("recommended_disposition") or ""
+                        rationale = rc.get("rationale") or ""
+                        if rationale and str(rationale).strip():
+                            ctx["guidance"] = (ctx.get("guidance", "") + " | " + str(rationale))[:500]
+
+                        closest = rc.get("closest_existing_json") or ""
+                        if closest:
+                            try:
+                                closest_obj = json.loads(str(closest)) if isinstance(closest, str) else closest
+                                if isinstance(closest_obj, dict):
+                                    ctx["cannibal_risk"] = ("最接近旧文: " +
+                                        str(closest_obj.get("title") or closest_obj.get("url") or "") +
+                                        " (关系: " + str(closest_obj.get("relationship") or "?") + ")")
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+    # Write to workspace
+    tc_path = workspace / "research" / f"topic-context-{slug}.json"
+    tc_path.parent.mkdir(parents=True, exist_ok=True)
+    tc_path.write_text(json.dumps(ctx, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return ctx
+
+
+def _detect_intent(topic: str) -> str:
+    topic_lower = topic.lower()
+    if any(w in topic_lower for w in {"best", "buy", "review", "vs", "comparison", "top", "price", "budget", "cheap", "under", "roundup"}):
+        return "转化型"
+    if any(w in topic_lower for w in {"how", "what", "why", "guide", "safe", "use", "work", "mean", "does"}):
+        return "信息型"
+    return "混合型"
+
+
+def _detect_tier(topic: str) -> str:
+    topic_lower = topic.lower()
+    if any(w in topic_lower for w in {"best", "top", "review", "vs", "comparison", "roundup"}):
+        return "Product Roundup"
+    if len(topic.split()) <= 2:
+        return "Pillar Page"
+    return "Cluster Content"
+
+
 # ── Legacy Runner (subprocess wrapper) ──────────────────────────────────
 
 class LegacyRunner:
@@ -216,8 +337,6 @@ def _build_search_prompt(topic: str, workspace: Path) -> str:
     Section 3 replaces old "Market Data" with "Common Misconceptions and
     Real-World Lessons" to avoid AI-fabricated price/trend content.
     """
-    slug = _slugify(topic)
-    today = _today_str()
 
     # ── Read synced GSC data ──
     seo_path = workspace / "context" / "seo-data-manual.md"
@@ -628,8 +747,8 @@ def stage_r3_ai_analyze(topic: str, workspace: Path,
 Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, then Brief."""
 
     try:
-        from seo_ops.services.ai import build_ai_provider
         from seo_ops.config import get_settings
+        from seo_ops.services.ai import build_ai_provider
 
         s = settings or get_settings()
         if not s.ai_enabled:
@@ -800,8 +919,8 @@ def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
 Follow the system instructions. Output full Markdown with frontmatter."""
 
     try:
-        from seo_ops.services.ai import build_ai_provider
         from seo_ops.config import get_settings
+        from seo_ops.services.ai import build_ai_provider
 
         s = settings or get_settings()
         if not s.ai_enabled:
@@ -906,7 +1025,6 @@ def stage_w3_register(topic: str, workspace: Path) -> dict:
 def get_legacy_display_data(topic: str, workspace: Path) -> dict[str, Any]:
     """Collect all display data for the Legacy workflow UI."""
     stage, files = detect_stage(topic, workspace)
-    slug = _slugify(topic)
 
     data: dict[str, Any] = {
         "stage": stage, "stage_name": stage_label(stage),
