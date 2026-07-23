@@ -28,6 +28,7 @@
   {% elif stage == "r0_prompt" %}
     <details open>
       <summary>📋 搜索提示词（点击展开/折叠）</summary>
+      <button type="button" class="button button-secondary copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent).then(()=>{this.textContent='✅ 已复制';setTimeout(()=>this.textContent='📋 一键复制',2000)})">📋 一键复制</button>
       <pre class="legacy-prompt">{{ l.get("prompt_content", "") or "（提示词加载中...）" }}</pre>
     </details>
     <form method="post" action="/actions/{{ action.id }}/legacy/stage/r1">
