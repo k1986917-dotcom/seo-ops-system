@@ -1,30 +1,47 @@
 """Legacy Research + Write workflow service.
 
-Wraps calls to frozen old scripts at /home/laoma/seo-workflow/data_sources/modules/
-following the old research/SKILL.md and write/SKILL.md instructions exactly.
+Wraps the frozen old scripts in data_sources/modules/ following the old
+research/SKILL.md and write/SKILL.md instructions.
 
-Stages (file-system state machine):
+Stages (file-system state machine, advanced by actions.legacy_stage):
   r0_pending  → r0_prompt → r1_results → r2_collect → r3_ai_analyze
   → r4_score → r5_write_ready → w0_validate → w1_draft
   → w1b_pre_check → w2_post_process → w3_register
 
-Each stage checks for the existence of specific workspace files.
+The old scripts resolve their workspace as <SEO_SITES_DIR>/<website>. This
+service sets SEO_SITES_DIR to data/legacy_workflow so they read and write the
+seo-ops workspace directly — the old project at /home/laoma/seo-workflow is
+never touched.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 import sys
-from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-LEGACY_MODULES_DIR = Path("/home/laoma/seo-workflow/data_sources/modules")
-LEGACY_PROJECT_ROOT = Path("/home/laoma/seo-workflow")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+LEGACY_MODULES_DIR = PROJECT_ROOT / "data_sources" / "modules"
+WEBSITE = "laserpointerhub"
+
+SCRIPT_TIMEOUT_SECONDS = 300
+
+# Prompt input budgets. The old skill fed whole files to a chat agent; here the
+# limits are explicit so a long material pack does not silently lose Part 3.
+_PACK_CHAR_LIMIT = 40000
+_RESEARCH_DATA_CHAR_LIMIT = 40000
+_CONTEXT_CHAR_LIMIT = 6000
+_REPORT_CHAR_LIMIT = 12000
+_OLD_ARTICLE_CHAR_LIMIT = 8000
+
+# write/SKILL.md 段2: "最多 2 轮"
+MAX_REVISION_ROUNDS = 2
 
 
 # ── Utilities ──────────────────────────────────────────────────────────
@@ -46,26 +63,60 @@ def _latest_file(glob_pattern: str, directory: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _copy_research_products(workspace: Path):
-    """After old scripts run in LEGACY_PROJECT_ROOT, copy generated files to workspace."""
-    old = LEGACY_PROJECT_ROOT / "laserpointerhub"
-    ws = workspace
-    ws.mkdir(parents=True, exist_ok=True)
-    for sub in ["research", "material-packs", "drafts"]:
-        src = old / sub
-        if not src.exists():
-            continue
-        dst = ws / sub
-        dst.mkdir(parents=True, exist_ok=True)
-        for f in src.iterdir():
-            if f.is_file():
-                (dst / f.name).write_text(f.read_text(encoding="utf-8"))
-    # Copy updated internal-links-map
-    ilm = old / "context" / "internal-links-map.md"
-    if ilm.exists():
-        ws_ctx = ws / "context"
-        ws_ctx.mkdir(parents=True, exist_ok=True)
-        (ws_ctx / "internal-links-map.md").write_text(ilm.read_text(encoding="utf-8"))
+def _read_text(path: Path | str | None, limit: int | None = None) -> str:
+    if not path:
+        return ""
+    p = Path(path)
+    if not p.exists():
+        return ""
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return text[:limit] if limit else text
+
+
+# ── Report persistence ─────────────────────────────────────────────────
+#
+# Every script run keeps its full stdout on disk. Routes redirect after a POST,
+# so anything held only in memory is lost before the operator can read it.
+
+def _reports_dir(workspace: Path) -> Path:
+    d = workspace / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def save_report(workspace: Path, kind: str, slug: str, content: str) -> Path:
+    path = _reports_dir(workspace) / f"{kind}-{slug}-{_today_str()}.md"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def load_report(workspace: Path, kind: str, slug: str) -> str:
+    latest = _latest_file(f"reports/{kind}-{slug}-*.md", workspace)
+    return _read_text(latest)
+
+
+def _w2_state_path(workspace: Path, slug: str) -> Path:
+    return _reports_dir(workspace) / f"w2-state-{slug}.json"
+
+
+def load_w2_state(workspace: Path, slug: str) -> dict[str, Any]:
+    raw = _read_text(_w2_state_path(workspace, slug))
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {"rounds": 0, "gate_passed": False, "applied": False}
+
+
+def save_w2_state(workspace: Path, slug: str, state: dict[str, Any]) -> None:
+    _w2_state_path(workspace, slug).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ── Stage Detection ────────────────────────────────────────────────────
@@ -87,16 +138,30 @@ STAGE_NAMES = {
     "r5_write_ready":"Research 完成，等待写作",
     "w0_validate":   "素材包已校验，等待生成草稿",
     "w1_draft":      "草稿已生成，等待预检",
-    "w1b_pre_check": "预检完成",
-    "w2_post_process":"后处理完成，等待注册",
+    "w1b_pre_check": "预检完成，等待后处理",
+    "w2_post_process":"后处理通过，等待注册",
     "w3_register":   "已注册，全部完成",
 }
 
+# Files a stage cannot exist without. Guards against a stale legacy_stage in
+# the database claiming progress whose artifacts have since been removed.
+_STAGE_REQUIRES = {
+    "r0_prompt": "search_prompt",
+    "r1_results": "search_results",
+    "r2_collect": "research_data",
+    "r3_ai_analyze": "material_pack",
+    "r4_score": "material_pack",
+    "r5_write_ready": "material_pack",
+    "w0_validate": "material_pack",
+    "w1_draft": "draft",
+    "w1b_pre_check": "draft",
+    "w2_post_process": "draft",
+    "w3_register": "draft",
+}
 
-def detect_stage(topic: str, workspace: Path) -> tuple[str, dict[str, Any]]:
-    """Return (stage_key, files_info) by checking file existence."""
+
+def _collect_files(topic: str, workspace: Path) -> dict[str, Any]:
     slug = _slugify(topic)
-
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     rd = _latest_file(f"research/research-data-{slug}-*.md", workspace)
@@ -104,8 +169,8 @@ def detect_stage(topic: str, workspace: Path) -> tuple[str, dict[str, Any]]:
     sp = _latest_file(f"research/search-prompt-{slug}-*.md", workspace)
     rs = _latest_file(f"research/research-score-{slug}-*.md", workspace)
     br = _latest_file(f"research/brief-{slug}-*.md", workspace)
-
-    files = {
+    bl = _latest_file(f"research/backlink-suggestions-{slug}-*.md", workspace)
+    return {
         "slug": slug, "today": _today_str(),
         "search_prompt": str(sp) if sp else None,
         "search_results": str(sr) if sr else None,
@@ -114,36 +179,55 @@ def detect_stage(topic: str, workspace: Path) -> tuple[str, dict[str, Any]]:
         "brief": str(br) if br else None,
         "material_pack": str(mp) if mp else None,
         "draft": str(draft) if draft else None,
+        "backlinks": str(bl) if bl else None,
     }
 
-    # Order matters — check from most complete to least
-    if draft and not mp:
-        dc = draft.read_text(encoding="utf-8")
-        if "内链:" in dc or "外链:" in dc:
-            return "w3_register", files
-        return "w1_draft", files
 
-    if draft:
-        return "w1_draft", files
+def _detect_file_stage(files: dict[str, Any]) -> str:
+    """Stage implied purely by which artifacts exist on disk."""
 
-    if mp:
-        pc = mp.read_text(encoding="utf-8")
-        if "Part 3" in pc:
-            if rs:
-                return "r5_write_ready", files
-            return "r4_score", files
-        return "r3_ai_analyze", files
+    if files["draft"]:
+        # register appends this heading to the draft itself, so its presence is
+        # exact evidence that 段3 ran. (The old check looked for the 内链: field,
+        # which post-process --apply writes long before register.)
+        if "## 回溯链接候选" in _read_text(files["draft"]):
+            return "w3_register"
+        return "w1_draft"
 
-    if rd:
-        return "r2_collect", files
+    if files["material_pack"]:
+        if "Part 3" in _read_text(files["material_pack"]):
+            return "r5_write_ready" if files["research_score"] else "r4_score"
+        return "r3_ai_analyze"
 
-    if sr:
-        return "r1_results", files
+    if files["research_data"]:
+        return "r2_collect"
+    if files["search_results"]:
+        return "r1_results"
+    if files["search_prompt"]:
+        return "r0_prompt"
+    return "r0_pending"
 
-    if sp:
-        return "r0_prompt", files
 
-    return "r0_pending", files
+def detect_stage(topic: str, workspace: Path,
+                 db_stage: str | None = None) -> tuple[str, dict[str, Any]]:
+    """Return (stage_key, files_info).
+
+    The on-disk artifacts set the floor. `db_stage` (actions.legacy_stage) can
+    push past it — pre-check and post-process produce no new artifact of their
+    own, so without it the UI can never leave w1_draft — but only when the
+    artifacts that stage depends on are still present.
+    """
+
+    files = _collect_files(topic, workspace)
+    file_stage = _detect_file_stage(files)
+
+    if db_stage and db_stage in STAGE_ORDER:
+        if STAGE_ORDER.index(db_stage) > STAGE_ORDER.index(file_stage):
+            required = _STAGE_REQUIRES.get(db_stage)
+            if not required or files.get(required):
+                return db_stage, files
+
+    return file_stage, files
 
 
 def stage_label(stage_key: str) -> str:
@@ -195,6 +279,7 @@ def generate_topic_context_from_research(topic: str, workspace: Path,
         intent = (opportunity_evidence.get("intent") or "").strip()
         if intent:
             ctx["intent"] = intent
+        ctx["tier"] = _detect_tier(topic)
 
         facts = opportunity_evidence.get("facts") or []
         if facts:
@@ -259,6 +344,26 @@ def generate_topic_context_from_research(topic: str, workspace: Path,
     return ctx
 
 
+def read_topic_context(topic: str, workspace: Path) -> dict[str, Any]:
+    raw = _read_text(workspace / "research" / f"topic-context-{_slugify(topic)}.json")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def resolve_tier(topic: str, workspace: Path, submitted: str = "") -> str:
+    """Operator choice wins; otherwise inherit the tier RESEARCH already decided."""
+
+    if submitted and submitted.strip():
+        return submitted.strip()
+    ctx_tier = str(read_topic_context(topic, workspace).get("tier") or "").strip()
+    return ctx_tier or _detect_tier(topic)
+
+
 def _detect_intent(topic: str) -> str:
     topic_lower = topic.lower()
     if any(w in topic_lower for w in {"best", "buy", "review", "vs", "comparison", "top", "price", "budget", "cheap", "under", "roundup"}):
@@ -280,53 +385,64 @@ def _detect_tier(topic: str) -> str:
 # ── Legacy Runner (subprocess wrapper) ──────────────────────────────────
 
 class LegacyRunner:
-    """Runs old scripts via subprocess. Offers sync and SSE-streaming modes."""
+    """Runs the frozen old scripts against the seo-ops Legacy workspace."""
 
-    def __init__(self, workspace: Path, website: str = "laserpointerhub"):
-        self.workspace = workspace
+    def __init__(self, workspace: Path, website: str = WEBSITE):
+        self.workspace = Path(workspace)
         self.website = website
 
+    def _env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        # The scripts resolve <SEO_SITES_DIR>/<website>; the workspace itself is
+        # .../legacy_workflow/laserpointerhub, so hand them its parent. Child
+        # processes the scripts spawn (content_scorer, plan_feedback) inherit it.
+        env["SEO_SITES_DIR"] = str(self.workspace.resolve().parent)
+        return env
+
     def run_sync(self, script_name: str, args: list[str]) -> tuple[str, str, int]:
-        """Run old script, return (stdout, stderr, exit_code)."""
-        script_path = LEGACY_MODULES_DIR / script_name
-        cmd = [sys.executable, str(script_path)] + args
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300,
-            cwd=str(LEGACY_PROJECT_ROOT),
-        )
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        return stdout, stderr, result.returncode
+        """Run an old script; return (stdout, stderr, exit_code)."""
+        cmd = [sys.executable, str(LEGACY_MODULES_DIR / script_name), *args]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=SCRIPT_TIMEOUT_SECONDS,
+                cwd=str(PROJECT_ROOT), env=self._env(),
+            )
+        except subprocess.TimeoutExpired:
+            return "", f"脚本超时（>{SCRIPT_TIMEOUT_SECONDS}s）: {script_name}", 124
+        return result.stdout or "", result.stderr or "", result.returncode
 
-    async def run_stream(self, script_name: str,
-                          args: list[str]) -> AsyncGenerator[str, None]:
-        """Run old script, yield stdout/stderr lines as SSE events."""
-        script_path = LEGACY_MODULES_DIR / script_name
-        cmd = [sys.executable, str(script_path)] + args
+    async def run(self, script_name: str, args: list[str]) -> tuple[str, str, int]:
+        """Async wrapper — keeps the event loop free while a script runs."""
+        return await asyncio.to_thread(self.run_sync, script_name, args)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(LEGACY_PROJECT_ROOT),
-        )
 
-        async def _read(stream, prefix=""):
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace").rstrip()
-                if text:
-                    yield f"data: {prefix}{text}\n\n"
+def _combined_output(stdout: str, stderr: str) -> str:
+    if stderr.strip():
+        return f"{stdout}\n\n---\n### 脚本日志 (stderr)\n```\n{stderr.strip()}\n```"
+    return stdout
 
-        async for line in _read(proc.stdout):
-            yield line
-        async for line in _read(proc.stderr, prefix=""):
-            yield line
 
-        await proc.wait()
-        yield f"data: [EXIT:{proc.returncode}]\n\n"
+# ── AI helper ───────────────────────────────────────────────────────────
+
+async def _run_ai_text(purpose: str, system: str, user: str, *,
+                       settings=None, max_tokens: int | None = None) -> str:
+    from seo_ops.config import get_settings
+    from seo_ops.services.ai import build_ai_provider, complete_text_logged
+
+    active = settings or get_settings()
+    if not active.ai_enabled:
+        raise RuntimeError("AI 未配置，请在设置页配置 AI")
+
+    provider = build_ai_provider(active)
+    return await complete_text_logged(
+        provider,
+        purpose=purpose,
+        system_prompt=system,
+        user_prompt=user,
+        max_tokens=max_tokens,
+        settings=active,
+    )
 
 
 # ── R0: Generate Search Prompt ──────────────────────────────────────────
@@ -585,9 +701,9 @@ def stage_r0_generate_prompt(topic: str, workspace: Path) -> dict:
 
 # ── R1: Save Search Results + Run Collect ───────────────────────────────
 
-def stage_r1_save_and_collect(topic: str, search_text: str,
-                               workspace: Path) -> dict:
-    """Save user-pasted search results and run old collect script."""
+async def stage_r1_save_and_collect(topic: str, search_text: str,
+                                     workspace: Path) -> dict:
+    """Save operator-pasted search results and run the old collect script."""
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
     today = _today_str()
@@ -596,19 +712,21 @@ def stage_r1_save_and_collect(topic: str, search_text: str,
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(search_text, encoding="utf-8")
 
-    stdout, stderr, rc = runner.run_sync(
+    stdout, stderr, rc = await runner.run(
         "research_collector.py",
-        ["collect", "--website", "laserpointerhub", "--topic", topic,
+        ["collect", "--website", WEBSITE, "--topic", topic,
          "--search-file", str(out)],
     )
-    _copy_research_products(workspace)
+    save_report(workspace, "collect", slug, _combined_output(stdout, stderr))
 
     rd_file = _latest_file(f"research/research-data-{slug}-*.md", workspace)
+    ok = rc == 0 and rd_file is not None
     return {
-        "success": rc == 0 and rd_file is not None,
-        "stage": "r2_collect" if rc == 0 else "r1_results",
+        "success": ok,
+        "stage": "r2_collect" if ok else "r1_results",
         "research_data_file": str(rd_file) if rd_file else None,
-        "stdout": stdout, "stderr": stderr, "exit_code": rc,
+        "error": None if ok else (stderr.strip() or "数据收集失败，请查看收集报告"),
+        "report": stdout,
     }
 
 
@@ -617,7 +735,8 @@ def stage_r1_save_and_collect(topic: str, search_text: str,
 _RESEARCH_AI_SYSTEM = """You are an SEO research analyst. Follow this exact methodology.
 
 ## Step 0: Context Inheritance
-Read the topic-context if present. If source=plan: inherit intent, tier, signals, guidance — DO NOT re-judge.
+Read the topic-context if present. If source=plan or source=research: inherit intent, tier,
+signals, guidance — DO NOT re-judge.
 If source=heuristic: intent/tier are guessed; you may refine in analysis.
 
 ## Step 0.5: Keyword Priority
@@ -712,8 +831,7 @@ Output the Material Pack (Part 1 + Part 2 + Part 3), then `===BRIEF===`, then th
 6. Objectivity Checklist"""
 
 
-def stage_r3_ai_analyze(topic: str, workspace: Path,
-                         settings=None) -> dict:
+async def stage_r3_ai_analyze(topic: str, workspace: Path, settings=None) -> dict:
     """AI analysis following old Research Skill Step 0-6."""
     slug = _slugify(topic)
     today = _today_str()
@@ -723,16 +841,11 @@ def stage_r3_ai_analyze(topic: str, workspace: Path,
         return {"success": False, "stage": "r2_collect",
                 "error": "research-data 文件不存在，请先粘贴搜索结果"}
 
-    data_text = rd.read_text(encoding="utf-8")
+    data_text = _read_text(rd, _RESEARCH_DATA_CHAR_LIMIT)
 
-    # Build user prompt with topic-context if available
-    tc_path = workspace / "research" / f"topic-context-{slug}.json"
-    tc_text = ""
-    if tc_path.exists():
-        tc_text = f"\n## Topic Context\n```json\n{tc_path.read_text(encoding='utf-8')}\n```\n"
-
-    bv_path = workspace / "context" / "brand-voice.md"
-    bv_text = bv_path.read_text(encoding="utf-8")[:3000] if bv_path.exists() else ""
+    tc_raw = _read_text(workspace / "research" / f"topic-context-{slug}.json")
+    tc_text = f"\n## Topic Context\n```json\n{tc_raw}\n```\n" if tc_raw else ""
+    bv_text = _read_text(workspace / "context" / "brand-voice.md", _CONTEXT_CHAR_LIMIT)
 
     user_prompt = f"""Analyze: "{topic}"
 
@@ -742,45 +855,41 @@ def stage_r3_ai_analyze(topic: str, workspace: Path,
 {bv_text}
 
 ## Research Data
-{data_text[:12000]}
+{data_text}
 
 Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, then Brief."""
 
     try:
-        from seo_ops.config import get_settings
-        from seo_ops.services.ai import build_ai_provider
+        content = await _run_ai_text(
+            "legacy_research_analyze", _RESEARCH_AI_SYSTEM, user_prompt,
+            settings=settings, max_tokens=8000)
+    except Exception as exc:
+        return {"success": False, "stage": "r2_collect", "error": str(exc)}
 
-        s = settings or get_settings()
-        if not s.ai_enabled:
-            return {"success": False, "error": "AI 未配置，请在设置页配置 AI"}
+    parts = content.split("===BRIEF===", 1)
+    mp_text = parts[0].strip()
+    brief_text = parts[1].strip() if len(parts) > 1 else ""
 
-        provider = build_ai_provider(s)
-        resp = provider.chat(
-            system=_RESEARCH_AI_SYSTEM, user=user_prompt, temperature=0.3)
+    mp_path = workspace / "material-packs" / f"{slug}-{today}.md"
+    mp_path.parent.mkdir(parents=True, exist_ok=True)
+    mp_path.write_text(mp_text, encoding="utf-8")
 
-        parts = resp.content.split("===BRIEF===", 1)
-        mp_text = parts[0].strip()
-        brief_text = parts[1].strip() if len(parts) > 1 else ""
+    if brief_text:
+        (workspace / "research" / f"brief-{slug}-{today}.md").write_text(
+            brief_text, encoding="utf-8")
 
-        # Save material pack
-        mp_path = workspace / "material-packs" / f"{slug}-{today}.md"
-        mp_path.parent.mkdir(parents=True, exist_ok=True)
-        mp_path.write_text(mp_text, encoding="utf-8")
+    # Step 5: deterministic scorer — AI explains the score, never recomputes it.
+    runner = LegacyRunner(workspace)
+    stdout, stderr, rc = await runner.run(
+        "research_scorer.py", ["--website", WEBSITE, "--slug", slug])
+    save_report(workspace, "score", slug, _combined_output(stdout, stderr))
 
-        # Save brief
-        if brief_text:
-            (workspace / "research" / f"brief-{slug}-{today}.md").write_text(
-                brief_text, encoding="utf-8")
-
-        # Run scorer
-        runner = LegacyRunner(workspace)
-        runner.run_sync("research_scorer.py",
-                         ["--website", "laserpointerhub", "--slug", slug])
-        _copy_research_products(workspace)
-
-        return {"success": True, "stage": "r5_write_ready"}
-    except Exception as e:
-        return {"success": False, "stage": "r2_collect", "error": str(e)}
+    scored = _latest_file(f"research/research-score-{slug}-*.md", workspace) is not None
+    return {
+        "success": True,
+        "stage": "r5_write_ready" if scored else "r4_score",
+        "score_warning": None if scored else (stderr.strip() or "评分脚本未产出报告"),
+    }
 
 
 # ── W0-W1: Validate + Draft ─────────────────────────────────────────────
@@ -873,197 +982,535 @@ SEO Keywords: [comma-separated, primary first]
 4. First 1-2 sentences: direct answer
 5. Self-contained paragraphs (2-4 sentences)
 6. No generic link anchors
-7. No fabricated numbers"""
+7. No fabricated numbers
+
+Output ONLY the article Markdown — no preamble, no commentary, no code fence around the whole document."""
 
 
-def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
-                                 settings=None) -> dict:
-    """Validate material pack, then generate draft via AI."""
+def _write_context_block(workspace: Path) -> str:
+    parts = []
+    for key, fname in [("brand_voice", "brand-voice.md"),
+                        ("writing_examples", "writing-examples.md"),
+                        ("style_guide", "style-guide.md"),
+                        ("seo_guidelines", "seo-guidelines.md")]:
+        text = _read_text(workspace / "context" / fname, _CONTEXT_CHAR_LIMIT)
+        if text:
+            parts.append(f"### {key}\n```\n{text}\n```")
+    return "\n".join(parts)
+
+
+def _write_system_prompt(author: str) -> str:
+    if author and author.strip():
+        return _WRITE_AI_SYSTEM.replace("Author: LaserPointerHub",
+                                         f"Author: {author.strip()}")
+    return _WRITE_AI_SYSTEM
+
+
+async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
+                                       settings=None) -> dict:
+    """Validate material pack (段0), then generate the draft (段1)."""
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
     today = _today_str()
 
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not mp:
-        return {"success": False, "error": "material pack 不存在"}
+        return {"success": False, "error": "素材包不存在，请先完成 Research"}
 
-    # Validate
-    stdout, stderr, rc = runner.run_sync(
+    stdout, stderr, rc = await runner.run(
         "write_collector.py",
-        ["validate", "--website", "laserpointerhub", "--topic", topic,
-         "--pack", str(mp)],
+        ["validate", "--website", WEBSITE, "--topic", topic, "--pack", str(mp)],
     )
+    report = _combined_output(stdout, stderr)
+    save_report(workspace, "validate", slug, report)
+
+    # 段0 阻塞规则：必填项缺失 → 停止，提示补齐后重试
     if rc != 0 or "material pack file not found" in stdout.lower():
-        return {"success": False, "error": "素材包校验失败", "report": stdout}
+        return {"success": False, "error": "素材包校验失败，请查看校验报告", "report": report}
 
-    # Write draft via AI
-    pack_text = mp.read_text(encoding="utf-8")
-
-    ctx_parts = []
-    for key, fname in [("brand_voice", "brand-voice.md"),
-                        ("writing_examples", "writing-examples.md"),
-                        ("style_guide", "style-guide.md"),
-                        ("seo_guidelines", "seo-guidelines.md")]:
-        fp = workspace / "context" / fname
-        if fp.exists():
-            ctx_parts.append(f"### {key}\n```\n{fp.read_text(encoding='utf-8')[:2000]}\n```")
-
+    ctx = read_topic_context(topic, workspace)
+    tier = resolve_tier(topic, workspace)
     user_prompt = f"""Write: "{topic}"
 
+## Topic Context
+- Page tier: {tier}
+- Search intent: {ctx.get('intent') or _detect_intent(topic)}
+- Differentiation guidance: {ctx.get('guidance') or '(none recorded)'}
+- Cannibalization note: {ctx.get('cannibal_risk') or '(none recorded)'}
+
 ## Material Pack
-{pack_text[:10000]}
+{_read_text(mp, _PACK_CHAR_LIMIT)}
 
 ## Context
-{chr(10).join(ctx_parts)}
+{_write_context_block(workspace)}
 
-Follow the system instructions. Output full Markdown with frontmatter."""
+Follow the system instructions. Output the full article Markdown with frontmatter."""
 
     try:
-        from seo_ops.config import get_settings
-        from seo_ops.services.ai import build_ai_provider
+        content = await _run_ai_text(
+            "legacy_write_draft", _write_system_prompt(author), user_prompt,
+            settings=settings, max_tokens=16000)
+    except Exception as exc:
+        return {"success": False, "error": str(exc), "report": report}
 
-        s = settings or get_settings()
-        if not s.ai_enabled:
-            return {"success": False, "error": "AI 未配置"}
+    draft_path = workspace / "drafts" / f"{slug}-{today}.md"
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    draft_path.write_text(_strip_code_fence(content), encoding="utf-8")
 
-        provider = build_ai_provider(s)
+    # A fresh draft invalidates any previous post-process verdict.
+    save_w2_state(workspace, slug, {"rounds": 0, "gate_passed": False, "applied": False})
 
-        # Patch author into system prompt
-        sys_prompt = _WRITE_AI_SYSTEM
-        if author and author.strip():
-            sys_prompt = sys_prompt.replace("Author: LaserPointerHub",
-                                             f"Author: {author.strip()}")
+    return {"success": True, "stage": "w1_draft", "report": report}
 
-        resp = provider.chat(system=sys_prompt, user=user_prompt, temperature=0.3)
 
-        draft_path = workspace / "drafts" / f"{slug}-{today}.md"
-        draft_path.parent.mkdir(parents=True, exist_ok=True)
-        draft_path.write_text(resp.content, encoding="utf-8")
-
-        return {"success": True, "stage": "w1_draft", "validate_report": stdout}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+def _strip_code_fence(text: str) -> str:
+    """Some models wrap the whole document in a fence despite instructions."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) < 2:
+        return stripped
+    body = lines[1:]
+    if body and body[-1].strip() == "```":
+        body = body[:-1]
+    return "\n".join(body).strip()
 
 
 # ── W1b: Pre-Check ──────────────────────────────────────────────────────
 
-def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
+async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
-    args = ["--draft", str(draft)]
-    if tier:
-        args += ["--tier", tier]
-    stdout, stderr, rc = runner.run_sync("write_pre_check.py", args)
-    fails = stdout.count("❌")
+
+    resolved_tier = resolve_tier(topic, workspace, tier)
+    args = ["--draft", str(draft), "--tier", resolved_tier]
+
+    keywords = _primary_keywords(draft)
+    if keywords:
+        args += ["--keywords", keywords]
+
+    stdout, stderr, rc = await runner.run("write_pre_check.py", args)
+    report = _combined_output(stdout, stderr)
+    save_report(workspace, "pre-check", slug, report)
+
     return {
         "success": True, "stage": "w1b_pre_check",
-        "report": stdout, "fail_count": fails,
+        "report": report, "fail_count": stdout.count("❌"),
+        "tier": resolved_tier,
     }
 
 
-# ── W2: Post-Process ────────────────────────────────────────────────────
+def _primary_keywords(draft: Path) -> str:
+    m = re.search(r"^SEO Keywords:\s*(.+)$", _read_text(draft), re.MULTILINE)
+    return m.group(1).strip() if m else ""
 
-def stage_w2_post_process(topic: str, apply: bool = False, force: bool = False,
-                           workspace: Path = None) -> dict:
+
+# ── W2: Post-Process (+ revision loop) ──────────────────────────────────
+
+def _parse_post_process(report: str) -> dict[str, Any]:
+    """Pull the gate verdict out of the script's Markdown report."""
+
+    score = None
+    m = re.search(r"-\s*总分:\s*([\d.]+)", report)
+    if m:
+        try:
+            score = float(m.group(1))
+        except ValueError:
+            score = None
+
+    cannibal = None
+    m = re.search(r"最高相似度\s*([\d.]+)", report)
+    if m:
+        try:
+            cannibal = float(m.group(1))
+        except ValueError:
+            cannibal = None
+
+    fix_items = ""
+    m = re.search(r"## 🔧 怎么修\n(.+?)(?:\n## |\Z)", report, re.DOTALL)
+    if m:
+        fix_items = m.group(1).strip()
+
+    link_issues = ""
+    m = re.search(r"## ⚠️ 链接问题\n(.+?)(?:\n## |\Z)", report, re.DOTALL)
+    if m:
+        link_issues = m.group(1).strip()
+
+    return {
+        "score": score,
+        "cannibal": cannibal,
+        "cannibal_block": "**不可进入段3**：蚕食" in report,
+        "score_block": "**不可进入段3**：评分" in report,
+        "fix_items": fix_items,
+        "link_issues": link_issues,
+    }
+
+
+async def stage_w2_post_process(topic: str, workspace: Path, *,
+                                 apply: bool = False, force: bool = False) -> dict:
+    """Run 段2 once. Revision is a separate, operator-triggered action."""
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
+
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
-    args = ["post-process", "--website", "laserpointerhub", "--draft", str(draft)]
+
+    args = ["post-process", "--website", WEBSITE, "--draft", str(draft)]
     if mp:
         args += ["--pack", str(mp)]
     if apply:
         args.append("--apply")
     if force:
         args.append("--force")
-    stdout, stderr, rc = runner.run_sync("write_collector.py", args)
+
+    stdout, stderr, rc = await runner.run("write_collector.py", args)
+    report = _combined_output(stdout, stderr)
+    save_report(workspace, "post-process", slug, report)
+
+    metrics = _parse_post_process(stdout)
     gate_passed = rc == 0
-    return {
-        "success": gate_passed, "stage": "w2_post_process",
-        "report": stdout, "gate_passed": gate_passed,
+
+    state = load_w2_state(workspace, slug)
+    state["gate_passed"] = gate_passed
+    state["score"] = metrics["score"]
+    state["cannibal"] = metrics["cannibal"]
+    state["cannibal_block"] = metrics["cannibal_block"]
+    state["score_block"] = metrics["score_block"]
+    if gate_passed and apply:
+        state["applied"] = True
+    save_w2_state(workspace, slug, state)
+
+    rounds_left = max(0, MAX_REVISION_ROUNDS - int(state.get("rounds", 0)))
+
+    result: dict[str, Any] = {
+        "success": gate_passed,
+        "stage": "w2_post_process" if (gate_passed and apply) else "w1b_pre_check",
+        "report": report,
+        "gate_passed": gate_passed,
+        "rounds_used": int(state.get("rounds", 0)),
+        "rounds_left": rounds_left,
+        **metrics,
     }
 
+    if not gate_passed and rounds_left == 0:
+        # write/SKILL.md 段2: after 2 rounds — link problems do not block
+        # publishing, but a score below the pass line stops the pipeline.
+        result["needs_human_review"] = metrics["score_block"]
+        result["needs_force_confirmation"] = metrics["cannibal_block"]
+    return result
 
-# ── W3: Register ────────────────────────────────────────────────────────
 
-def stage_w3_register(topic: str, workspace: Path) -> dict:
-    runner = LegacyRunner(workspace)
+_REVISE_AI_SYSTEM = """You are revising an SEO article that failed its automated quality gate.
+
+You receive: the current draft, the material pack it must be sourced from, and the
+post-process report listing exactly what failed.
+
+Rules:
+1. Fix EVERY item in the report's 「怎么修」 and 「链接问题」 sections.
+2. The material pack is the only source of truth. Never invent facts, numbers,
+   test results, quotes, authors or regulations. Missing data → "[data not in material pack]".
+3. NEVER fabricate URLs. Only use URLs that already appear in the draft, the material
+   pack, or the internal links map given to you.
+4. If the report shows a cannibalization block, change the ANGLE — cut or rewrite the
+   sections that duplicate the named existing article; do not merely reword sentences.
+5. If the report shows a low quality score, raise specificity: concrete numbers, named
+   scenarios and conclusions from the material pack — not filler paragraphs.
+6. Keep the frontmatter fields (Title, Slug, Author, Summary, Tags, SEO Title,
+   SEO Description, SEO Keywords). Leave the link fields (内链/外链/字数) out — the
+   post-process script generates those.
+7. Preserve the required structure: Key Takeaways block, H2 body, FAQ section,
+   FAQPage JSON-LD.
+
+Output ONLY the complete revised article Markdown. No preamble, no commentary,
+no explanation of what you changed, no code fence around the whole document."""
+
+
+async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
+    """One AI revision round, then re-run 段2. Capped at MAX_REVISION_ROUNDS."""
     slug = _slugify(topic)
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
-    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
 
-    dc = draft.read_text(encoding="utf-8")
-    title_m = re.search(r"^Title:\s*(.+)$", dc, re.MULTILINE)
-    kw_m = re.search(r"^SEO Keywords:\s*(.+)$", dc, re.MULTILINE)
-    article_title = title_m.group(1).strip() if title_m else topic
-    primary_kw = (kw_m.group(1).split(",")[0].strip()
-                  if kw_m else topic)
-    new_url = f"https://laserpointerhub.com/blog/{slug}"
+    state = load_w2_state(workspace, slug)
+    rounds = int(state.get("rounds", 0))
+    if rounds >= MAX_REVISION_ROUNDS:
+        return {"success": False,
+                "error": f"已用满 {MAX_REVISION_ROUNDS} 轮修订。按 skill 规则不再自动修改，请人工审阅草稿。",
+                "rounds_used": rounds, "rounds_left": 0}
 
-    args = [
-        "register", "--website", "laserpointerhub",
+    report = load_report(workspace, "post-process", slug)
+    if not report:
+        return {"success": False, "error": "没有后处理报告，请先运行后处理检查"}
+
+    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
+    metrics = _parse_post_process(report)
+
+    user_prompt = f"""Revise the article for: "{topic}"
+
+## Post-Process Report (what failed)
+{report[:_REPORT_CHAR_LIMIT]}
+
+## Current Draft
+{_read_text(draft)}
+
+## Material Pack (only source of truth)
+{_read_text(mp, _PACK_CHAR_LIMIT)}
+
+## Valid internal link targets
+{_read_text(workspace / 'context' / 'internal-links-map.md', _CONTEXT_CHAR_LIMIT)}
+
+Output the complete revised article Markdown."""
+
+    try:
+        revised = await _run_ai_text(
+            "legacy_write_revise", _REVISE_AI_SYSTEM, user_prompt,
+            settings=settings, max_tokens=16000)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+    # Keep the superseded draft so a bad revision is never a one-way door.
+    backup = draft.with_suffix(f".rev{rounds + 1}.md")
+    backup.write_text(_read_text(draft), encoding="utf-8")
+    draft.write_text(_strip_code_fence(revised), encoding="utf-8")
+
+    state["rounds"] = rounds + 1
+    save_w2_state(workspace, slug, state)
+
+    outcome = await stage_w2_post_process(topic, workspace)
+    outcome["revised"] = True
+    outcome["revision_round"] = rounds + 1
+    outcome["backup"] = str(backup)
+    outcome["previous_metrics"] = metrics
+    return outcome
+
+
+# ── W3: Register + retroactive backlinks ────────────────────────────────
+
+_BACKLINK_AI_SYSTEM = """You pick retroactive internal links for a newly published article.
+
+You receive the candidate list the script produced (already filtered for tag overlap,
+link saturation and existing links) and the body of each candidate article.
+
+Your task, per write/SKILL.md 段3:
+1. Choose 1-3 candidates. Fewer is fine — only pick ones where the link genuinely helps
+   the reader of the OLD article.
+2. For each pick, find a natural insertion point near one of its existing H2 sections.
+3. Write a one-sentence contextual anchor using the OLD article's own terminology.
+   Never use "click here" or "read more".
+4. Maximum ONE backlink per old article.
+5. Skip any candidate already marked as linked or saturated.
+
+Output EXACTLY this format and nothing else:
+
+→ 以下旧文章加回溯链接
+#N, Title
+URL: https://...
+锚文本: `[natural transition sentence](new_url)`
+插入位置: [H2 section name] 段落后
+
+Repeat the block for each pick. If no candidate is a good fit, output only:
+→ 本次没有合适的回溯链接候选
+
+Do NOT edit the old articles. This is a checklist for human approval."""
+
+
+def _parse_backlink_candidates(draft_text: str) -> list[dict[str, str]]:
+    """Read the candidate block register appends to the draft."""
+
+    section = ""
+    m = re.search(r"## 回溯链接候选[^\n]*\n(.+)", draft_text, re.DOTALL)
+    if m:
+        section = m.group(1)
+    if not section:
+        return []
+
+    candidates: list[dict[str, str]] = []
+    for block in re.split(r"\n(?=\*\*#\d+)", section):
+        head = re.match(r"\*\*#(\d+)\s*—\s*(.+?)\*\*", block.strip())
+        if not head:
+            continue
+        url_m = re.search(r"- URL:\s*(\S+)", block)
+        slug = ""
+        if url_m:
+            slug = url_m.group(1).rstrip("/").rsplit("/", 1)[-1]
+        candidates.append({
+            "num": head.group(1),
+            "title": head.group(2).strip(),
+            "url": url_m.group(1) if url_m else "",
+            "slug": slug,
+            "already_linked": "已链接此文章" in block,
+            "block": block.strip(),
+        })
+    return candidates
+
+
+async def stage_w3_register(topic: str, workspace: Path, settings=None) -> dict:
+    """Run 段3 register, then produce the backlink checklist via AI."""
+    runner = LegacyRunner(workspace)
+    slug = _slugify(topic)
+    today = _today_str()
+
+    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    if not draft:
+        return {"success": False, "error": "草稿不存在"}
+
+    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
+    if not mp:
+        return {"success": False,
+                "error": "素材包不存在。若已注册过则无需重复注册；否则请重新完成 Research。"}
+
+    draft_text = _read_text(draft)
+    title_m = re.search(r"^Title:\s*(.+)$", draft_text, re.MULTILINE)
+    kw_m = re.search(r"^SEO Keywords:\s*(.+)$", draft_text, re.MULTILINE)
+    slug_m = re.search(r"^Slug:\s*(.+)$", draft_text, re.MULTILINE)
+
+    article_title = title_m.group(1).strip() if title_m else topic
+    primary_kw = kw_m.group(1).split(",")[0].strip() if kw_m else topic
+    url_slug = slug_m.group(1).strip() if slug_m else slug
+    new_url = f"https://{WEBSITE}.com/blog/{url_slug}"
+
+    stdout, stderr, rc = await runner.run("write_collector.py", [
+        "register", "--website", WEBSITE,
         "--draft", str(draft),
-        "--pack", str(mp) if mp else "",
+        "--pack", str(mp),
         "--new-url", new_url,
         "--title", article_title,
         "--keyword", primary_kw,
-    ]
-    stdout, stderr, rc = runner.run_sync("write_collector.py", args)
-    _copy_research_products(workspace)
-    return {"success": rc == 0, "stage": "w3_register", "report": stdout}
+    ])
+    report = _combined_output(stdout, stderr)
+    save_report(workspace, "register", slug, report)
+
+    if rc != 0:
+        return {"success": False, "error": "注册脚本失败，请查看注册报告", "report": report}
+
+    backlinks = await _generate_backlink_checklist(
+        topic, workspace, draft, new_url, article_title, settings=settings)
+
+    return {
+        "success": True, "stage": "w3_register",
+        "report": report, "new_url": new_url,
+        **backlinks,
+    }
+
+
+async def _generate_backlink_checklist(topic: str, workspace: Path, draft: Path,
+                                        new_url: str, article_title: str,
+                                        settings=None) -> dict:
+    slug = _slugify(topic)
+    today = _today_str()
+
+    candidates = _parse_backlink_candidates(_read_text(draft))
+    actionable = [c for c in candidates if not c["already_linked"]]
+    if not actionable:
+        return {"backlink_note": "脚本未产出可用的回溯链接候选，跳过 AI 挑选",
+                "backlink_candidates": len(candidates)}
+
+    bodies = []
+    for c in actionable:
+        body = _read_text(workspace / "published" / f"{c['slug']}.md",
+                          _OLD_ARTICLE_CHAR_LIMIT)
+        if body:
+            bodies.append(f"### #{c['num']} — {c['title']} ({c['url']})\n```\n{body}\n```")
+
+    user_prompt = f"""New article: [{article_title}]({new_url})
+
+## Candidates from the register script
+{chr(10).join(c['block'] for c in actionable)}
+
+## Bodies of the candidate articles
+{chr(10).join(bodies) if bodies else '(no bodies available — judge from the candidate metadata only)'}
+
+Produce the backlink checklist in the exact required format."""
+
+    try:
+        checklist = await _run_ai_text(
+            "legacy_backlink_select", _BACKLINK_AI_SYSTEM, user_prompt,
+            settings=settings, max_tokens=4000)
+    except Exception as exc:
+        return {"backlink_note": f"回溯链接 AI 未完成：{exc}",
+                "backlink_candidates": len(actionable)}
+
+    out = workspace / "research" / f"backlink-suggestions-{slug}-{today}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        f"# 回溯链接清单 — {article_title}\n"
+        f"> 新文章: {new_url} | 生成于 {today}\n"
+        f"> 由人工审批后手动执行，系统不会自动修改旧文章。\n\n"
+        f"{checklist.strip()}\n",
+        encoding="utf-8")
+
+    return {
+        "backlink_file": str(out),
+        "backlink_checklist": checklist.strip(),
+        "backlink_candidates": len(actionable),
+    }
 
 
 # ── Display helpers ────────────────────────────────────────────────────
 
-def get_legacy_display_data(topic: str, workspace: Path) -> dict[str, Any]:
+def get_legacy_display_data(topic: str, workspace: Path,
+                            db_stage: str | None = None) -> dict[str, Any]:
     """Collect all display data for the Legacy workflow UI."""
-    stage, files = detect_stage(topic, workspace)
+    stage, files = detect_stage(topic, workspace, db_stage)
+    slug = files["slug"]
 
     data: dict[str, Any] = {
         "stage": stage, "stage_name": stage_label(stage),
         "stage_step": stage_step(stage), "files": files,
     }
 
-    # Load prompt content
-    sp = files.get("search_prompt")
-    if sp and Path(sp).exists():
-        try:
-            text = Path(sp).read_text(encoding="utf-8")
-            data["prompt_content"] = text
-            data["prompt_preview"] = text[:500]
-        except Exception:
-            pass
+    prompt = _read_text(files.get("search_prompt"))
+    if prompt:
+        data["prompt_content"] = prompt
+        data["prompt_preview"] = prompt[:500]
 
-    # Load draft preview
-    draft = files.get("draft")
-    if draft and Path(draft).exists():
-        try:
-            dc = Path(draft).read_text(encoding="utf-8")
-            data["draft_preview"] = dc[:2000]
-        except Exception:
-            pass
+    draft_text = _read_text(files.get("draft"))
+    if draft_text:
+        data["draft_preview"] = draft_text[:2000]
 
-    # Load research score
-    rs = files.get("research_score")
-    if rs and Path(rs).exists():
-        try:
-            data["score_preview"] = Path(rs).read_text(encoding="utf-8")[:800]
-        except Exception:
-            pass
+    score = _read_text(files.get("research_score"))
+    if score:
+        data["score_preview"] = score[:800]
 
-    # Load brief preview
-    br = files.get("brief")
-    if br and Path(br).exists():
-        try:
-            data["brief_preview"] = Path(br).read_text(encoding="utf-8")[:500]
-        except Exception:
-            pass
+    brief = _read_text(files.get("brief"))
+    if brief:
+        data["brief_preview"] = brief[:500]
+
+    validate_report = load_report(workspace, "validate", slug)
+    if validate_report:
+        data["validate_report"] = validate_report
+
+    pre_check = load_report(workspace, "pre-check", slug)
+    if pre_check:
+        data["pre_check_report"] = pre_check
+        data["fail_count"] = pre_check.count("❌")
+
+    post_process = load_report(workspace, "post-process", slug)
+    if post_process:
+        data["post_process_report"] = post_process
+        metrics = _parse_post_process(post_process)
+        state = load_w2_state(workspace, slug)
+        rounds_used = int(state.get("rounds", 0))
+        data["w2"] = {
+            **metrics,
+            "gate_passed": bool(state.get("gate_passed")),
+            "applied": bool(state.get("applied")),
+            "rounds_used": rounds_used,
+            "rounds_left": max(0, MAX_REVISION_ROUNDS - rounds_used),
+        }
+
+    register_report = load_report(workspace, "register", slug)
+    if register_report:
+        data["register_report"] = register_report
+
+    backlinks = _read_text(files.get("backlinks"))
+    if backlinks:
+        data["backlink_checklist"] = backlinks
 
     return data

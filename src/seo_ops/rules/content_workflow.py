@@ -2,13 +2,13 @@ from __future__ import annotations
 
 OLD_ARTICLE_CONTENT_QUALITY_RULE = {
     "rule_key": "old_article_content_quality",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "rule_type": "governance",
     "evidence_level": "A+C+operator_policy",
     "rationale": (
         "GSC 页面异常只决定是否值得诊断，真实 query + page 行才决定读者任务。"
-        "旧文章必须保持原主题、URL 和 slug，先起草再独立审校，并通过英语、篇幅、"
-        "来源、链接与虚构声明的确定性检查后才能保存。"
+        "旧文章必须保持原主题、URL 和 slug，并同时具备确认素材与 query + page 证据；"
+        "先起草再独立审校，通过英语、范围、来源、链接与虚构声明的确定性检查后才能保存。"
     ),
     "config": {
         "reader_language": "en",
@@ -19,6 +19,9 @@ OLD_ARTICLE_CONTENT_QUALITY_RULE = {
         ],
         "preserve_slug": True,
         "require_query_page_evidence": True,
+        "require_confirmed_materials": True,
+        "required_material_categories": ["A", "E", "G"],
+        "minimum_traceable_sources": 2,
         "require_draft_then_editor_review": True,
         "partial_update_min_words": 40,
         "same_topic_rewrite_min_words": 700,
@@ -30,6 +33,7 @@ OLD_ARTICLE_CONTENT_QUALITY_RULE = {
         "ai_call_limit": [3, 10],
         "approved_urls_only": True,
         "block_unverified_first_person_experience": True,
+        "block_market_and_price_filler": True,
     },
     "sources": [
         "https://developers.google.com/search/docs/fundamentals/creating-helpful-content",

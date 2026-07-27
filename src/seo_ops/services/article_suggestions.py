@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -7,14 +8,15 @@ from typing import Any
 from seo_ops.config import Settings, get_settings
 from seo_ops.db import connection
 from seo_ops.repositories import get_opportunity, latest_analysis_run
-from seo_ops.rules.research_workflow import current_topic_policy_block
 from seo_ops.services.action_workflow import (
     ActionWorkflowError,
     record_opportunity_decision,
 )
 from seo_ops.services.research_workflow import (
     ResearchDecisionError,
+    record_human_review,
     record_research_candidate_decision,
+    requalify_site_candidates,
 )
 from seo_ops.utils import json_loads, utc_now
 
@@ -52,18 +54,127 @@ def _old_reason(rule_key: str) -> tuple[str, str]:
 def _split(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "featured": items[:2],
-        "more": items[2:7],
+        "more": items[2:],
         "total": len(items),
-        "hidden_count": max(0, len(items) - 7),
     }
 
 
-def list_article_suggestions(
-    site_id: int, settings: Settings | None = None
-) -> dict[str, dict[str, Any]]:
-    """Read and rank the two suggestion lanes without making external calls."""
+_RAW_RESEARCH_LEAD_PREFIXES = (
+    "The current SERP exposed",
+    "Tavily source discovery was completed",
+    "Raw source lead:",
+)
+_SEMANTIC_CLUSTER_RE = re.compile(r"^Semantic cluster:\s*([a-z][a-z0-9_]{1,48})\.", re.I)
+
+_FEEDBACK_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "best",
+    "for",
+    "guide",
+    "how",
+    "laser",
+    "pointer",
+    "pointers",
+    "the",
+    "to",
+    "use",
+    "using",
+    "versus",
+    "vs",
+    "what",
+    "why",
+    "with",
+}
+
+
+def _feedback_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", value.casefold())
+        if len(token) > 2 and token not in _FEEDBACK_STOPWORDS
+    }
+
+
+def _feedback_priority_adjustment(topic: str, decision_rows: list[Any]) -> float:
+    """Apply old Plan-style preference memory as a soft rank signal only."""
+
+    candidate_tokens = _feedback_tokens(topic)
+    if not candidate_tokens:
+        return 0.0
+    preferred = 0.0
+    rejected = 0.0
+    for row in decision_rows:
+        remembered = str(row["normalized_topic"] or "")
+        if remembered.startswith("old::"):
+            continue
+        remembered_tokens = _feedback_tokens(remembered)
+        shared = candidate_tokens & remembered_tokens
+        if len(shared) < 2 or not remembered_tokens:
+            continue
+        similarity = len(shared) / min(len(candidate_tokens), len(remembered_tokens))
+        if similarity < 0.5:
+            continue
+        if row["decision"] == "do":
+            preferred = max(preferred, 8.0 * similarity)
+        elif row["decision"] == "dont_recommend":
+            rejected = max(rejected, 18.0 * similarity)
+    return round(preferred - rejected, 1)
+
+
+def _candidate_discovery_stage(item: dict[str, Any]) -> str:
+    rationale = str(item.get("rationale") or "")
+    if rationale.startswith(_RAW_RESEARCH_LEAD_PREFIXES):
+        return "raw_lead"
+    return "synthesized_angle"
+
+
+def _candidate_semantic_cluster(item: dict[str, Any]) -> str:
+    for value in item.get("inference") or []:
+        match = _SEMANTIC_CLUSTER_RE.match(str(value).strip())
+        if match:
+            return match.group(1)
+    return "emerging"
+
+
+def _candidate_priority(item: dict[str, Any]) -> float:
+    """Rank retained ideas by usefulness without turning readiness into a gate."""
+
+    overlap = float((item.get("overlap") or {}).get("max_score") or 0)
+    relationship = str((item.get("closest_existing") or {}).get("relationship") or "")
+    demand_ready = bool((item.get("evidence_demand") or {}).get("ok"))
+    material_ready = bool((item.get("evidence_material") or {}).get("ok"))
+    synthesized = _candidate_discovery_stage(item) == "synthesized_angle"
+    limitations_text = " ".join(str(value) for value in item.get("limitations") or [])
+    if "偏离本轮核心对象" in limitations_text or "明确换成了相邻激光产品" in limitations_text:
+        anchor_penalty = 20
+    else:
+        anchor_penalty = 0
+    return round(
+        35
+        + min(len(item.get("evidence_refs") or []), 6) * 7
+        + min(len(item.get("facts") or []), 5) * 3
+        + min(len(item.get("source_urls") or []), 5) * 2
+        - overlap * 20
+        + (20 if demand_ready else 0)
+        + (10 if material_ready else 0)
+        + (10 if synthesized else 0)
+        - (8 if relationship == "uncertain" else 0)
+        - anchor_penalty,
+        1,
+    )
+
+
+def list_article_suggestions(site_id: int, settings: Settings | None = None) -> dict[str, Any]:
+    """Refresh deterministic qualification and rank suggestions without external calls."""
 
     active = settings or get_settings()
+    # Legacy evidence/review states are re-run through the current
+    # duplicate-only rule here.  They must resolve into a final destination
+    # (new article, existing article, or confirmed duplicate), rather than
+    # becoming a hidden manual-review queue.
+    requalify_site_candidates(site_id, active)
     skip_cutoff = (datetime.now(UTC) - timedelta(days=30)).isoformat()
     with connection(active) as conn:
         run = latest_analysis_run(conn, site_id)
@@ -124,12 +235,37 @@ def list_article_suggestions(
             FROM research_candidates c
             JOIN research_runs r ON r.id = c.research_run_id
             WHERE c.site_id = ? AND c.decision = 'pending'
-              AND c.gate_status != 'blocked'
+              AND c.qualification_status = 'qualified'
               AND r.status IN ('success','partial')
             ORDER BY c.id DESC
             """,
             (site_id,),
         ).fetchall()
+        latest_research_row = conn.execute(
+            """
+            SELECT id FROM research_runs
+            WHERE site_id = ? AND status IN ('success','partial')
+            ORDER BY completed_at DESC, id DESC LIMIT 1
+            """,
+            (site_id,),
+        ).fetchone()
+        current_run_count = 0
+        if latest_research_row:
+            current_run_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT normalized_topic)
+                    FROM research_candidates
+                    WHERE site_id = ? AND research_run_id = ?
+                      AND qualification_status = 'qualified'
+                      AND recommended_disposition = 'new_article'
+                      AND rationale NOT LIKE 'Raw source lead:%'
+                      AND rationale NOT LIKE 'The current SERP exposed%'
+                      AND rationale NOT LIKE 'Tavily source discovery was completed%'
+                    """,
+                    (site_id, int(latest_research_row["id"])),
+                ).fetchone()[0]
+            )
 
     old_items: list[dict[str, Any]] = []
     seen_targets: set[str] = set()
@@ -162,7 +298,7 @@ def list_article_suggestions(
     for row in new_rows:
         item = dict(row)
         normalized = str(item["normalized_topic"])
-        if normalized in seen_topics or current_topic_policy_block(str(item["topic"])):
+        if normalized in seen_topics:
             continue
         if _memory_hides(decisions.get(normalized), skip_cutoff):
             continue
@@ -171,20 +307,33 @@ def list_article_suggestions(
         item["facts"] = json_loads(item.pop("facts_json"), [])
         item["inference"] = json_loads(item.pop("inference_json"), [])
         item["overlap"] = json_loads(item.pop("overlap_json"), {})
+        item["closest_existing"] = json_loads(item.pop("closest_existing_json"), {})
+        item["evidence_demand"] = json_loads(item.pop("evidence_demand_json"), {})
+        item["evidence_gap"] = json_loads(item.pop("evidence_gap_json"), {})
+        item["evidence_material"] = json_loads(item.pop("evidence_material_json"), {})
         item["limitations"] = json_loads(item.pop("limitations_json"), [])
-        overlap = float(item["overlap"].get("max_score") or 0)
+        item["discovery_stage"] = _candidate_discovery_stage(item)
+        item["semantic_cluster"] = _candidate_semantic_cluster(item)
         item["priority"] = round(
-            35
-            + min(len(item["evidence_refs"]), 6) * 7
-            + min(len(item["facts"]), 5) * 3
-            + min(len(item["source_urls"]), 5) * 2
-            - overlap * 20,
+            _candidate_priority(item)
+            + _feedback_priority_adjustment(str(item["topic"]), decision_rows),
             1,
         )
-        new_items.append(item)
+        # A raw lead is source material, not an article option.  Its URL,
+        # quote and follow-up query were already saved as a source observation
+        # by the research workflow, where a later run can consume it as a new
+        # seed.  Keeping it out of this page does not discard it or require an
+        # operator to make a faux article decision.
+        if item["discovery_stage"] != "raw_lead":
+            new_items.append(item)
         seen_topics.add(normalized)
     new_items.sort(key=lambda item: (float(item["priority"]), int(item["id"])), reverse=True)
-    return {"old": _split(old_items), "new": _split(new_items)}
+    new_summary = _split(new_items)
+    new_summary["current_run_count"] = current_run_count
+    return {
+        "old": _split(old_items),
+        "new": new_summary,
+    }
 
 
 def decide_old_article_suggestion(
@@ -274,3 +423,22 @@ def decide_new_article_suggestion(
     except ActionWorkflowError as exc:
         raise ArticleSuggestionError(str(exc)) from exc
     return SuggestionDecisionOutcome("已移到第 4 步“文章制作”", action_id=outcome.action_id)
+
+
+def review_new_article_candidate(
+    candidate_id: int,
+    review_decision: str,
+    reason: str,
+    settings: Settings | None = None,
+) -> SuggestionDecisionOutcome:
+    active = settings or get_settings()
+    try:
+        message = record_human_review(
+            candidate_id,
+            review_decision,
+            reason,
+            active,
+        )
+    except ResearchDecisionError as exc:
+        raise ArticleSuggestionError(str(exc)) from exc
+    return SuggestionDecisionOutcome(message)

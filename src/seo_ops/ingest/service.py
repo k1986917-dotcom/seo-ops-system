@@ -668,13 +668,22 @@ def import_cms_bytes(
             row_count=len(parsed.items),
             metadata=metadata,
         )
+        qualification_note = ""
+        try:
+            from seo_ops.services.research_workflow import requalify_site_candidates
+
+            counts = requalify_site_candidates(site_id, active_settings)
+            if counts:
+                qualification_note = "；旧调研候选已按新 CMS 内容重新判定"
+        except Exception:
+            qualification_note = "；CMS 已保存，旧调研候选需在下次调研前重新判定"
         return ImportOutcome(
             import_id,
             source_type,
             "success",
             len(parsed.items),
             False,
-            f"已导入 {len(parsed.items)} 条 {parsed.kind} 内容",
+            f"已导入 {len(parsed.items)} 条 {parsed.kind} 内容{qualification_note}",
             str(snapshot.path),
         )
     except Exception as exc:

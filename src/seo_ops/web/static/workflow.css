@@ -123,6 +123,38 @@
   align-items: start;
 }
 
+.workflow-section {
+  margin-top: 24px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.section-head p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.review-form textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  resize: vertical;
+}
+
 .workflow-lane {
   min-width: 0;
 }
@@ -224,6 +256,23 @@
   font-size: 10px;
 }
 
+.topic-card-detail > summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.45;
+}
+
+.topic-card-title {
+  margin-left: 7px;
+  overflow-wrap: anywhere;
+}
+
+.topic-card-body {
+  padding-top: 13px;
+}
+
 .suggestion-facts {
   display: grid;
   gap: 7px;
@@ -273,6 +322,18 @@
 
 .more-suggestions .suggestion-stack {
   padding: 0 10px 10px;
+}
+
+.candidate-subsection {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.candidate-subsection > h3 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .lane-empty {
@@ -346,6 +407,164 @@
 .run-outcome strong,
 .run-outcome small {
   display: block;
+}
+
+.run-outcome > div {
+  min-width: 0;
+}
+
+.research-execution-report {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.research-execution-report .report-good {
+  color: var(--green);
+  font-weight: 750;
+}
+
+.research-execution-report .report-warning {
+  color: #76521b;
+  font-weight: 750;
+}
+
+.research-process-audit {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .55);
+}
+
+.research-process-audit > summary,
+.audit-section > summary,
+.audit-observation > summary {
+  cursor: pointer;
+}
+
+.research-process-audit > summary {
+  padding: 12px 14px;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.audit-intro,
+.audit-warning {
+  margin: 0;
+  padding: 0 14px 12px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.audit-warning {
+  color: #76521b;
+}
+
+.audit-section {
+  border-top: 1px solid var(--line);
+}
+
+.audit-section > summary {
+  padding: 11px 14px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 780;
+}
+
+.audit-body {
+  padding: 0 14px 13px;
+}
+
+.audit-body > p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.audit-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 19px;
+  font-size: 10px;
+}
+
+.audit-list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.audit-list li > span,
+.audit-match {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.audit-match {
+  padding-left: 2px;
+  font-size: 9px;
+}
+
+.audit-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--green);
+  background: #e5f3eb;
+  font-size: 8px;
+  font-weight: 800;
+  vertical-align: 1px;
+}
+
+.audit-observation-list {
+  display: grid;
+  gap: 7px;
+}
+
+.audit-observation {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.audit-observation > summary {
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.audit-observation > div {
+  padding: 0 10px 10px;
+}
+
+.audit-observation p {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+  font-size: 9px;
+}
+
+.audit-observation blockquote {
+  margin: 8px 0;
+  padding: 7px 9px;
+  border-left: 3px solid #c6dfcf;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.audit-observation small {
+  color: var(--muted);
+  font-size: 8px;
 }
 
 .partial-explanation {
@@ -525,6 +744,10 @@
 
   .card-decisions {
     grid-template-columns: 1fr;
+  }
+
+  .section-head {
+    display: grid;
   }
 
   .research-budget-form {

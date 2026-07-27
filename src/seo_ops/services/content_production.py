@@ -17,7 +17,7 @@ from seo_ops.services.material_workflow import (
     build_material_preview,
 )
 from seo_ops.services.material_workflow import (
-    confirm_materials as confirm_new_article_materials,
+    confirm_materials as confirm_content_materials,
 )
 from seo_ops.utils import json_dumps, json_loads, utc_now
 
@@ -26,7 +26,7 @@ class ContentProductionError(RuntimeError):
     pass
 
 
-CONTENT_WORKFLOW_VERSION = "legacy-write-adapter-0.8.0"
+CONTENT_WORKFLOW_VERSION = "evidence-bound-content-production-0.9.0"
 MAX_INTERNAL_CANDIDATES = 12
 MAX_FINAL_INTERNAL_LINKS = 10
 MAX_FINAL_EXTERNAL_LINKS = 12
@@ -56,26 +56,30 @@ PUBLIC_URL_RE = re.compile(r"https?://[^\s)\]>]+")
 CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
-SYSTEM_PROMPT = """You are the senior editor for LaserPointerHub. Produce a practical,
-original English article deliverable from the supplied evidence and current site content.
+SYSTEM_PROMPT = """You are the senior editor for an existing LaserPointerHub page. Produce a
+practical English CMS update from the supplied query-page evidence, confirmed material pack and
+current page.
 Every reader-facing CMS field and every passage of article copy must be English. Never translate
 an English site topic into Chinese or mix languages.
 Never invent tests, ownership, authors, quotes, laws, measurements, or product facts.
-For an existing article, keep its original topic, intent, URL and slug. Choose the smallest
+Keep the original topic, intent, URL and slug. Choose the smallest
 change that solves the diagnosed problem: metadata_only, partial_update, or same_topic_rewrite.
-For a new article, differentiate its primary user task from every existing article.
-Use natural prose, varied sentence structure, specific headings, useful internal links, and
-only source URLs present in the input. Avoid filler, generic AI phrasing and repeated safety
-boilerplate unless safety is necessary to the user task.
+Open with a direct answer or the evidenced reader problem. Preserve useful current sections
+outside the diagnosed gap. Use natural prose, specific headings, useful contextual internal links,
+and only source URLs present in the input. Do not introduce market sizing, prices, retailer
+comparisons, discounts, product rankings or promotional calls to action. Avoid filler, generic
+AI phrasing and repeated safety boilerplate unless safety is necessary to the user task.
 Treat the title/H1 and the page's main user task as its primary-topic identity.
 Safety, power and wavelength may recur as supporting knowledge; treat them as duplicates only
 when they are themselves the page's main task. Communities and forums are question or
 experience signals, not authority for laws, safety or specifications. Prefer official,
-regulatory, standards, research and named industry primary sources. If evidence is insufficient,
-choose the smallest safe change and state the limitation instead of inventing a factual rewrite.
+regulatory, standards, research and named industry primary sources. Treat the confirmed material
+pack as a claim boundary: every changed factual statement must be traceable to it or to the
+supplied query-page evidence. If evidence is insufficient, choose the smallest safe change and
+state the limitation instead of inventing a factual rewrite.
 Return strict JSON:
 {
- "change_type":"metadata_only|partial_update|same_topic_rewrite|new_article",
+"change_type":"metadata_only|partial_update|same_topic_rewrite",
  "reason":"plain explanation",
  "title":"CMS Title",
  "slug":"slug",
@@ -94,7 +98,8 @@ Return strict JSON:
 
 EXISTING_REVIEW_PROMPT = """You are the final editor for an existing LaserPointerHub page update.
 Audit the proposed change against the current page, the page's actual GSC query-page evidence,
-and the supplied URL whitelist. Return a complete corrected CMS deliverable, not comments.
+the confirmed material pack, and the supplied URL whitelist. Return a complete corrected CMS
+deliverable, not comments.
 
 Keep the original topic, intent, URL and slug. Use the smallest justified change:
 metadata_only, partial_update, or same_topic_rewrite. A page-level metric alone is not a reason
@@ -104,6 +109,8 @@ boilerplate, unsupported claims, fabricated experience and unapproved URLs. Pres
 existing material when the evidence does not justify replacing it. For partial_update, provide
 unambiguous replacement sections and exact operator instructions. For same_topic_rewrite,
 provide a complete, substantial Markdown article that does not become a different topic.
+Do not add market or price content, retailer comparisons, rankings, discounts, promotional CTAs,
+or a claim that an author tested or used a product.
 
 Return the same strict JSON schema requested in the draft prompt. Do not add sources or facts."""
 
@@ -144,7 +151,7 @@ Return strict JSON:
 
 OUTLINE_PROMPT = """You are the planning editor for LaserPointerHub. Turn the approved material pack
 into an article-specific outline. Preserve one primary user task. Always plan 4-5 genuine FAQ
-questions from the evidence or search intent. Do not force JSON-LD or a product CTA. Plan 4-8
+questions from the evidence or search intent. Do not force JSON-LD or a product link. Plan 4-8
 useful H2 sections and
 H3 only when needed. Put factual claims beside their allowed sources. Choose contextual links
 while planning, not after drafting: normally 2-3 internal links and 2-6 external citations when
@@ -237,8 +244,8 @@ and allowed URLs. Do not evade a check by deleting useful evidence or inventing 
 Return the same strict JSON schema as the final review, with the full corrected article."""
 
 
-SKILL_WRITE_PROMPT = """You are the senior editor and writer for LaserPointerHub. Reuse the
-operator-approved legacy write workflow, but use only the supplied confirmed A-H material pack,
+SKILL_WRITE_PROMPT = """You are the senior editor and writer for LaserPointerHub. Use only the
+supplied confirmed writing material pack,
 current CMS pages and allowed URLs. Produce one complete English article in one pass.
 
 Non-negotiable boundaries:
@@ -250,15 +257,16 @@ Non-negotiable boundaries:
 - Use exactly one H1, a direct 150-250 word introduction, 3-5 Key Takeaways, 4-7 useful main H2
   sections, a 150-200 word conclusion, and 3-4 visible FAQ questions followed by matching
   FAQPage JSON-LD. Use the supplied article tier and word range.
-- Include Quick Specs only for Product Roundup/commercial content and only with sourced facts.
 - Choose links while structuring the article. Use only allowed URLs, descriptive natural anchors,
   no repeated URL, no link in the introduction or conclusion, and distribute links across the
   body. Approximate density: one related blog per 1000 words, one product per 1300 words only
   when commercially relevant, and one factual external citation per 800 words. Never force an
   unrelated link merely to meet a count. Product promotion must not appear in the first 40%.
-- Use 2-3 contextual CTAs only when relevant products or next-step pages are available.
-- Avoid generic AI filler, repetitive safety boilerplate and paragraphs longer than four
-  sentences. Do not jump from H2 to H4.
+- Do not introduce market size, price ranges, retailer comparisons, discounts or product ranking
+  tables. Link a product only where it helps the reader complete the stated task.
+- Open with the reader's concrete situation or a direct answer, not a stock challenge, a seller
+  comparison, or a claim that the author tested something. Avoid generic AI filler, repetitive
+  safety boilerplate and paragraphs longer than four sentences. Do not jump from H2 to H4.
 - SEO title must be 50-60 characters and SEO description 150-160 characters.
 
 Return strict JSON:
@@ -284,13 +292,13 @@ Return strict JSON:
 
 
 SKILL_REVISION_PROMPT = """Revise the complete LaserPointerHub CMS deliverable once. Fix every
-deterministic blocking issue supplied by the system while preserving the confirmed A-H material,
+deterministic blocking issue supplied by the system while preserving the confirmed material pack,
 article tier, primary user task and URL whitelist. Do not invent or add evidence. Return the same
 strict JSON schema with the full corrected article. This is the only permitted AI revision."""
 
 
 SKILL_PLAN_PROMPT = """You are the planning editor for LaserPointerHub. The operator has already
-confirmed the deterministic A-H material inventory. Build an article-specific plan before writing.
+confirmed the deterministic writing-material inventory. Build an article-specific plan before writing.
 Use only supplied facts and allowed URLs. Keep one primary user task, state the information gain,
 plan 4-7 main H2 sections, 3-4 genuine FAQ questions, the primary keyword, source-bound claims,
 and contextual internal/external links. Use the supplied article tier and word range. Never invent
@@ -318,7 +326,7 @@ experience, sources, specifications or safety thresholds. Return strict JSON:
 
 
 SKILL_EDIT_PROMPT = """You are the final editor for LaserPointerHub. Review the complete draft
-against the confirmed A-H material, approved plan, article tier, allowed URLs and CMS fields.
+against the confirmed material pack, approved plan, article tier, allowed URLs and CMS fields.
 Return a complete corrected CMS deliverable, not a list of suggestions. Enforce the approved
 word range, 150-250 word introduction, 3-5 Key Takeaways, 4-7 main H2 sections, 150-200 word
 conclusion, 3-4 visible FAQ questions with matching FAQPage JSON-LD, natural link distribution,
@@ -443,7 +451,7 @@ def _select_internal_candidates(
     target_url: str | None = None,
 ) -> list[dict[str, Any]]:
     topic_tokens = _tokens(topic)
-    commercial = bool(topic_tokens & {"buy", "choice", "choose", "compare", "price", "product"})
+    commercial = bool(topic_tokens & {"buy", "choice", "choose", "compare", "product"})
     scored: list[tuple[int, str, dict[str, Any]]] = []
     for raw in links:
         item = dict(raw)
@@ -1080,15 +1088,6 @@ def _normalize_new_deliverable(
     else:
         issues.append("正文缺少 Conclusion 章节")
 
-    if result["article_tier"] == "Product Roundup" and not re.search(
-        r"^##\s+Quick Specs\s*$", prose_body, flags=re.IGNORECASE | re.MULTILINE
-    ):
-        issues.append("商业文章缺少有来源支撑的 Quick Specs")
-    if result["article_tier"] != "Product Roundup" and re.search(
-        r"^##\s+Quick Specs\s*$", prose_body, flags=re.IGNORECASE | re.MULTILINE
-    ):
-        issues.append("非商业文章不应套用 Quick Specs")
-
     primary_keyword = str(result.get("primary_keyword") or "").strip()
     result["primary_keyword"] = primary_keyword
     if not primary_keyword:
@@ -1121,6 +1120,12 @@ def _normalize_new_deliverable(
 
     if CHINESE_RE.search(prose_body):
         issues.append("英文正文夹杂中文")
+    if re.search(
+        r"\b(?:market size|price range|discount|retailer|cheapest|best price)\b",
+        prose_body,
+        flags=re.IGNORECASE,
+    ):
+        issues.append("正文不应加入市场或价格内容")
     banned = (
         "it is important to note that",
         "in conclusion, it can be said that",
@@ -1210,17 +1215,6 @@ def _normalize_new_deliverable(
         issues.append("安全、法规或技术主题没有在正文中引用官方/研究来源")
     if any(body.find(f"]({url})") < len(body) * 0.4 for url in used_product_urls):
         issues.append("产品推广出现得过早，应放在正文后 60%")
-    if result["article_tier"] == "Product Roundup" and available_product_urls:
-        cta_count = len(
-            re.findall(
-                r"\b(?:check|compare|choose|see|view|explore)\b.{0,50}\b(?:product|option|model|price|specs)\b",
-                prose_body,
-                flags=re.IGNORECASE,
-            )
-        )
-        if not 2 <= cta_count <= 3:
-            issues.append("商业文章需要 2–3 个自然、与上下文相关的 CTA")
-
     link_positions = [body.find(f"]({url})") for url in dict.fromkeys(used_urls)]
     if len(link_positions) >= 3 and body:
         buckets = Counter(
@@ -1334,7 +1328,7 @@ def _normalize_existing_deliverable(
     old_title_tokens = _tokens(existing.get("title"))
     new_title_tokens = _tokens(result.get("title"))
     if old_title_tokens and (
-        len(old_title_tokens & new_title_tokens) / len(old_title_tokens) < 0.25
+        len(old_title_tokens & new_title_tokens) / len(old_title_tokens) < 0.5
     ):
         issues.append("新标题偏离了原文章主题")
 
@@ -1364,6 +1358,19 @@ def _normalize_existing_deliverable(
         markdown_urls = [url.rstrip(".,;") for _, url in MARKDOWN_LINK_RE.findall(body)]
         if any(count > 1 for count in Counter(markdown_urls).values()):
             issues.append("旧文章正文重复使用了同一个链接")
+        if any(
+            " ".join(anchor.casefold().split()) in GENERIC_LINK_ANCHORS
+            for anchor, _ in MARKDOWN_LINK_RE.findall(body)
+        ):
+            issues.append("旧文章正文仍有泛化链接锚文本")
+        if re.search(r"^#{1,2}\s+[^\n]+\n+####\s+", body, flags=re.MULTILINE):
+            issues.append("旧文章正文标题层级跳级")
+        for paragraph in re.split(r"\n\s*\n", body):
+            compact = paragraph.strip()
+            if compact and not compact.startswith(("#", "-", "*", "|", ">")):
+                if len(re.findall(r"[.!?](?:[\"')\]]?)(?:\s|$)", compact)) > 4:
+                    issues.append("旧文章正文存在超过 4 句的长段落")
+                    break
 
     banned = (
         "it is important to note that",
@@ -1381,6 +1388,12 @@ def _normalize_existing_deliverable(
         flags=re.IGNORECASE,
     ):
         issues.append("旧文章正文声称了未核实的第一手经验")
+    if change_type != "metadata_only" and re.search(
+        r"\b(?:market size|price range|discount|retailer|cheapest|best price)\b",
+        body,
+        flags=re.IGNORECASE,
+    ):
+        issues.append("旧文章修改稿不应加入市场或价格内容")
     if not str(result.get("seo_title") or "").strip():
         issues.append("SEO Title 不能为空")
     if not str(result.get("seo_description") or "").strip():
@@ -1426,6 +1439,7 @@ async def _generate_legacy_content_deliverable(
     settings: Settings | None = None,
     *,
     provider: AIProvider | None = None,
+    material_preview: dict[str, Any],
 ) -> dict[str, Any]:
     active = settings or get_settings()
     with connection(active) as conn:
@@ -1467,7 +1481,7 @@ async def _generate_legacy_content_deliverable(
             (row["site_id"],),
         ).fetchall()
         evidence = json_loads(row["evidence_json"], {})
-        evidence_refs = [str(value) for value in evidence.get("evidence_ids", []) if value]
+        evidence_refs = list(material_preview["evidence_ids"])
         external_material: list[dict[str, Any]] = []
         if evidence_refs:
             placeholders = ",".join("?" for _ in evidence_refs)
@@ -1519,6 +1533,12 @@ async def _generate_legacy_content_deliverable(
         },
         "existing_page": existing,
         "evidence": evidence,
+        "confirmed_materials": {
+            "categories": material_preview["categories"],
+            "category_values": material_preview["category_values"],
+            "source_inventory": material_preview["sources"],
+            "limitations": [item.get("limitations", []) for item in material_preview["materials"]],
+        },
         "gate_reasons": json_loads(row["gate_reasons_json"], []),
         "available_internal_links": relevant_links,
         "external_material": external_material,
@@ -1756,10 +1776,14 @@ async def _generate_staged_content_deliverable(
             (task_row["site_id"], task_row["target_ref"]),
         ).fetchone()
     if existing_page:
+        preview = build_material_preview(action_id, active)
+        if not preview["ready"] or not preview["confirmed"]:
+            raise ContentProductionError("旧文章也必须先确认可追溯写作素材")
         return await _generate_legacy_content_deliverable(
             action_id,
             active,
             provider=provider,
+            material_preview=preview,
         )
 
     row = dict(task_row)
@@ -2341,7 +2365,7 @@ async def _generate_skill_new_content_deliverable(
 
     result["workflow_version"] = CONTENT_WORKFLOW_VERSION
     result["production_stages"] = [
-        "系统整理已存 A–H 素材（0 次 API、0 次 AI）",
+        "系统整理已存写作素材（0 次 API、0 次 AI）",
         "运营者确认是否补充手工搜索素材",
         "AI 形成文章专属大纲、事实与内外链计划",
         "AI 按批准计划写完整初稿",
@@ -2403,16 +2427,9 @@ async def generate_content_deliverable(
         ).fetchone()
     if row["workflow_status"] == "cancelled":
         raise ContentProductionError("文章任务已取消；请先恢复任务")
-    if existing_page:
-        return await _generate_legacy_content_deliverable(
-            action_id,
-            active,
-            provider=provider,
-        )
-
     try:
         preview = (
-            confirm_new_article_materials(action_id, active)
+            confirm_content_materials(action_id, active)
             if confirm_materials
             else build_material_preview(action_id, active)
         )
@@ -2424,6 +2441,13 @@ async def generate_content_deliverable(
         )
     if not preview["confirmed"]:
         raise ContentProductionError("请先在任务卡确认是否需要补充手工素材，再开始写作")
+    if existing_page:
+        return await _generate_legacy_content_deliverable(
+            action_id,
+            active,
+            provider=provider,
+            material_preview=preview,
+        )
     return await _generate_skill_new_content_deliverable(
         action_id,
         active,

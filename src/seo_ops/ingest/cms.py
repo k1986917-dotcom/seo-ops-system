@@ -41,8 +41,19 @@ def _base_url(domain: str) -> str:
     return f"{domain}/"
 
 
-def _canonical(base: str, template: str, slug: str) -> str:
-    path = template.format(slug=slug).lstrip("/")
+def _canonical(
+    base: str,
+    template: str,
+    slug: str,
+    *,
+    sku: str | None = None,
+    external_id: str | None = None,
+) -> str:
+    path = template.format(
+        slug=slug,
+        sku=sku or slug,
+        external_id=external_id or slug,
+    ).lstrip("/")
     return urljoin(base, path)
 
 
@@ -66,7 +77,7 @@ def parse_cms_export(
     *,
     domain: str,
     blog_path_template: str = "/blog/{slug}",
-    product_path_template: str = "/products/{slug}",
+    product_path_template: str = "/p-{sku}.html",
 ) -> CMSParseResult:
     payload = json.loads(content.decode("utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
@@ -111,7 +122,14 @@ def parse_cms_export(
             summary = str(item.get("description") or "") or None
             seo_title = str(item.get("metaTitle") or "") or None
             seo_description = str(item.get("metaDescription") or "") or None
-            canonical_url = _canonical(base, product_path_template, slug)
+            sku = str(item.get("sku") or slug).strip()
+            canonical_url = _canonical(
+                base,
+                product_path_template,
+                slug,
+                sku=sku,
+                external_id=external_id,
+            )
             metadata = {
                 "sku": item.get("sku"),
                 "titleEn": item.get("titleEn"),

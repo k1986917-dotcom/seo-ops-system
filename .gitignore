@@ -18,3 +18,15 @@ data/snapshots/*
 data/backups/*
 logs/*
 !logs/.gitkeep
+
+# Legacy workflow runtime artifacts (generated, not tracked)
+data/legacy_workflow/laserpointerhub/research/search-prompt-*.md
+data/legacy_workflow/laserpointerhub/research/search-results-*.md
+data/legacy_workflow/laserpointerhub/research/research-data-*.md
+data/legacy_workflow/laserpointerhub/research/research-data-*.json
+data/legacy_workflow/laserpointerhub/research/research-score-*.md
+data/legacy_workflow/laserpointerhub/research/brief-*.md
+data/legacy_workflow/laserpointerhub/research/backlink-suggestions-*.md
+data/legacy_workflow/laserpointerhub/drafts/*.md
+data/legacy_workflow/laserpointerhub/material-packs/*.md
+data/legacy_workflow/laserpointerhub/reports/

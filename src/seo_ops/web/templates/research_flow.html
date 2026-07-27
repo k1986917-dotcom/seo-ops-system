@@ -29,7 +29,7 @@
     <div class="research-run-head">
       <div>
         <p class="eyebrow">最近一次 · RUN #{{ run.id }}</p>
-        <h2>{{ {'gsc':'GSC 信号','topic_gap':'主题缺口','boundary':'突破瓶颈','manual':'人工方向'}.get(run.seed_type, '主题调研') }}</h2>
+        <h2>{{ {'gsc':'GSC 信号','topic_gap':'突破主题瓶颈','boundary':'补主题缺口','manual':'人工方向'}.get(run.seed_type, '主题调研') }}</h2>
         <p class="muted">
           {{ run.completed_at or run.started_at }}
           {% if run.topic_name %} · 方向：{{ run.topic_name }}{% endif %}
@@ -55,37 +55,206 @@
 
     <div class="run-outcome">
       <div>
-        <strong>保存了 {{ run.candidate_count }} 个主题线索</strong>
-        <small>具体文章主题只在第 3 步“文章建议”出现，不需要在本页逐个处理。</small>
+        {% set pool = run.filters.get('topic_pool', {}) %}
+        <strong>
+          {% if pool %}形成 {{ pool.get('formed_independent_topics', 0) }} 个独立可选主题 · {{ pool.get('raw_leads', 0) }} 个原始线索{% else %}保存了 {{ run.candidate_count }} 个主题线索{% endif %}
+        </strong>
+        <div class="research-execution-report" aria-label="本轮执行汇报">
+          <strong>本轮执行汇报</strong>
+          {% set scheduler = run.filters.get('open_scheduler', {}) %}
+          {% set clustering = scheduler.get('intent_clustering', {}) %}
+          {% set source_observations = run.filters.get('source_observations', {}) %}
+          {% set has_call_audit = run.usage.get('serpapi', {}).get('actual_requests', 0) or run.usage.get('firecrawl', {}).get('actual_requests', 0) or run.usage.get('tavily', {}).get('actual_requests', 0) or run.usage.get('ai', {}).get('actual_requests', 0) %}
+          {% if scheduler.get('active') %}
+            {% if scheduler.get('initial_observation_count') is not none %}
+            <span>开放搜源：{{ scheduler.get('family_count', 0) }} 类来源 → {{ scheduler.get('initial_observation_count', 0) }} 条来源观察 → {{ scheduler.get('seed_proposal_count', 0) }} 个候选种子；当前 CMS 拦截 {{ scheduler.get('cms_duplicate_seed_count', 0) }} 个重复，保留 {{ scheduler.get('visible_distinct_seed_count', 0) }} 个不同种子可见，其中 {{ scheduler.get('selected_seed_count', 0) }} 个继续深挖。</span>
+            {% else %}
+            <span>已启动 {{ scheduler.get('family_count', 0) }} 类开放搜源；本轮没有保存完整的分阶段统计。</span>
+            {% endif %}
+          {% else %}
+          <span>本轮按当前可用种子完成外部调研；该历史运行没有保存完整的分阶段统计。</span>
+          {% endif %}
+          {% if clustering %}
+          <span>末端意图核对：合并本轮同意图换说法 {{ clustering.get('merged_current_variants', 0) }} 个；标记与此前候选同意图 {{ clustering.get('prior_pool_duplicates', 0) }} 个。</span>
+          {% endif %}
+          {% if source_observations %}
+          <span>可续用来源线索：保存 {{ source_observations.get('stored', 0) }} 条{% if source_observations.get('selected_from_prior_runs', 0) %}；本轮续用上一轮 {{ source_observations.get('selected_from_prior_runs', 0) }} 条{% endif %}。</span>
+          {% endif %}
+          {% if run.status == 'success' %}
+            {% if scheduler.get('initial_observation_count') is not none %}
+          <span class="report-good">本轮状态正常：没有记录到调用失败。</span>
+            {% elif has_call_audit %}
+          <span class="report-warning">调用层面没有记录失败；但这是一条旧记录，未保存来源、种子或去重明细，无法据此完整判断本轮流程是否正常。</span>
+            {% else %}
+          <span class="report-warning">这是一条旧记录：只保存了候选数量和完成状态，没有保存来源、种子、去重或调用明细，因此无法判断本轮流程是否正常。</span>
+            {% endif %}
+          {% elif run.status == 'partial' %}
+          <span class="report-warning">本轮问题：{% for key, label in [('serpapi','SerpAPI'),('firecrawl','Firecrawl'),('tavily','Tavily'),('ai','AI 整理')] %}{% if run.usage.get(key, {}).get('failed', 0) %}{{ label }} 失败 {{ run.usage[key].failed }} 次；{% endif %}{% endfor %}{% if run.candidate_count == 0 %}没有形成候选；{% endif %}{% if run.error_message %}系统记录：{{ run.error_message }}。{% endif %}已成功保存的结果仍可用。</span>
+          {% elif run.status == 'failed' %}
+          <span class="report-warning">本轮没有完成：{{ run.error_message or '调研流程中断' }}。没有生成可用文章建议。</span>
+          {% else %}
+          <span>本轮仍在运行，统计会在完成后固定。</span>
+          {% endif %}
+        </div>
       </div>
-      <a class="button button-primary" href="/opportunities">查看文章建议</a>
     </div>
 
-    {% if run.status == 'partial' %}
-    <div class="partial-explanation">
-      <strong>“部分完成”是什么意思？</strong>
-      至少一个数据源没有成功返回、或本轮材料不足以形成完整结果；已经成功保存的数据仍然有效。
-      {% for key, label in [('serpapi','SerpAPI'),('firecrawl','Firecrawl'),('tavily','Tavily'),('ai','AI 整理')] %}
-        {% if run.usage.get(key, {}).get('failed', 0) %}{{ label }} 失败 {{ run.usage[key].failed }} 次；{% endif %}
-      {% endfor %}
-      可以直接查看已有建议，也可以稍后再跑一轮。
-    </div>
-    {% elif run.status == 'failed' %}
-    <div class="partial-explanation"><strong>本轮没有完成。</strong>没有把失败结果当成主题建议；请检查页面提示或连接设置后再试。</div>
-    {% endif %}
+    {% set audit = run.get('audit', {}) %}
+    {% set scheduler = run.filters.get('open_scheduler', {}) %}
+    {% set clustering = scheduler.get('intent_clustering', {}) %}
+    {% set source_observations = audit.get('source_observations', []) %}
+    {% set provider_failures = audit.get('provider_failures', []) %}
+    {% set seed_frontier = run.filters.get('seed_frontier', []) %}
+    {% set cms_duplicates = scheduler.get('cms_duplicate_seed_audit', []) %}
+    {% set current_variant_merges = clustering.get('current_variant_merges', []) %}
+    {% set prior_pool_duplicates = clustering.get('prior_pool_duplicate_audit', []) %}
+    {% set resolution_audit = run.filters.get('candidate_resolution_audit', []) %}
+    {% set source_labels = {
+      'paa_related': 'PAA / 相关搜索',
+      'competitor_or_commercial': '竞品 / 商业页',
+      'forum_community': '论坛 / 社区',
+      'review': '评价语言',
+      'social_or_video': '社媒 / 视频',
+      'official_or_reference': '官方 / 参考资料',
+      'other_public_page': '其他公开页面'
+    } %}
+    {% set family_labels = {
+      'principles': '现象与原理',
+      'audiences': '受众与角色',
+      'tasks': '任务与用途',
+      'contexts': '环境与条件',
+      'lifecycle': '生命周期',
+      'failures': '故障与限制',
+      'decisions': '选择与验证',
+      'ecosystem': '配件与兼容',
+      'safety_rules': '安全与规则',
+      'commerce': '交易与服务',
+      'changes': '变化与新事物',
+      'emerging': '来源出现的新方向'
+    } %}
+    {% set has_process_audit = scheduler.get('active') or scheduler.get('initial_observation_count') is not none or source_observations or seed_frontier or cms_duplicates or current_variant_merges or prior_pool_duplicates or resolution_audit or provider_failures %}
+    <details class="research-process-audit" {% if has_process_audit %}open{% endif %}>
+      <summary>本轮过程账{% if has_process_audit %} · 可核对的运行记录{% else %} · 历史明细缺失{% endif %}</summary>
+      <p class="audit-intro">这里只展示本轮实际保存的来源、种子、去重和路由对象；没有记录的步骤会明确说明缺失，不用固定流程话术代替。具体可写主题仍只在第 3 步出现。</p>
 
-    {% if research_runs|length > 1 %}
-    <details class="previous-runs">
-      <summary>查看以前的调研概况（{{ research_runs|length - 1 }}）</summary>
-      {% for item in research_runs[1:] %}
-      <div class="previous-run-row">
-        <span>RUN #{{ item.id }} · {{ {'gsc':'GSC','topic_gap':'主题缺口','boundary':'突破瓶颈','manual':'人工方向'}.get(item.seed_type, '调研') }}</span>
-        <span>{{ item.candidate_count }} 个线索</span>
-        <span class="pill {{ 'pill-good' if item.status == 'success' else 'pill-warning' if item.status == 'partial' else 'pill-bad' }}">{{ {'success':'完成','partial':'部分完成','failed':'失败','running':'运行中'}[item.status] }}</span>
-      </div>
-      {% endfor %}
+      {% if not has_process_audit %}
+      <p class="audit-warning">这条旧运行只保存了候选数量和 API 汇总，没有保存来源、种子或去重对象，无法事后还原过程。之后新跑的调研会在这里留下完整记录。</p>
+      {% else %}
+      <details class="audit-section" open>
+        <summary>调度起点、冷却与实际深挖种子（{{ seed_frontier|length }}）</summary>
+        <div class="audit-body">
+          <p>入口：{{ {'gsc':'GSC 信号','topic_gap':'突破主题瓶颈','boundary':'补主题缺口','manual':'人工方向'}.get(run.seed_type, '主题调研') }}{% if run.topic_name %} · 方向：{{ run.topic_name }}{% endif %}{% if run.filters.get('dimension_label') %} · 维度：{{ run.filters.dimension_label }}{% endif %}。</p>
+          {% set cooldown = run.filters.get('cooldown', {}) %}
+          {% if cooldown %}
+          <p>排序记录：{% if cooldown.get('clusters') %}上一轮软冷却 {{ cooldown.get('clusters', [])|join('、') }}{% else %}上一轮没有形成需要冷却的主攻簇{% endif %}；本轮主攻 {{ run.filters.get('dominant_semantic_clusters', [])|join('、') or '没有单一主攻簇' }}。冷却只影响排序，不排除方向。</p>
+          {% endif %}
+          {% if seed_frontier %}
+          <ol class="audit-list">
+            {% for seed in seed_frontier %}
+            <li><strong>{{ seed.get('query', '未保存检索词') }}</strong><span>{{ family_labels.get(seed.get('source_family', ''), seed.get('source_family', '旧 Plan / 已有线索')) }} · {{ source_labels.get(seed.get('source_type', ''), seed.get('source_type', '已保存来源')) }} · 语义簇 {{ seed.get('semantic_cluster', 'emerging') }} · {{ '核心对象匹配' if seed.get('anchor_fit') == 'core' else '相邻对象' if seed.get('anchor_fit') == 'adjacent' else '对象偏移' }}</span></li>
+            {% endfor %}
+          </ol>
+          {% else %}
+          <p class="audit-warning">这条运行没有保存实际深挖种子明细。</p>
+          {% endif %}
+        </div>
+      </details>
+
+      <details class="audit-section">
+        <summary>保存的公开来源线索（{{ source_observations|length }}）</summary>
+        <div class="audit-body">
+          {% if source_observations %}
+          <p>每条均是公开第三方语言的市场代理，不是本站第一方用户反馈，也不是文章建议。</p>
+          <div class="audit-observation-list">
+            {% for observation in source_observations %}
+            <details class="audit-observation">
+              <summary><span class="audit-tag">{{ source_labels.get(observation.get('source_kind', ''), observation.get('source_kind', '公开来源')) }}</span><strong>{{ observation.get('follow_up_query', '未保存后续检索词') }}</strong></summary>
+              <div>
+                <p>{% if observation.get('source_url') %}<a href="{{ observation.source_url }}" rel="noreferrer">{{ observation.get('source_title') or observation.source_url }}</a>{% else %}{{ observation.get('source_title') or 'SERP 问题或相关搜索' }}{% endif %}</p>
+                {% if observation.get('provisional_topic') %}<p><strong>从原话抽出的暂定线索：</strong>{{ observation.provisional_topic }}</p>{% endif %}
+                <blockquote>{{ observation.get('source_quote') or observation.get('observed_text') }}</blockquote>
+                <small>语义簇：{{ observation.get('semantic_cluster', 'emerging') }} · 对象匹配：{{ observation.get('anchor_fit', 'unknown') }}{% if observation.get('status') == 'consumed' %} · 已在后续一轮用作种子{% endif %}</small>
+              </div>
+            </details>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="audit-warning">这条运行没有保存可逐条复核的来源线索。</p>
+          {% endif %}
+        </div>
+      </details>
+
+      <details class="audit-section">
+        <summary>CMS 重复预筛（{{ scheduler.get('cms_duplicate_seed_count', 0) }}）</summary>
+        <div class="audit-body">
+          {% if cms_duplicates %}
+          <p>以下是程序推断的强重叠种子，未消耗深挖额度；它们不是被 AI 隐藏。</p>
+          <ul class="audit-list">
+            {% for item in cms_duplicates %}
+            <li><strong>{{ item.get('topic') }}</strong><span>{{ item.get('reason') }}{% if item.get('max_score') is not none %} 覆盖分数：{{ item.get('max_score') }}。{% endif %}</span>
+              {% for match in item.get('matches', []) %}
+              <span class="audit-match">对照现有内容：{% if match.get('canonical_url') %}<a href="{{ match.canonical_url }}" rel="noreferrer">{{ match.get('title') }}</a>{% else %}{{ match.get('title') }}{% endif %}{% if match.get('matched_tokens') %}（重叠词：{{ match.get('matched_tokens', [])|join('、') }}）{% endif %}</span>
+              {% endfor %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% elif scheduler.get('active') %}
+          <p>本轮没有来源种子被 CMS 强重叠预筛拦截。</p>
+          {% else %}
+          <p class="audit-warning">这条运行未保存 CMS 预筛对象；只能看到上方的最终候选数量。</p>
+          {% endif %}
+        </div>
+      </details>
+
+      <details class="audit-section">
+        <summary>末端主意图去重与路由</summary>
+        <div class="audit-body">
+          {% if current_variant_merges or prior_pool_duplicates %}
+          <p>以下“同意图”理由是 AI 对已提供候选的归类推断；AI 只能引用输入候选，不能新造主题或改资格。</p>
+          <ul class="audit-list">
+            {% for item in current_variant_merges %}
+            <li><strong>保留：</strong>{{ item.get('retained_topic') }}<span><strong>合并换说法：</strong>{{ item.get('merged_topics', [])|join('；') }}。理由：{{ item.get('reason') }}</span></li>
+            {% endfor %}
+            {% for item in prior_pool_duplicates %}
+            <li><strong>{{ item.get('candidate_topic') }}</strong><span>与此前候选“{{ item.get('prior_topic') }}”同一主意图，未再次进入主题池。理由：{{ item.get('reason') }}</span></li>
+            {% endfor %}
+          </ul>
+          {% elif clustering %}
+          <p>本轮完成了末端意图核对，没有发现需要合并的本轮换说法或此前候选重复。</p>
+          {% else %}
+          <p class="audit-warning">这条运行没有保存末端意图去重明细。</p>
+          {% endif %}
+
+          {% if resolution_audit %}
+          <p><strong>保存阶段的路由/跳过记录：</strong></p>
+          <ul class="audit-list">
+            {% for item in resolution_audit %}
+            <li><strong>{{ item.get('topic') }}</strong><span><span class="audit-tag">{{ '运营者决定' if item.get('kind') == 'operator_decision' else '程序记录' }}</span>{{ item.get('reason') }}{% if item.get('related_topic') %} 对照：{{ item.get('related_topic') }}。{% endif %}</span></li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+      </details>
+
+      <details class="audit-section" {% if provider_failures or run.status in ['partial', 'failed'] %}open{% endif %}>
+        <summary>异常与缺失记录</summary>
+        <div class="audit-body">
+          {% if provider_failures %}
+          <ul class="audit-list">
+            {% for failure in provider_failures %}
+            <li><strong>{{ failure.get('provider') }} · {{ failure.get('purpose') }}</strong><span>{{ failure.get('error_code') or '未提供错误代码' }}{% if failure.get('error_message') %}：{{ failure.get('error_message') }}{% endif %}</span></li>
+            {% endfor %}
+          </ul>
+          {% elif run.status in ['partial', 'failed'] %}
+          <p class="audit-warning">本轮标记为{{ '部分完成' if run.status == 'partial' else '失败' }}，但该记录没有保存可逐条显示的供应商错误。{{ run.error_message or '' }}</p>
+          {% else %}
+          <p>没有记录到本轮供应商异常。</p>
+          {% endif %}
+        </div>
+      </details>
+      {% endif %}
     </details>
-    {% endif %}
+
   </section>
 {% else %}
 <section class="empty-state">

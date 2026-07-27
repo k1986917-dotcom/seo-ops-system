@@ -24,14 +24,50 @@ class AIResponse:
     prompt_sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class AITextResponse:
+    """Free-form completion. Legacy Research/Write produce long Markdown —
+    material packs and 2500-4000 word drafts — which JSON mode truncates and
+    mangles through string escaping."""
+
+    provider: str
+    model: str
+    text: str
+    prompt_sha256: str
+
+
+# Long-form generation runs well past the 150s used for structured evidence
+# explanation; a 4000-word draft regularly needs several minutes.
+TEXT_TIMEOUT_SECONDS = 600.0
+
+
 class AIProvider(Protocol):
     async def complete_json(
         self, system_prompt: str, user_payload: dict[str, Any]
     ) -> AIResponse: ...
 
+    async def complete_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> AITextResponse: ...
+
 
 class DisabledAIProvider:
     async def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> AIResponse:
+        raise AIUnavailable("AI 尚未配置；核心分析仍可正常使用")
+
+    async def complete_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> AITextResponse:
         raise AIUnavailable("AI 尚未配置；核心分析仍可正常使用")
 
 
@@ -85,6 +121,126 @@ class OpenAICompatibleProvider:
             content=parsed,
             prompt_sha256=prompt_hash,
         )
+
+    async def complete_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> AITextResponse:
+        prompt_text = json_dumps({"system": system_prompt, "user": user_prompt})
+        prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
+        headers = {"Content-Type": "application/json"}
+        if self.settings.ai_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.ai_api_key}"
+        payload: dict[str, Any] = {
+            "model": self.settings.ai_model,
+            "temperature": temperature,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        timeout = httpx.Timeout(TEXT_TIMEOUT_SECONDS, connect=20.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(self.endpoint, headers=headers, json=payload)
+            # Providers differ on the max_tokens ceiling; retry once without it
+            # rather than failing a draft that is otherwise ready to generate.
+            if response.status_code == 400 and "max_tokens" in payload:
+                payload.pop("max_tokens", None)
+                response = await client.post(self.endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            response_payload = response.json()
+        raw_content = response_payload["choices"][0]["message"]["content"]
+        text = str(raw_content or "").strip()
+        if not text:
+            raise ValueError("AI 返回空文本")
+        return AITextResponse(
+            provider=self.settings.ai_provider,
+            model=self.settings.ai_model or "unknown",
+            text=text,
+            prompt_sha256=prompt_hash,
+        )
+
+
+async def complete_text_logged(
+    provider: AIProvider,
+    *,
+    purpose: str,
+    system_prompt: str,
+    user_prompt: str,
+    site_id: int = 1,
+    input_refs: Any = None,
+    temperature: float = 0.3,
+    max_tokens: int | None = None,
+    settings: Settings | None = None,
+) -> str:
+    """Run a free-form completion and record it in ai_runs, success or failure.
+
+    Returns the generated text. Used by the Legacy Research/Write stages so
+    their calls show up in the same audit trail as structured AI runs.
+    """
+
+    active_settings = settings or get_settings()
+    refs = input_refs if input_refs is not None else []
+    try:
+        response = await provider.complete_text(
+            system_prompt,
+            user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except AIUnavailable:
+        raise
+    except Exception as exc:
+        prompt_hash = hashlib.sha256(
+            json_dumps({"system": system_prompt, "user": user_prompt}).encode("utf-8")
+        ).hexdigest()
+        with connection(active_settings) as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_runs(
+                    site_id, opportunity_id, purpose, provider, model, prompt_sha256,
+                    input_refs_json, status, error_message, created_at
+                ) VALUES(?, NULL, ?, ?, ?, ?, ?, 'failed', ?, ?)
+                """,
+                (
+                    site_id,
+                    purpose,
+                    active_settings.ai_provider,
+                    active_settings.ai_model or "unconfigured",
+                    prompt_hash,
+                    json_dumps(refs),
+                    str(exc),
+                    utc_now(),
+                ),
+            )
+        raise
+
+    with connection(active_settings) as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_runs(
+                site_id, opportunity_id, purpose, provider, model, prompt_sha256,
+                input_refs_json, output_json, status, created_at
+            ) VALUES(?, NULL, ?, ?, ?, ?, ?, ?, 'success', ?)
+            """,
+            (
+                site_id,
+                purpose,
+                response.provider,
+                response.model,
+                response.prompt_sha256,
+                json_dumps(refs),
+                json_dumps({"chars": len(response.text)}),
+                utc_now(),
+            ),
+        )
+    return response.text
 
 
 def build_ai_provider(settings: Settings | None = None) -> AIProvider:

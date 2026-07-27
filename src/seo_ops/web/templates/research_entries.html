@@ -2,7 +2,7 @@
   <div>
     <p class="eyebrow">关键词与主题调研</p>
     <h2>根据现在手里的信号，选择一种找方向的方法</h2>
-    <p>有 GSC 线索就验证真实需求；没有线索时补主题缺口；接近瓶颈时按七个维度深入现有分支。三种方法互不阻塞。</p>
+    <p>有 GSC 线索就验证真实需求；没有线索时突破主题瓶颈；接近瓶颈时按七个维度补主题缺口。三种方法互不阻塞。</p>
   </div>
   <small class="research-budget-note">本轮上限：SerpAPI {{ research_budgets.serpapi }} · Firecrawl {{ research_budgets.firecrawl }} · Tavily {{ research_budgets.tavily }} · AI {{ research_budgets.ai }}</small>
 </section>
@@ -20,7 +20,7 @@
   </article>
   <article class="research-entry-card">
     <span class="entry-number">2</span>
-    <h3>补主题缺口</h3>
+    <h3>突破主题瓶颈</h3>
     <p>优先选择覆盖少、近期又没重复研究的分支，再结合用户问题、相关搜索、论坛与竞品线索找候选。</p>
     <form method="post" action="/research/run">
       <input type="hidden" name="site_id" value="{{ site.id }}">
@@ -30,12 +30,12 @@
           {% for topic in topic_options %}<option value="{{ topic.id }}">{{ topic.path }}（{{ topic.article_count }} 篇）</option>{% endfor %}
         </select>
       </details>
-      <button class="button button-secondary full" type="submit">寻找主题缺口</button>
+      <button class="button button-secondary full" type="submit">继续向深处拓展</button>
     </form>
   </article>
   <article class="research-entry-card">
     <span class="entry-number">3</span>
-    <h3>突破主题瓶颈</h3>
+    <h3>补主题缺口</h3>
     <p>依次研究新受众、生命周期、故障限制、决策标准、技术生态、法规变化和相邻站内问题。</p>
     <form method="post" action="/research/run">
       <input type="hidden" name="site_id" value="{{ site.id }}">
@@ -48,7 +48,7 @@
           {% for dimension in boundary_dimensions %}<option value="{{ dimension.key }}">{{ dimension.label }}</option>{% endfor %}
         </select>
       </details>
-      <button class="button button-secondary full" type="submit">继续向深处拓展</button>
+      <button class="button button-secondary full" type="submit">寻找主题缺口</button>
     </form>
   </article>
 </section>

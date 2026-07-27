@@ -170,7 +170,7 @@ def _content_rows(settings: Settings, site_id: int) -> list[dict[str, Any]]:
                 WHERE latest.content_item_id = ci.id
                 ORDER BY latest.captured_at DESC, latest.id DESC LIMIT 1
             )
-            WHERE ci.site_id = ?
+            WHERE ci.site_id = ? AND ci.status = 'active'
             ORDER BY ci.content_type, ci.id
             """,
             (site_id,),

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ SNAPSHOT_SQL = """(
 
 
 def _today_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _to_fm(value: Any) -> str:
@@ -155,7 +155,7 @@ def _gen_live_products(conn: sqlite3.Connection, workspace: Path) -> dict:
         lines.append(f"| {sku} | {title} | {url} | {price} | {power} | {wavelength} |")
 
     lines += ["", "## Product Details", ""]
-    for slug, title, url, meta_json, summary in rows:
+    for _slug, title, url, meta_json, summary in rows:
         sku = price = power = wavelength = ""
         features: list[str] = []
         if meta_json:

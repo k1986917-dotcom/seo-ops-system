@@ -1,5 +1,5 @@
 # Internal Links Map — LaserPointerHub
-> Auto-generated from database: 2026-07-21
+> Auto-generated from database: 2026-07-27
 
 ## 产品列表
 

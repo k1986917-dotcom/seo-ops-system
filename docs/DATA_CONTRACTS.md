@@ -71,7 +71,9 @@ Blog/Product JSON 仍使用手工导入，不受 OAuth 同步影响。Excel 后�
 
 顶层结构与 Blog 相同。关键字段：`id/sku/title/titleEn/slug/categoryIds/price/inventory/attributes/description/features/packageList/metaTitle/metaDescription/keywords/active/createdAt/updatedAt/translations/searchKeywords/internalPower`。
 
-产品 canonical URL 由站点路径模板派生；派生 URL 属于 inference，允许人工修正。
+产品 canonical URL 由站点路径模板和导入 `sku` 派生；LaserPointerHub 的已验证模板为
+`/p-{sku}.html`。派生 URL 属于 inference，允许人工修正。SQLite v11 会用最新内容快照
+中的 SKU 修复既有产品 canonical，不修改原始 JSON 快照。
 
 ## 6. 设置与连接状态
 
@@ -115,18 +117,37 @@ Blog/Product JSON 仍使用手工导入，不受 OAuth 同步影响。Excel 后�
 - `program_inference`：CMS 标题/元数据词项重叠；明确不等于 query→page 归属。
 - `missing/limitations`：定向 query→page、人工搜索意图复核、季节性缺口等。
 
-当前没有 query→page 联合数据时，新文章候选最多为 `needs_evidence`；SERP 前十出现本站页面或命中强重叠阈值时为 `blocked`。不输出收入、成功率或查询级转化。
+GSC 驱动的旧文章归因需要 query→page 联合数据；主题缺口/边界新文章候选不因缺少该联合行自动降级。新文章只有与活动博客同主意图或正文已覆盖子题时为 `blocked`；需求与材料不足作为诊断/制作准备度保存。不输出收入、成功率或查询级转化。
 
 ## 10. 多来源调研契约（SQLite v4）
 
 - `research_runs` 保存站点、所用分析、状态、四个预算、精确用量、种子查询、候选数、AI 模型、安全错误和 UTC 时间。
 - `research_run_items` 把本轮关联到 `external_runs`，记录 provider/purpose 以及是否复用；同一外部运行可被多轮复用，但不复制底层证据。
 - `research_candidates` 分开保存 topic/intent/rationale、完整 evidence ID、原始来源 URL、facts、inference、CMS overlap、limitations 和 gate_status。
+- SQLite v12 的 `research_seed_observations` 将公开来源观察与文章候选分开保存：来源类别、URL、标题、摘录、evidence ID、后续查询、可选任务卡字段、语义簇、核心对象诊断与消费运行。它是下一轮种子审计，不是本站反馈、需求事实或文章推荐。
 - 预算只计算真实供应商请求；复用次数单独记录。成功、失败和复用都不能从候选数量反推。
 - AI 原始结构化输出继续进入 `ai_runs`；只有引用可解析到本轮输入 evidence ID 的主题和事实才能进入 `research_candidates`。
-- 候选最多 8 个，状态只能为 `needs_evidence` 或 `blocked`。它不是 opportunity，也不修改 GSC、机会强度或行动基线。
+- 候选不设运营目标数量；工程层最多接受 200 个候选以防异常模型输出。所有未被 CMS 同主意图/正文覆盖拦截的来源种子可留在折叠主题池，只有 5 个继续消耗 API 深挖。状态可为 `qualified / needs_evidence / needs_human_review / blocked / stale`；候选不是 opportunity，也不修改 GSC、机会强度或行动基线。
 
-这些表始于 SQLite v4，并在 v8 增加种子类型、图谱分支、扩展维度和研究历史；当前数据库整体为 v9。图谱缺口或边界扩展候选不因缺少 GSC query→page 自动阻塞，但仍必须通过意图独立、正文覆盖、站点边界和来源质量门槛。用户界面只显示“要做 / 不再推荐 / 暂时跳过”，详细证据状态保留在内部。
+这些表始于 SQLite v4，并在 v8 增加种子类型、图谱分支、扩展维度和研究历史。SQLite v10
+为 `research_candidates` 增加 `qualification_status/version`、CMS/证据指纹、最接近旧文、
+需求/缺口/材料检查、建议去向、人工复核和失效审计；SQLite v12 再增加来源观察续池；整体数据库当前为 v12。
+
+资格状态为 `qualified / needs_evidence / needs_human_review / blocked / stale`。只有
+`qualified` 的成型角度可进入新文章建议；`same_intent` 自动生成旧文章更新建议，
+`covered_subtopic` 只保留重复审计。`needs_evidence` 和 `needs_human_review` 是旧规则遗留或
+重判中的中间状态：读取文章建议时会无外部调用地按当前只拦重复规则重判，不能形成隐藏的人工待办。
+需求与材料检查仍分别保存，用于写作前准备与事实核验，而不再否决一个未重复的文章方向；`uncertain`
+页面职责作为诊断保留。原始 PAA/相关搜索/资料发现线索只进入来源观察续池，不是文章建议。开放调度
+末端可用 AI 对输入候选 ID 做同意图聚类，但 AI 不能新增主题、改资格或绕过 CMS 判断。
+
+`external_runs.input_refs_json` 保存需求信号 → 资料发现 → 页面采集 lineage。候选只能附加
+其明确引用的 `source_discovery` 所产生的 `page_capture`；同属一个宽泛 SERP 不能作为
+混用正文的理由。最接近旧文章覆盖只比较活动 `blog` 正文，`product` 继续参与图谱与内链，
+但不能阻断信息文章。
+
+图谱缺口或边界扩展候选不因缺少 GSC query→page 自动阻塞；新文章只因同主意图或正文已覆盖
+而硬阻断。范围、来源质量和材料作为人工选择与制作前准备信息；0 个合格新主题仍是合法结果。
 
 ## 11. 主题图谱计划契约
 

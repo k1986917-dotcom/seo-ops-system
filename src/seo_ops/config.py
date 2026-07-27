@@ -72,10 +72,10 @@ class Settings:
     trends_provider: str = "serpapi"
     trends_geo: str = "US"
     trends_timeframe: str = "today 12-m"
-    research_serpapi_budget: int = 4
-    research_firecrawl_budget: int = 3
-    research_tavily_budget: int = 5
-    research_ai_budget: int = 1
+    research_serpapi_budget: int = 2
+    research_firecrawl_budget: int = 7
+    research_tavily_budget: int = 17
+    research_ai_budget: int = 13
     content_ai_call_limit: int = CONTENT_AI_CALL_LIMIT_DEFAULT
     gsc_oauth_client_file: Path | None = None
     gsc_oauth_token_file: Path | None = None
@@ -123,16 +123,16 @@ def get_settings() -> Settings:
         trends_geo=os.getenv("SEO_OPS_TRENDS_GEO", "US").upper(),
         trends_timeframe=os.getenv("SEO_OPS_TRENDS_TIMEFRAME", "today 12-m"),
         research_serpapi_budget=_bounded_env_int(
-            "SEO_OPS_RESEARCH_SERPAPI_BUDGET", 4, RESEARCH_BUDGET_LIMITS["serpapi"]
+            "SEO_OPS_RESEARCH_SERPAPI_BUDGET", 2, RESEARCH_BUDGET_LIMITS["serpapi"]
         ),
         research_firecrawl_budget=_bounded_env_int(
-            "SEO_OPS_RESEARCH_FIRECRAWL_BUDGET", 3, RESEARCH_BUDGET_LIMITS["firecrawl"]
+            "SEO_OPS_RESEARCH_FIRECRAWL_BUDGET", 7, RESEARCH_BUDGET_LIMITS["firecrawl"]
         ),
         research_tavily_budget=_bounded_env_int(
-            "SEO_OPS_RESEARCH_TAVILY_BUDGET", 5, RESEARCH_BUDGET_LIMITS["tavily"]
+            "SEO_OPS_RESEARCH_TAVILY_BUDGET", 17, RESEARCH_BUDGET_LIMITS["tavily"]
         ),
         research_ai_budget=_bounded_env_int(
-            "SEO_OPS_RESEARCH_AI_BUDGET", 1, RESEARCH_BUDGET_LIMITS["ai"]
+            "SEO_OPS_RESEARCH_AI_BUDGET", 13, RESEARCH_BUDGET_LIMITS["ai"]
         ),
         content_ai_call_limit=max(
             CONTENT_AI_CALL_LIMIT_MIN,

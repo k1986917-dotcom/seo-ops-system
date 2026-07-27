@@ -39,6 +39,7 @@ def workflow_reset_preview(site_id: int, settings: Settings | None = None) -> di
         "opportunities",
         "actions",
         "research_runs",
+        "research_seed_observations",
         "external_runs",
         "evidence_items",
         "ai_runs",

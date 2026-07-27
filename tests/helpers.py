@@ -34,7 +34,7 @@ def workbook_bytes(*, comparison: bool = False) -> bytes:
             ["https://laserpointerhub.com/blog/example", 2, 10, 120, 240, 0.0167, 0.0417, 12, 8]
         )
         pages.append(
-            ["https://laserpointerhub.com/products/demo", 1, 1, 110, 100, 0.009, 0.01, 9, 10]
+            ["https://laserpointerhub.com/p-DEMO-1.html", 1, 1, 110, 100, 0.009, 0.01, 9, 10]
         )
         pages.append(
             ["https://laserpointerhub.com/blog/other", 5, 4, 180, 160, 0.0278, 0.025, 6, 7]

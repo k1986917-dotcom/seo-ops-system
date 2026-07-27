@@ -39,9 +39,13 @@ def test_topic_graph_maps_each_content_once_and_is_idempotent(settings):
             WHERE link.coverage_role = 'primary' AND content.content_type = 'product'
             """
         ).fetchone()
+        product_url = conn.execute(
+            "SELECT canonical_url FROM content_items WHERE content_type = 'product'"
+        ).fetchone()["canonical_url"]
 
     assert duplicate_primary == []
     assert product_parent["topic_key"] == "product-models"
+    assert product_url == "https://laserpointerhub.com/p-DEMO-1.html"
 
 
 def test_support_knowledge_does_not_replace_primary_article_topic(settings):

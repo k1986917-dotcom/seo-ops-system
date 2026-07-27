@@ -1,5 +1,5 @@
 # SEO Data Manual — LaserPointerHub
-> GSC OAuth 同步 · 批次 #6 · 2026-07-21
+> GSC OAuth 同步 · 批次 #6 · 2026-07-27
 
 ## A1. GSC Top 20 Queries
 

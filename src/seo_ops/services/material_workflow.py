@@ -12,7 +12,7 @@ from seo_ops.utils import json_dumps, json_loads, utc_now
 
 
 class MaterialWorkflowError(ValueError):
-    """Raised when a new-article material transition is not allowed."""
+    """Raised when a content-production material transition is not allowed."""
 
 
 PUBLIC_URL_RE = re.compile(r"https?://[^\s<>()\]\[\"']+")
@@ -36,7 +36,6 @@ STOPWORDS = {
 }
 MATERIAL_CATEGORIES = (
     ("A", "用户痛点", True),
-    ("B", "实时市场与产品信息", False),
     ("C", "案例素材", False),
     ("D", "信息增量", False),
     ("E", "权威引用", True),
@@ -166,7 +165,7 @@ def _parse_manual_sections(text: str) -> dict[str, list[str]]:
 
 def _article_tier(topic: str) -> tuple[str, int, int]:
     tokens = _tokens(topic)
-    if tokens & {"best", "buy", "compare", "comparison", "price", "review", "reviews", "versus"}:
+    if tokens & {"best", "buy", "compare", "comparison", "review", "reviews", "versus"}:
         return "Product Roundup", 2000, 3500
     lowered = topic.casefold()
     if any(
@@ -214,8 +213,6 @@ def _load_action_material(action_id: int, settings: Settings) -> dict[str, Any]:
             "SELECT id FROM content_items WHERE site_id = ? AND canonical_url = ?",
             (row["site_id"], row["target_ref"]),
         ).fetchone()
-        if existing:
-            raise MaterialWorkflowError("旧文章不需要新文章素材确认")
 
         evidence = json_loads(row["evidence_json"], {})
         evidence_ids = [str(item) for item in evidence.get("evidence_ids", []) if item]
@@ -265,12 +262,13 @@ def _load_action_material(action_id: int, settings: Settings) -> dict[str, Any]:
         "evidence_rows": [dict(item) for item in evidence_rows],
         "content_rows": [dict(item) for item in content_rows],
         "confirmed": confirmed,
+        "is_existing_article": bool(existing),
     }
 
 
 def _select_internal_candidates(rows: list[dict[str, Any]], topic: str) -> list[dict[str, Any]]:
     topic_tokens = _tokens(topic)
-    commercial = bool(topic_tokens & {"buy", "choice", "choose", "compare", "price", "product"})
+    commercial = bool(topic_tokens & {"buy", "choice", "choose", "compare", "product"})
     scored: list[tuple[int, str, dict[str, Any]]] = []
     for row in rows:
         url = str(row.get("canonical_url") or "")
@@ -370,13 +368,6 @@ def build_material_preview(
         )
     category_a = list(dict.fromkeys([*manual_sections.get("A", []), *facts]))[:12]
 
-    product_items = [
-        f"{item['title']} — {item['canonical_url']}"
-        for item in internal_candidates
-        if item.get("content_type") == "product"
-    ]
-    category_b = list(dict.fromkeys([*manual_sections.get("B", []), *product_items]))[:12]
-
     cases: list[str] = list(manual_sections.get("C", []))
     for item in materials:
         roles = {_source_role(url) for url in item["source_urls"]}
@@ -437,7 +428,6 @@ def build_material_preview(
 
     category_values = {
         "A": category_a,
-        "B": category_b,
         "C": category_c,
         "D": category_d,
         "E": category_e,
@@ -471,7 +461,7 @@ def build_material_preview(
     ready = not missing
     missing_keys = {item[0] for item in missing if item and item[0] in "ABCDEFGH"}
     prompt_lines = [
-        f"请围绕新文章主题“{task.get('opportunity_title') or task.get('target_ref')}”补充搜索素材。",
+        f"请围绕文章任务“{task.get('opportunity_title') or task.get('target_ref')}”补充搜索素材。",
         "只粘贴你实际查到的内容，并在每条后面保留公开来源 URL；不要让 AI 编造经历、数字或出处。",
         "请按下面标题整理：",
     ]
@@ -485,13 +475,16 @@ def build_material_preview(
                 "G": "Google/PAA/论坛中出现的真实问句（保留问号）",
             }[key]
             prompt_lines.append(f"{key} {labels[key]}：{hint} + URL")
-    prompt_lines.append("可选：B 市场/产品、C 案例、D 信息增量、F 竞品缺口、H 可核实作者经验。")
+    prompt_lines.append(
+        "可选：C 案例、D 信息增量、F 竞品缺口、H 可核实作者经验。不要补市场规模、价格或竞品报价。"
+    )
 
     return {
         "action_id": action_id,
         "site_id": int(task["site_id"]),
         "opportunity_id": int(task["opportunity_id"]),
         "site_slug": str(task["site_slug"]),
+        "is_existing_article": bool(loaded["is_existing_article"]),
         "topic": str(task.get("opportunity_title") or task.get("target_ref") or ""),
         "recommended_action": str(task.get("recommended_action") or ""),
         "tier": tier,

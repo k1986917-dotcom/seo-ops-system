@@ -2,6 +2,8 @@
 {% set l = action.legacy or {} %}
 {% set stage = l.get("stage", "r0_pending") %}
 {% set files = l.get("files", {}) %}
+{% set fail_count = l.get("fail_count", 0) %}
+{% set w2 = l.get("w2", {}) %}
 
 <div class="legacy-card">
   <div class="legacy-header">
@@ -10,10 +12,11 @@
   </div>
 
   <div class="legacy-progress">
-    {% set st = ["R0","R1","R2","R3","R4","W0","W1","W1b","W2","W3"] %}
-    {% set labels = ["提示词","结果","收集","分析","评分","校验","草稿","预检","后处理","注册"] %}
-    {% for i in range(10) %}
-      <div class="legacy-dot {{ 'done' if l.get('stage_step', 0) > i else '' }} {{ 'active' if l.get('stage_step', 0) == i else '' }}">
+    {% set st = ["开始","R0","R1","R2","R3","R4","R5","W0","W1","W1b","W2","W3"] %}
+    {% set labels = ["待开始","提示词","结果","收集","分析","评分","就绪","校验","草稿","预检","后处理","注册"] %}
+    {% for i in range(12) %}
+      <div class="legacy-dot {{ 'done' if l.get('stage_step', 0) > i else '' }} {{ 'active' if l.get('stage_step', 0) == i else '' }}"
+           title="{{ labels[i] }}">
         <span class="dot-label">{{ st[i] }}</span>
       </div>
     {% endfor %}
@@ -39,11 +42,11 @@
     </form>
 
   {% elif stage == "r1_results" %}
-    <p>✅ 搜索结果已保存。等待 AI 分析。</p>
+    <p>✅ 搜索结果已保存，但数据收集未完成。</p>
     <form method="post" action="/actions/{{ action.id }}/legacy/stage/r1">
-      <label class="legacy-label">需要修改搜索结果？重新粘贴：</label>
+      <label class="legacy-label">重新粘贴搜索结果并重试：</label>
       <textarea name="search_results" rows="10" class="legacy-textarea"></textarea>
-      <button type="submit" class="button">重新保存</button>
+      <button type="submit" class="button">重新保存并收集</button>
     </form>
 
   {% elif stage == "r2_collect" %}
@@ -68,11 +71,11 @@
   {% elif stage == "r5_write_ready" %}
     <div class="legacy-result">
       <p>🎯 Research 完成</p>
-      {% if files.get("research_score") %}
-        <p class="legacy-muted">评分报告已生成</p>
-        {% if l.get("score_preview") %}
+      {% if l.get("score_preview") %}
+        <details>
+          <summary>机会评分</summary>
           <pre class="legacy-prompt">{{ l.score_preview }}</pre>
-        {% endif %}
+        </details>
       {% endif %}
       {% if files.get("brief") %}
         <p class="legacy-muted">调研简报已生成</p>
@@ -81,6 +84,7 @@
     <form method="post" action="/actions/{{ action.id }}/legacy/stage/w0">
       <label class="legacy-label">作者（必填，默认 LaserPointerHub）：</label>
       <input type="text" name="author" value="LaserPointerHub" class="legacy-input" required>
+      <p class="legacy-hint">校验素材包后由 AI 写完整初稿，可能耗时数分钟。</p>
       <button type="submit" class="button">校验素材并生成草稿</button>
     </form>
 
@@ -92,10 +96,16 @@
         <pre class="legacy-prompt">{{ l.draft_preview }}</pre>
       </details>
     {% endif %}
+    {% if l.get("validate_report") %}
+      <details>
+        <summary>查看素材校验报告</summary>
+        <pre class="legacy-prompt">{{ l.validate_report }}</pre>
+      </details>
+    {% endif %}
     <form method="post" action="/actions/{{ action.id }}/legacy/stage/w1b">
-      <label class="legacy-label">页面层级（可选，自动检测）：</label>
+      <label class="legacy-label">页面层级（留空则沿用调研判定的层级）：</label>
       <select name="tier" class="legacy-input">
-        <option value="">自动检测</option>
+        <option value="">沿用调研判定</option>
         <option value="Pillar Page">Pillar Page</option>
         <option value="Cluster Content">Cluster Content</option>
         <option value="Product Roundup">Product Roundup</option>
@@ -104,35 +114,93 @@
     </form>
 
   {% elif stage == "w1b_pre_check" %}
-    <p>预检完成。{{ "有 " + (fail_count|string if fail_count else "0") + " 项需修复" if fail_count else "全部通过" }}</p>
-    <details>
-      <summary>查看预检报告</summary>
-      <pre class="legacy-prompt">{{ l.get("pre_check_report", "") }}</pre>
-    </details>
+    <p>预检完成：{{ "有 " ~ fail_count ~ " 项需修复" if fail_count else "全部通过" }}</p>
+    {% if l.get("pre_check_report") %}
+      <details {{ "open" if fail_count else "" }}>
+        <summary>查看预检报告</summary>
+        <pre class="legacy-prompt">{{ l.pre_check_report }}</pre>
+      </details>
+    {% endif %}
+
+    {% if l.get("post_process_report") %}
+      <div class="legacy-result">
+        <p>
+          后处理门控：{{ "✅ 通过" if w2.get("gate_passed") else "❌ 未通过" }}
+          {% if w2.get("score") is not none %} · 评分 {{ w2.score }}{% endif %}
+          {% if w2.get("cannibal") is not none %} · 蚕食 {{ w2.cannibal }}{% endif %}
+          · 已用修订 {{ w2.get("rounds_used", 0) }}/2
+        </p>
+      </div>
+      <details {{ "open" if not w2.get("gate_passed") else "" }}>
+        <summary>查看后处理报告</summary>
+        <pre class="legacy-prompt">{{ l.post_process_report }}</pre>
+      </details>
+    {% endif %}
+
     <div class="legacy-actions">
       <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline">
-        <p class="legacy-hint">先运行检查（不加 --apply），通过后再写回</p>
         <button type="submit" class="button">运行后处理检查</button>
       </form>
-      {% if not fail_count %}
-      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2?apply=1" style="display:inline; margin-left:0.5rem">
+
+      {% if l.get("post_process_report") and not w2.get("gate_passed") and w2.get("rounds_left", 2) > 0 %}
+      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2-revise" style="display:inline; margin-left:0.5rem">
+        <button type="submit" class="button button-secondary">AI 修订并重跑（剩余 {{ w2.rounds_left }} 轮）</button>
+      </form>
+      {% endif %}
+
+      {% if w2.get("gate_passed") %}
+      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline; margin-left:0.5rem">
+        <input type="hidden" name="apply" value="1">
         <button type="submit" class="button button-secondary">写回链接字段 (--apply)</button>
       </form>
       {% endif %}
     </div>
 
+    {% if w2.get("rounds_left") == 0 and not w2.get("gate_passed") %}
+      {% if w2.get("score_block") %}
+        <p class="legacy-hint">⚠️ 需人工审阅：已用满 2 轮修订，评分仍低于 70。按 skill 规则不进入注册，请人工改稿后重跑后处理。</p>
+      {% endif %}
+      {% if w2.get("cannibal_block") %}
+        <p class="legacy-hint">⚠️ 蚕食门控仍未通过（相似度 {{ w2.cannibal }} ≥ 0.55）。只有当你确认本文与报告中列出的旧文章角度确实不同（同站术语重叠造成的 TF-IDF 误报）时，才可跳过该门控。</p>
+        <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline"
+              onsubmit="return confirm('确认本文与已发布文章角度确实不同，跳过蚕食门控？\n\n这会绕过 SEO 蚕食保护，请先读完后处理报告中列出的相似文章。')">
+          <input type="hidden" name="apply" value="1">
+          <input type="hidden" name="force" value="1">
+          <button type="submit" class="button button-secondary">我已确认角度不同，跳过蚕食门控</button>
+        </form>
+      {% endif %}
+    {% endif %}
+
   {% elif stage == "w2_post_process" %}
     <p>✅ 后处理通过，链接字段已写回</p>
-    <details>
-      <summary>查看后处理报告</summary>
-      <pre class="legacy-prompt">{{ l.get("post_process_report", "") }}</pre>
-    </details>
+    {% if l.get("post_process_report") %}
+      <details>
+        <summary>查看后处理报告</summary>
+        <pre class="legacy-prompt">{{ l.post_process_report }}</pre>
+      </details>
+    {% endif %}
     <form method="post" action="/actions/{{ action.id }}/legacy/stage/w3">
+      <p class="legacy-hint">注册会写入 internal-links-map、归档素材、清理素材包，并由 AI 生成回溯链接清单（不会自动修改旧文章）。</p>
       <button type="submit" class="button">注册文章</button>
     </form>
 
   {% elif stage == "w3_register" %}
-    <p>✅ 文章注册完成<br><span class="legacy-muted">已写入 internal-links-map，素材包已清理，生成回溯链接候选</span></p>
+    <p>✅ 文章注册完成<br><span class="legacy-muted">已写入 internal-links-map，素材已归档，素材包已清理</span></p>
+    {% if files.get("draft") %}
+      <p class="legacy-muted">最终草稿: {{ files.draft }}</p>
+    {% endif %}
+    {% if l.get("backlink_checklist") %}
+      <details open>
+        <summary>🔗 回溯链接清单（人工审批后手动执行）</summary>
+        <pre class="legacy-prompt">{{ l.backlink_checklist }}</pre>
+      </details>
+    {% endif %}
+    {% if l.get("register_report") %}
+      <details>
+        <summary>查看注册报告</summary>
+        <pre class="legacy-prompt">{{ l.register_report }}</pre>
+      </details>
+    {% endif %}
   {% endif %}
 
 </div>

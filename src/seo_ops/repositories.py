@@ -253,6 +253,7 @@ def list_research_runs(
     limit: int = 10,
     *,
     include_candidates: bool = True,
+    include_audit: bool = False,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -310,5 +311,36 @@ def list_research_runs(
                     )
             candidates.append(candidate)
         item["candidates"] = candidates
+        if include_audit:
+            observation_rows = conn.execute(
+                """
+                SELECT source_kind, source_url, source_title, observed_text, source_quote,
+                       follow_up_query, provisional_topic, semantic_cluster, anchor_fit,
+                       status, consumed_by_run_id
+                FROM research_seed_observations
+                WHERE research_run_id = ?
+                ORDER BY id
+                """,
+                (item["id"],),
+            ).fetchall()
+            observations = []
+            for observation_row in observation_rows:
+                observation = dict(observation_row)
+                observations.append(observation)
+            failure_rows = conn.execute(
+                """
+                SELECT items.provider, items.purpose, items.reused,
+                       runs.error_code, runs.error_message
+                FROM research_run_items AS items
+                JOIN external_runs AS runs ON runs.id = items.external_run_id
+                WHERE items.research_run_id = ? AND runs.status <> 'success'
+                ORDER BY runs.id
+                """,
+                (item["id"],),
+            ).fetchall()
+            item["audit"] = {
+                "source_observations": observations,
+                "provider_failures": [dict(failure_row) for failure_row in failure_rows],
+            }
         runs.append(item)
     return runs
