@@ -50,7 +50,7 @@ def _slugify(topic: str) -> str:
     s = topic.lower().strip()
     s = re.sub(r"[^\w\s-]", "", s)
     s = re.sub(r"[\s]+", "-", s)
-    return re.sub(r"-+", "-", s)[:80]
+    return re.sub(r"-+", "-", s).strip("-")
 
 
 def _today_str() -> str:
@@ -1082,6 +1082,7 @@ def _strip_code_fence(text: str) -> str:
 async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
+    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
 
