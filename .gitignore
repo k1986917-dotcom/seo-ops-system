@@ -30,3 +30,8 @@ data/legacy_workflow/laserpointerhub/research/backlink-suggestions-*.md
 data/legacy_workflow/laserpointerhub/drafts/*.md
 data/legacy_workflow/laserpointerhub/material-packs/*.md
 data/legacy_workflow/laserpointerhub/reports/
+
+# Interrupted run (2026-07-27): runtime-generated topic-context for an unfinished action
+data/legacy_workflow/laserpointerhub/research/topic-context-laser-pointer-for-pointing-above-ceilings-in-commercial-construction-*.json
+# General rule: slug-only seed data is tracked (no date); date-suffixed are runtime
+data/legacy_workflow/laserpointerhub/research/topic-context-*-20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].json
