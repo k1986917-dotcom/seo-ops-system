@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _write(path: Path, text: str = "x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +195,7 @@ class TestStageDetection:
         code = (
             "import sys, json;"
             "sys.path.insert(0, " + repr(str(tmp_path)) + ");"
-            "sys.path.insert(0, '/home/laoma/seo-ops-system');"
+            "sys.path.insert(0, " + repr(str(REPO_ROOT)) + ");"
             "from seo_ops.services.legacy_workflow import action_workspace, "
             "load_w2_state, _collect_files;"
             "ws = action_workspace(__import__('pathlib').Path("
@@ -208,7 +210,7 @@ class TestStageDetection:
             capture_output=True,
             text=True,
             check=False,
-            cwd="/home/laoma/seo-ops-system",
+            cwd=str(REPO_ROOT),
         )
         assert out.returncode == 0, out.stderr
         payload = json.loads(out.stdout.strip())
