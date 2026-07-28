@@ -774,7 +774,19 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
     if not isinstance(claims, list):
         raise ValueError("CLAIM_LEDGER.claims must be a list")
 
-    normalized_draft = [_normalize_claim(s) for s in draft_body.split("\n")]
+    import re as _re
+    body_for_sentences = draft_body
+    if draft_body.startswith("---"):
+        parts = draft_body.split("---", 2)
+        if len(parts) >= 3:
+            body_for_sentences = parts[2]
+    _SENTENCE_SPLIT_RE = _re.compile(r'(?<=[.!?])\s+')
+    normalized_draft = set()
+    for para in _re.split(r'\n\n+', body_for_sentences):
+        for sent in _SENTENCE_SPLIT_RE.split(para):
+            norm = _normalize_claim(sent)
+            if norm:
+                normalized_draft.add(norm)
 
     for idx, c in enumerate(claims):
         if not isinstance(c, dict):
@@ -811,8 +823,17 @@ def _write_ahead_draft_and_ledger(
     """Atomically write a draft .md and its claim-ledger, returning
     ``{"draft_path": str, "claim_path": str}``.
 
-    Uses Python-level write-ahead: write temp files first, then rename.
-    If either write fails, the old files remain in place.
+    Write-ahead protocol:
+    1. Snapshot old content of both files (for rollback).
+    2. Write temp files with the new content.
+    3. Flush + fsync each temp file.
+    4. Rename draft temp → real.
+    5. Rename ledger temp → real.
+    6. On ANY failure after step 2, rollback both files to their old content
+       and delete temp files.
+
+    This guarantees no mixed-version state survives: either both files are
+    updated atomically, or neither is.
     """
     import os as _os
     import tempfile as _tf
@@ -822,25 +843,59 @@ def _write_ahead_draft_and_ledger(
     draft_path.parent.mkdir(parents=True, exist_ok=True)
     cl_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write-ahead: temp files before touching originals.
-    _, tmp_draft_path_str = _tf.mkstemp(
-        dir=str(draft_path.parent),
-        prefix=f".{slug}-", suffix=".md.tmp"
-    )
-    tmp_draft_path = Path(tmp_draft_path_str)
-    tmp_draft_path.write_text(draft_text, encoding="utf-8")
+    old_draft_content: str | None = None
+    old_cl_content: str | None = None
+    tmp_draft_path: Path | None = None
+    tmp_cl_path: Path | None = None
 
-    _, tmp_cl_path_str = _tf.mkstemp(
-        dir=str(cl_path.parent),
-        prefix=f".{slug}-", suffix=".json.tmp"
-    )
-    tmp_cl_path = Path(tmp_cl_path_str)
-    tmp_cl_path.write_text(
-        json.dumps(cl_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        if draft_path.exists():
+            old_draft_content = draft_path.read_text(encoding="utf-8")
+        if cl_path.exists():
+            old_cl_content = cl_path.read_text(encoding="utf-8")
 
-    # Rename temp → real (atomic on same filesystem)
-    _os.replace(tmp_draft_path, draft_path)
-    _os.replace(tmp_cl_path, cl_path)
+        _, tmp_draft_path_str = _tf.mkstemp(
+            dir=str(draft_path.parent),
+            prefix=f".{slug}-", suffix=".md.tmp"
+        )
+        tmp_draft_path = Path(tmp_draft_path_str)
+        tmp_draft_path.write_text(draft_text, encoding="utf-8")
+
+        _, tmp_cl_path_str = _tf.mkstemp(
+            dir=str(cl_path.parent),
+            prefix=f".{slug}-", suffix=".json.tmp"
+        )
+        tmp_cl_path = Path(tmp_cl_path_str)
+        tmp_cl_path.write_text(
+            json.dumps(cl_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        for p in (tmp_draft_path, tmp_cl_path):
+            with p.open("rb") as fh:
+                os.fsync(fh.fileno())
+
+        _os.replace(tmp_draft_path, draft_path)
+        tmp_draft_path = None
+
+        _os.replace(tmp_cl_path, cl_path)
+        tmp_cl_path = None
+
+    except Exception:
+        if tmp_draft_path is not None and tmp_draft_path.exists():
+            try:
+                tmp_draft_path.unlink()
+            except OSError:
+                pass
+        if tmp_cl_path is not None and tmp_cl_path.exists():
+            try:
+                tmp_cl_path.unlink()
+                pass
+            except OSError:
+                pass
+        if old_draft_content is not None:
+            draft_path.write_text(old_draft_content, encoding="utf-8")
+        if old_cl_content is not None:
+            cl_path.write_text(old_cl_content, encoding="utf-8")
+        raise
 
     return {"draft_path": str(draft_path), "claim_path": str(cl_path)}
 
@@ -2130,12 +2185,20 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
                 "error": f"已用满 {MAX_REVISION_ROUNDS} 轮修订。按 skill 规则不再自动修改，请人工审阅草稿。",
                 "rounds_used": rounds, "rounds_left": 0}
 
+    if state.get("gate_passed") or state.get("applied"):
+        return {"success": False,
+                "error": "草稿已通过预检或已发布，不得再修订",
+                "rounds_used": rounds, "rounds_left": MAX_REVISION_ROUNDS - rounds}
+
     report = load_report(workspace, "post-process", slug)
     if not report:
         return {"success": False, "error": "没有后处理报告，请先运行后处理检查"}
 
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     metrics = _parse_post_process(report)
+
+    ev_refs = _ledger_refs(workspace, slug)
+    ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
 
     user_prompt = f"""Revise the article for: "{topic}"
 
@@ -2150,8 +2213,11 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
 
 ## Valid internal link targets
 {_read_text(workspace / 'context' / 'internal-links-map.md', _CONTEXT_CHAR_LIMIT)}
+{ev_section}
+Follow the system instructions. Output the full revised article Markdown, then
+===CLAIM_LEDGER=== and the claim ledger JSON."""
 
-Output the complete revised article Markdown."""
+    original_draft_text = _read_text(draft)
 
     try:
         revised = await _run_ai_text(
@@ -2160,10 +2226,33 @@ Output the complete revised article Markdown."""
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
-    # Keep the superseded draft so a bad revision is never a one-way door.
+    clean = _strip_code_fence(revised)
+    sep = "===CLAIM_LEDGER==="
+    if sep not in clean:
+        return {"success": False, "error": "AI 输出未包含 ===CLAIM_LEDGER=== 区块；请重试 W2"}
+
+    parts = clean.split(sep, 1)
+    draft_md = parts[0].strip()
+    cl_json = parts[1].strip()
+
+    if not draft_md:
+        return {"success": False, "error": "AI 输出了空的文章正文"}
+
+    try:
+        cl_data = _validate_claim_ledger_json(cl_json, draft_md)
+    except ValueError as exc:
+        return {"success": False, "error": f"claim-ledger 解析失败: {exc}"}
+
+    cl_data["draft_sha256"] = hashlib.sha256(draft_md.encode("utf-8")).hexdigest()
+
     backup = draft.with_suffix(f".rev{rounds + 1}.md")
-    backup.write_text(_read_text(draft), encoding="utf-8")
-    draft.write_text(_strip_code_fence(revised), encoding="utf-8")
+    backup.write_text(original_draft_text, encoding="utf-8")
+
+    try:
+        _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
+    except Exception as exc:
+        backup.unlink(missing_ok=True)
+        return {"success": False, "error": f"原子写入失败: {exc}"}
 
     state["rounds"] = rounds + 1
     save_w2_state(workspace, slug, state)

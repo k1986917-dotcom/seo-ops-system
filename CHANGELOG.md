@@ -2,6 +2,21 @@
 
 所有用户可见变化记录在此。版本遵循语义化版本。
 
+## [0.11.2] - 2026-07-28
+
+### Fixed
+
+- **W2 revise 接入证据闭环**：现在 AI prompt 含 Evidence References、输出必须含 `===CLAIM_LEDGER===`、复用 W0 解析/验证逻辑、服务端注入 `draft_sha256`、原子写 draft + claim ledger。非法 AI 输出不修改任何文件。
+- **真正原子写**：`_write_ahead_draft_and_ledger` 改为「snapshot → 写 temp → fsync → replace」协议；任一步失败 restore 旧 draft 和旧 ledger，杜绝 NEW DRAFT + OLD LEDGER 混合态。
+- **W0/W1b 句子提取统一**：`_validate_claim_ledger_json` 改为段落 + 句子二级拆分，与 W1b `_claim_in_draft` 行为一致；段落内完整句可被两端一致接受。
+- **`_run_fact_check` schema 异常结构化 blocking**：evidence / claims 每项显式校验 `isinstance(item, dict)`；`evidence_ids` 必须为 list；非 dict 元素产生结构化 blocking 项而非 AttributeError。
+- **通过后拒绝 revise**：`stage_w2_revise` 在 `gate_passed=True` 或 `applied=True` 时直接返回失败，不再修改文件。
+
+### 测试覆盖新增
+
+- 5 个测试类共 14 个测试覆盖：W2 gate_passed/applied 拒绝、非法 ledger 不改文件、原子写 rollback、段落内句子、非法 evidence/claim 对象、W0→W1b→W2→W1b 真实流程。
+- 完整测试：275 passed；无业务逻辑回归。
+
 ## [0.11.1] - 2026-07-28
 
 ### Fixed

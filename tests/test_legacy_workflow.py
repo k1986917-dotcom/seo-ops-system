@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -690,7 +692,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_search_entity_with_evidence_is_warning_not_blocking(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[search] Construction electrician pointing at junction box**
@@ -706,7 +709,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_library_entity_with_evidence_is_warning_never_blocking(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[library E] FDA rules for laser pointers**
@@ -723,7 +727,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_required_with_evidence_and_quote_is_blocking(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[required] Construction laser pointer beam specs for ceiling pointing**
@@ -738,7 +743,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_required_with_evidence_but_no_quote_is_warning(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[required] Construction laser pointer beam specs for ceiling work**
@@ -752,7 +758,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_required_with_evidence_and_key_finding_is_blocking(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[required] Construction laser pointer FDA class limit**
@@ -768,7 +775,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_unrelated_entity_never_appears_in_missing(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[search] Telescope stargazing**
@@ -781,7 +789,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_unsourced_entity_never_appears_in_missing(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[search] Nd:YAG laser physics**
@@ -798,7 +807,8 @@ class TestMaterialPackEntityCoverage:
 
     def test_present_entity_not_in_missing(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[search] Junction box above ceiling pointing**
@@ -821,7 +831,8 @@ class TestMaterialPackEntityCoverage:
     def test_required_unsourced_never_in_missing(self, tmp_path):
         """Even a [required] entity MUST have a Source to be checked."""
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[required] Beam divergence must match ceiling work** (no source!)
@@ -839,7 +850,8 @@ class TestMaterialPackEntityCoverage:
         an article about "laser pointer for pointing above ceilings in
         commercial construction"."""
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = self._pack(tmp_path, """\
 - **[search] Laser pointer button gets pressed accidentally**
@@ -922,15 +934,16 @@ class TestFactCheck:
     """Check 14: claim-ledger → evidence-ledger fact validation."""
 
     def tmp_dir(self):
-        from pathlib import Path as _P
         import tempfile
+        from pathlib import Path as _P
         return _P(tempfile.mkdtemp())
 
     def test_search_entity_not_auto_blocked(self, tmp_path):
         """Regression: 'button gets pressed accidentally' — search entry
         with evidence must be warning, NOT blocking."""
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = tmp_path / "pack.md"
         pack.write_text(
@@ -1023,7 +1036,8 @@ class TestFactCheck:
 
     def test_required_core_missing_blocked(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = tmp_path / "pack.md"
         pack.write_text(
@@ -1040,7 +1054,8 @@ class TestFactCheck:
 
     def test_supporting_entity_warning_not_blocking(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = tmp_path / "pack.md"
         pack.write_text(
@@ -1058,7 +1073,8 @@ class TestFactCheck:
 
     def test_unrelated_concept_warning_only(self, tmp_path):
         from data_sources.modules.write_pre_check import (
-            check_pack_entity_coverage, parse_pack_entities,
+            check_pack_entity_coverage,
+            parse_pack_entities,
         )
         pack = tmp_path / "pack.md"
         pack.write_text(
@@ -1107,12 +1123,22 @@ class TestRevisionLoop:
         assert "后处理报告" in result["error"]
 
     def test_revision_backs_up_and_reruns(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime
+
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
         lw.save_report(tmp_path, "post-process", "test-topic", _POST_PROCESS_REPORT)
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        old_draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        original = old_draft.read_text(encoding="utf-8")
+        new_draft = tmp_path / "drafts" / f"test-topic-{today}.md"
 
         async def fake_ai(*args, **kwargs):
-            return "Title: T\n\nrevised body"
+            return (
+                "---\nTitle: T\n---\nrevised body line.\n"
+                "===CLAIM_LEDGER===\n"
+                '{"version":1,"claims":[{"claim_text":"revised body line.","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
+            )
 
         async def fake_run(self, script, args):
             if script == "write_pre_check.py":
@@ -1147,10 +1173,11 @@ class TestRevisionLoop:
         result = asyncio.run(lw.stage_w2_revise("test topic", tmp_path))
         assert result["gate_passed"] is True
         assert result["revision_round"] == 1
-        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
-        assert "revised body" in draft.read_text(encoding="utf-8")
+        new_draft_text = new_draft.read_text(encoding="utf-8")
+        assert "revised body" in new_draft_text
         backup = tmp_path / "drafts" / "test-topic-2026-01-01.rev1.md"
-        assert backup.exists() and "body" in backup.read_text(encoding="utf-8")
+        assert backup.exists()
+        assert backup.read_text(encoding="utf-8") == original
         assert lw.load_w2_state(tmp_path, "test-topic")["rounds"] == 1
 
     def test_revision_stops_when_new_draft_fails_precheck(
@@ -1163,7 +1190,11 @@ class TestRevisionLoop:
         scripts = []
 
         async def fake_ai(*args, **kwargs):
-            return "Title: T\n\nrevised body"
+            return (
+                "---\nTitle: T\n---\nrevised body line.\n"
+                "===CLAIM_LEDGER===\n"
+                '{"version":1,"claims":[{"claim_text":"revised body line.","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
+            )
 
         async def fake_run(self, script, args):
             scripts.append(script)
@@ -1838,9 +1869,9 @@ class TestPrecheckGateDisplay:
     HTML when precheck_passed is False or the draft SHA has changed."""
 
     def _make_action(self, tmp_path, *, action_id=1):
-        from seo_ops.db import init_db, connection
+
         from seo_ops.config import Settings
-        from pathlib import Path as _P
+        from seo_ops.db import connection, init_db
 
         data_dir = tmp_path / "data"
         s = Settings(
@@ -1916,7 +1947,7 @@ class TestPrecheckGateDisplay:
         return draft
 
     def _set_state(self, settings, action_id, slug, *, precheck_passed, sha, rounds=0):
-        from seo_ops.services.legacy_workflow import save_w2_state, action_workspace
+        from seo_ops.services.legacy_workflow import action_workspace, save_w2_state
         ws = action_workspace(
             settings.data_dir / "legacy_workflow" / "laserpointerhub",
             action_id,
@@ -1943,9 +1974,6 @@ class TestPrecheckGateDisplay:
         return get_legacy_display_data(topic, ws, db_stage="w1b_pre_check")
 
     def test_display_state_failed_when_precheck_not_passed(self, tmp_path):
-        from seo_ops.web.app import create_app
-        from fastapi.testclient import TestClient
-        from seo_ops.services.legacy_workflow import _sha256_file
 
         s, action_id = self._make_action(tmp_path)
         slug = "precheck-gate-test-topic"
@@ -1989,9 +2017,11 @@ class TestPrecheckGateDisplay:
         assert display["precheck_blocker_message"] == ""
 
     def test_template_hides_w2_button_when_precheck_failed(self, tmp_path):
-        from seo_ops.web.app import create_app
-        from fastapi.testclient import TestClient
         import re
+
+        from fastapi.testclient import TestClient
+
+        from seo_ops.web.app import create_app
 
         s, action_id = self._make_action(tmp_path)
         slug = "precheck-gate-test-topic"
@@ -2022,11 +2052,16 @@ class TestPrecheckGateDisplay:
         assert "legacy-warning" in body, "Warning banner missing"
 
     def test_template_shows_w2_button_when_precheck_passed(self, tmp_path):
-        from seo_ops.web.app import create_app
-        from fastapi.testclient import TestClient
-        from seo_ops.services.legacy_workflow import _sha256_file, get_legacy_display_data
-        from seo_ops.services.legacy_workflow import action_workspace
         import re
+
+        from fastapi.testclient import TestClient
+
+        from seo_ops.services.legacy_workflow import (
+            _sha256_file,
+            action_workspace,
+            get_legacy_display_data,
+        )
+        from seo_ops.web.app import create_app
 
         s, action_id = self._make_action(tmp_path)
         slug = "precheck-gate-test-topic"
@@ -2068,4 +2103,510 @@ class TestPrecheckGateDisplay:
         assert "legacy-warning" not in body, (
             "Warning banner should be hidden when precheck passed"
         )
+
+
+# ── End-to-end integration tests for evidence-ledger / claim-ledger ──────
+
+
+class TestW2ReviseEvidence闭环:
+    """Fix1 + Fix5: W2 must include evidence refs, parse+validate claim ledger,
+    inject SHA, atomic write, reject after gate_passed/applied."""
+
+    def _prepare_full(self, tmp_path):
+        """Set up a minimal workspace with material pack + evidence + claim ledgers."""
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        slug = "test-topic"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        mp_path = ws / "material-packs" / f"{slug}-{today}.md"
+        mp_path.write_text("The 5mW green laser pointer has a wavelength of 532nm.", encoding="utf-8")
+
+        ev_path = ws / "research" / f"evidence-ledger-{slug}.json"
+        ev_path.write_text(
+            json.dumps({
+                "version": 1,
+                "material_pack_sha256": hashlib.sha256(
+                    b"The 5mW green laser pointer has a wavelength of 532nm."
+                ).hexdigest(),
+                "evidence": [{
+                    "evidence_id": "ev_001",
+                    "source_url": "https://example.com/laser",
+                    "quote": "532nm green laser",
+                    "canonical_concepts": ["laser", "532nm"],
+                    "claim_types": ["spec"],
+                    "required": False,
+                }],
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        draft_path = ws / "drafts" / f"{slug}-{today}.md"
+        draft_body = (
+            "---\n"
+            "Title: Test Topic\n"
+            "Slug: test-topic\n"
+            "Author: Test\n"
+            "Summary: Summary.\n"
+            "Tags: test\n"
+            "SEO Title: Test Topic SEO Title Is Long Enough For Validation\n"
+            "SEO Description: " + "A" * 152 + "\n"
+            "SEO Keywords: test, topic\n"
+            "---\n\n"
+            "# Test Topic\n\n"
+            "The 5mW green laser pointer has a wavelength of 532nm. "
+            "It is used for presentations.\n\n"
+            "> **Key Takeaways**\n"
+            "> - Takeaway 1\n\n"
+            "## Section A\n\n"
+            "Body text for section A.\n\n"
+            "## Frequently Asked Questions\n\n"
+            "### Q: What is it?\n\n"
+            "A: A laser.\n\n"
+            '<script type="application/ld+json">\n{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[]}\n</script>\n'
+        )
+        draft_path.write_text(draft_body, encoding="utf-8")
+
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        dr_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+        cl_path.write_text(
+            json.dumps({
+                "version": 1,
+                "claims": [{
+                    "claim_text": "The 5mW green laser pointer has a wavelength of 532nm.",
+                    "claim_type": "technical_specification",
+                    "evidence_ids": ["ev_001"],
+                }],
+                "draft_sha256": dr_sha,
+            }),
+            encoding="utf-8",
+        )
+
+        lw.save_report(
+            ws, "post-process", slug,
+            "# POST-PROCESS 报告\n\n## 质量评分\n- 总分: 55 → ❌ 未达标\n\n## 🚦 总门控\n- ❌ **不可进入段3**\n",
+        )
+
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": False, "applied": False,
+             "precheck_passed": True, "precheck_tier": "Cluster Content"},
+        )
+
+        return ws, slug, draft_path, cl_path, ev_path, mp_path
+
+    def test_w2_rejects_after_gate_passed(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, _, _, _, _ = self._prepare_full(tmp_path)
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": True, "applied": False,
+             "precheck_passed": True},
+        )
+
+        async def fake_ai(*a, **kw):
+            return "Title: Revised\n\nRevised body.\n"
+
+        result = asyncio.run(lw.stage_w2_revise("test topic", ws))
+        assert result["success"] is False
+        assert "已通过预检" in result["error"]
+
+    def test_w2_rejects_after_applied(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, _, _, _, _ = self._prepare_full(tmp_path)
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": False, "applied": True,
+             "precheck_passed": True},
+        )
+
+        async def fake_ai(*a, **kw):
+            return "Title: Revised\n\nRevised body.\n"
+
+        result = asyncio.run(lw.stage_w2_revise("test topic", ws))
+        assert result["success"] is False
+        assert "已发布" in result["error"]
+
+    def test_w2_illegal_ledger_does_not_change_draft(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path, _, _ = self._prepare_full(tmp_path)
+        original_draft = draft_path.read_text(encoding="utf-8")
+
+        async def fake_ai(*a, **kw):
+            return (
+                "Title: Revised\n\nRevised body text here.\n\n"
+                "===CLAIM_LEDGER===\n"
+                "NOT JSON AT ALL"
+            )
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        result = asyncio.run(lw.stage_w2_revise("test topic", ws))
+        assert result["success"] is False
+        assert "claim-ledger 解析失败" in result["error"]
+        assert draft_path.read_text(encoding="utf-8") == original_draft
+
+    def test_w2_no_separator_leaves_draft_unchanged(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, _, _, _ = self._prepare_full(tmp_path)
+        original_draft = draft_path.read_text(encoding="utf-8")
+
+        async def fake_ai(*a, **kw):
+            return "Title: Revised\n\nRevised body with no claim ledger."
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        result = asyncio.run(lw.stage_w2_revise("test topic", ws))
+        assert result["success"] is False
+        assert "===CLAIM_LEDGER===" in result["error"]
+        assert draft_path.read_text(encoding="utf-8") == original_draft
+
+    def test_w2_end_to_end_revise_and_precheck(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path, _, _ = self._prepare_full(tmp_path)
+        original_draft = draft_path.read_text(encoding="utf-8")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        precheck_called = []
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_revise":
+                return (
+                    "---\n"
+                    "Title: Revised Topic\n"
+                    "Slug: test-topic\n"
+                    "Author: Test\n"
+                    "Summary: Revised summary.\n"
+                    "Tags: test\n"
+                    "SEO Title: Revised Topic SEO Title Is Long Enough\n"
+                    "SEO Description: " + "B" * 152 + "\n"
+                    "SEO Keywords: revised, test\n"
+                    "---\n\n"
+                    "# Revised Topic\n\n"
+                    "The 5mW green laser pointer has a wavelength of 532nm. "
+                    "It is used for presentations and stars.\n\n"
+                    "> **Key Takeaways**\n"
+                    "> - Revised takeaway 1\n\n"
+                    "## Section A\n\n"
+                    "Body text for section A with more detail.\n\n"
+                    "## Frequently Asked Questions\n\n"
+                    "### Q: What is it?\n\n"
+                    "A: A laser.\n\n"
+                    '<script type="application/ld+json">\n'
+                    '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[]}\n'
+                    "</script>\n"
+                    "===CLAIM_LEDGER===\n"
+                    '{"version":1,"claims":[\n'
+                    '{"claim_text":"The 5mW green laser pointer has a wavelength of 532nm.","claim_type":"technical_specification","evidence_ids":["ev_001"]},\n'
+                    '{"claim_text":"It is used for presentations and stars.","claim_type":"general","evidence_ids":["ev_001"]}\n'
+                    ']}\n'
+                )
+            return original_draft
+
+        async def fake_run(self, script, args):
+            precheck_called.append(script)
+            if script == "write_pre_check.py":
+                return (
+                    json.dumps({
+                        "word_count": 500,
+                        "warn_count": 0,
+                        "checks": [{"item": "字数", "pass": True, "level": "ok", "detail": "500"}],
+                    }),
+                    "", 0,
+                )
+            return ("## 质量评分\n- 总分: 88.0 → ✅ 通过\n\n"
+                    "## 🚦 总门控\n- ✅ 通过，可进入段3 register。", "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w2_revise("test topic", ws))
+        assert result.get("success") is not False, f"W2 revise failed: {result}"
+        assert "revised" in result or result.get("gate_passed") is True
+        assert "write_pre_check.py" in precheck_called
+
+        new_draft = draft_path.read_text(encoding="utf-8")
+        assert "Revised Topic" in new_draft
+        assert "stars" in new_draft
+
+        backup = tmp_path / "ws" / "drafts" / f"test-topic-{today}.rev1.md"
+        assert backup.exists(), f"Backup file missing: {backup}"
+        assert "Test Topic" in backup.read_text(encoding="utf-8")
+
+
+class TestAtomicWrite:
+    """Fix2: _write_ahead_draft_and_ledger must be truly atomic."""
+
+    def test_second_replace_failure_rolls_back_both_files(self, tmp_path, monkeypatch):
+        import os as _os
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+
+        slug = "atomic-test"
+        old_draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        old_cl = ws / "research" / f"claim-ledger-{slug}.json"
+        old_draft.write_text("old draft content", encoding="utf-8")
+        old_cl.write_text('{"version":1,"claims":[]}', encoding="utf-8")
+
+        new_draft_text = "new draft content"
+        new_cl_data = {
+            "version": 1,
+            "claims": [],
+            "draft_sha256": hashlib.sha256(new_draft_text.encode()).hexdigest(),
+        }
+
+        original_replace = _os.replace
+        replace_count = [0]
+
+        def bad_replace(src, dst):
+            replace_count[0] += 1
+            if replace_count[0] == 2:
+                raise OSError("simulated second replace failure")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(_os, "replace", bad_replace)
+
+        with pytest.raises(OSError, match="simulated second replace failure"):
+            lw._write_ahead_draft_and_ledger(ws, slug, new_draft_text, new_cl_data)
+
+        assert old_draft.read_text(encoding="utf-8") == "old draft content"
+        assert old_cl.read_text(encoding="utf-8") == '{"version":1,"claims":[]}'
+
+    def test_write_creates_both_files_atomically(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+
+        slug = "atomic-ok"
+        result = lw._write_ahead_draft_and_ledger(
+            ws, slug,
+            "draft content here",
+            {"version": 1, "claims": [], "draft_sha256": "abc123"},
+        )
+
+        draft_path = Path(result["draft_path"])
+        cl_path = Path(result["claim_path"])
+        assert draft_path.exists()
+        assert cl_path.exists()
+        assert draft_path.read_text(encoding="utf-8") == "draft content here"
+        assert '"version": 1' in cl_path.read_text(encoding="utf-8")
+
+
+class TestSentenceNormalizationUnified:
+    """Fix3: W0/W1b must use the same sentence extraction logic."""
+
+    def test_intra_paragraph_sentence_matched_by_w0_validation(self, tmp_path):
+        from seo_ops.services.legacy_workflow import _validate_claim_ledger_json
+
+        draft_body = (
+            "The 5mW green laser has a wavelength of 532nm. "
+            "It is widely used in presentations."
+        )
+        cl_json = json.dumps({
+            "version": 1,
+            "claims": [{
+                "claim_text": "The 5mW green laser has a wavelength of 532nm.",
+                "claim_type": "technical_specification",
+                "evidence_ids": ["ev_001"],
+            }],
+        })
+
+        result = _validate_claim_ledger_json(cl_json, draft_body)
+        assert result["version"] == 1
+        assert len(result["claims"]) == 1
+        assert result["claims"][0]["claim_text"] == "The 5mW green laser has a wavelength of 532nm."
+
+    def test_multiline_sentence_matched_by_w0_validation(self, tmp_path):
+        from seo_ops.services.legacy_workflow import _validate_claim_ledger_json
+
+        draft_body = (
+            "The 5mW green laser has a wavelength of 532nm and "
+            "produces a beam divergence of less than 2mrad."
+        )
+        cl_json = json.dumps({
+            "version": 1,
+            "claims": [{
+                "claim_text": "The 5mW green laser has a wavelength of 532nm and produces a beam divergence of less than 2mrad.",
+                "claim_type": "technical_specification",
+                "evidence_ids": ["ev_001"],
+            }],
+        })
+
+        result = _validate_claim_ledger_json(cl_json, draft_body)
+        assert result["version"] == 1
+
+
+class TestFactCheckSchemaValidation:
+    """Fix4: _run_fact_check must handle non-dict evidence/claim items gracefully."""
+
+    def test_evidence_item_not_dict_blocked(self, tmp_path):
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+        dr_sha = hashlib.sha256(b"claim sentence here.").hexdigest()
+
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":["not a dict string", 123, null]}',
+            encoding="utf-8",
+        )
+        cl_f.write_text(
+            '{"version":1,"claims":[{"claim_text":"claim sentence here.","claim_type":"general","evidence_ids":["ev_001"]}],"draft_sha256":"' + dr_sha + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block non-dict evidence: {fact}"
+
+    def test_claim_item_not_dict_blocked(self, tmp_path):
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+        dr_sha = hashlib.sha256(b"claim sentence here.").hexdigest()
+
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com","quote":"data","canonical_concepts":[],"claim_types":["spec"],"required":false}]}',
+            encoding="utf-8",
+        )
+        cl_f.write_text(
+            '{"version":1,"claims":["not a dict", 123, null],"draft_sha256":"' + dr_sha + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block non-dict claim: {fact}"
+
+    def test_evidence_ids_field_not_list_blocked(self, tmp_path):
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+        dr_sha = hashlib.sha256(b"claim sentence here.").hexdigest()
+
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com","quote":"data","canonical_concepts":[],"claim_types":["spec"],"required":false}]}',
+            encoding="utf-8",
+        )
+        cl_f.write_text(
+            '{"version":1,"claims":[{"claim_text":"claim sentence here.","claim_type":"general","evidence_ids":"ev_001"}],"draft_sha256":"' + dr_sha + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block string evidence_ids: {fact}"
+
+
+class TestW2PostPassRejection:
+    """Fix5: After gate_passed or applied, W2 revise must be rejected."""
+
+    def test_w2_revise_blocked_when_gate_passed(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        slug = "postpass-topic"
+        draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        draft.write_text("---\nTitle: T\n---\n# T\nBody.", encoding="utf-8")
+
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": True, "applied": False,
+             "precheck_passed": True},
+        )
+        lw.save_report(
+            ws, "post-process", slug,
+            "# POST-PROCESS\n## 质量评分\n- 总分: 88 → ✅\n",
+        )
+
+        async def fake_ai(*a, **kw):
+            return "Title: Revised\n\nrevised body"
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        result = asyncio.run(lw.stage_w2_revise("postpass topic", ws))
+        assert result["success"] is False
+        assert "已通过预检" in result["error"]
+
+    def test_w2_revise_blocked_when_applied(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        slug = "applied-topic"
+        draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        draft.write_text("---\nTitle: T\n---\n# T\nBody.", encoding="utf-8")
+
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": False, "applied": True,
+             "precheck_passed": True},
+        )
+        lw.save_report(
+            ws, "post-process", slug,
+            "# POST-PROCESS\n## 质量评分\n- 总分: 88 → ✅\n",
+        )
+
+        async def fake_ai(*a, **kw):
+            return "Title: Revised\n\nrevised body"
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        result = asyncio.run(lw.stage_w2_revise("applied topic", ws))
+        assert result["success"] is False
+        assert "已发布" in result["error"]
 

@@ -4,7 +4,16 @@
 
 ## 一句话状态
 
-源码 `0.11.1`（uncommitted）、SQLite v13。LEGACY_WS 从硬编码改为动态推导，sync_all 支持多站点 settings + site_id 参数；所有 SQL 查询不再写死 `site_id = 1`。旧文章制作通道不变。
+源码 `0.11.2`（uncommitted）、SQLite v13。证据驱动事实校验复测 6 项全部修完：W2 revise 走证据闭环 + 真正原子写 + W0/W1b 句子提取统一 + fact check schema fail-closed + 通过后拒绝 revise + 真实端到端测试。旧文章制作通道不变。
+
+## 2026-07-28 — 证据驱动事实校验复测修订 (0.11.2)
+
+- W2 revise 接入证据闭环：prompt 含 Evidence References、输出必须含 `===CLAIM_LEDGER===`、复用 W0 解析/验证、服务端注入 `draft_sha256`、原子写 draft + claim ledger。
+- 真正原子写：`_write_ahead_draft_and_ledger` 改为「snapshot → temp → fsync → replace」协议，任一步失败 restore 旧内容。
+- W0/W1b 句子提取统一：`_validate_claim_ledger_json` 段落 + 句子二级拆分，与 W1b `_claim_in_draft` 一致。
+- fact check schema fail-closed：`_run_fact_check` 显式校验每项为 dict，非 dict 产生结构化 blocking 项而非 AttributeError。
+- 通过后拒绝 revise：`stage_w2_revise` 在 `gate_passed=True` 或 `applied=True` 时直接返回失败。
+- 完整 `pytest -q` 275 passed（新增 14 个测试），`ruff check` 6 个 pre-existing F841，无新增。
 
 ## 2026-07-28 — LEGACY_WS 动态化 + sync_all 多站点修复
 

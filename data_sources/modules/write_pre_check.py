@@ -551,27 +551,41 @@ def _run_fact_check(
         return
 
     # 5. Build evidence index and check for ID collisions.
+    blocking_items: list[str] = []
     ev_map: dict[str, dict] = {}
     seen_ids: set[str] = set()
-    for ev in evidence_list:
-        eid = ev.get("evidence_id", "")
+    for idx, ev in enumerate(evidence_list):
+        if not isinstance(ev, dict):
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] 不是 dict，而是 {type(ev).__name__}"
+            )
+            continue
+        eid = (ev.get("evidence_id") or "").strip() if isinstance(ev, dict) else ""
         if not eid:
             continue
         if eid in seen_ids:
-            grade_detail("fail", "事实校验",
-                         f"evidence-ledger 含重复 evidence_id={eid}")
-            return
+            blocking_items.append(
+                f"  • [blocking] evidence-ledger 含重复 evidence_id={eid}"
+            )
+            continue
         seen_ids.add(eid)
         ev_map[eid] = ev
 
     # 6. Validate each claim.
-    blocking_items: list[str] = []
     for idx, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            blocking_items.append(
+                f"  • [blocking] claims[{idx}] 不是 dict，而是 {type(claim).__name__}"
+            )
+            continue
         ct = (claim.get("claim_text") or "").strip()
         ctype = (claim.get("claim_type") or "").strip()
-        eids = claim.get("evidence_ids", [])
+        eids = claim.get("evidence_ids")
         if not isinstance(eids, list):
-            eids = []
+            blocking_items.append(
+                f"  • [blocking] claims[{idx}].evidence_ids 不是 list，而是 {type(eids).__name__}"
+            )
+            continue
 
         if not ct:
             blocking_items.append(f"  • [blocking] claims[{idx}].claim_text 为空")
@@ -624,7 +638,11 @@ def _run_fact_check(
 
     # 7. Extract factual sentences from draft and check coverage.
     extracted = _extract_factual_sentences(draft_body)
-    claimed_texts = {_normalize(c.get("claim_text", "")) for c in claims if c.get("claim_text")}
+    claimed_texts = {
+        _normalize(c.get("claim_text", ""))
+        for c in claims
+        if isinstance(c, dict) and c.get("claim_text")
+    }
     for cand in extracted:
         norm = _normalize(cand["sentence"])
         if norm and norm not in claimed_texts:

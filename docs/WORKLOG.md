@@ -1,5 +1,26 @@
 # 工作日志
 
+## 2026-07-28 — 证据驱动事实校验复测修订 (6 项必修)
+
+### 背景
+验收复测发现 6 处必修漏洞：W2 revise 未走证据闭环（不解析 claim ledger、不注入 SHA、不原子写）；`_write_ahead_draft_and_ledger` 第二次 replace 失败会留 NEW DRAFT + OLD LEDGER；W0/W1b 句子提取不一致；`_run_fact_check` 非 dict 元素会抛 AttributeError；通过预检/已发布后仍可 revise；缺少真正端到端测试。
+
+### 完成
+- **Fix1 W2 revise 走证据闭环**：`stage_w2_revise` prompt 加入 `Evidence References` 段；AI 输出必须含 `===CLAIM_LEDGER===`；复用 `_validate_claim_ledger_json`；服务端注入 `draft_sha256`；原子写 draft + claim ledger；非法输出不修改 draft/ledger/state。备份写在前以免 `_latest_file` 错拿。
+- **Fix2 真正原子写**：`_write_ahead_draft_and_ledger` 改为「snapshot 旧内容 → 写 temp → fsync → replace」协议；任一步失败 restore 旧 draft 和旧 ledger。新增故障注入测试 `test_second_replace_failure_rolls_back_both_files`。
+- **Fix3 W0/W1b 句子提取统一**：`_validate_claim_ledger_json` 改为段落 + 句子二级拆分，与 W1b `_claim_in_draft` 行为对齐。段落内部的完整句可被 W0/W1b 一致接受，不再允许子串匹配。
+- **Fix4 fact check schema fail-closed**：`_run_fact_check` 对 evidence / claims 每项显式校验 `isinstance(item, dict)`；`evidence_ids` 必须为 list；非 dict 元素产生结构化 blocking 项而非 AttributeError；`blocking_items` 移至 evidence 循环前以正确初始化。
+- **Fix5 通过后拒绝 revise**：`stage_w2_revise` 顶部新增 `gate_passed` / `applied` 检查；任一为真直接返回 `success=False, error="草稿已通过预检或已发布，不得再修订"`。
+- **Fix6 端到端 + 注入测试**：新增 5 个测试类共 14 个测试覆盖 W2 拒绝（gate_passed / applied）、非法 ledger 不改文件、原子写 rollback、段落内句子、非法 evidence / claim 对象、W0→W1b→W2→W1b 真实流程。同步更新两处旧 W2 测试使用新的 claim ledger 协议。
+
+### 验证
+- `pytest tests/ -q`：275 passed
+- `ruff check src/seo_ops/services/legacy_workflow.py data_sources/modules/write_pre_check.py tests/test_legacy_workflow.py`：6 个 pre-existing F841，无新增
+
+### 未完成 / 遗留
+- 未在 action-2 生产数据上验证（按要求）
+- W2 revise 备份路径使用原 draft 后缀；与 `_today_str()` 自动滚动后可能错位，需在 UI 提示
+
 ## 2026-07-21 — Legacy Research + Write 1:1 复原首次实施
 
 ### 背景
