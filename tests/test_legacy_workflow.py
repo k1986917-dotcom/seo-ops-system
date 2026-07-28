@@ -1138,19 +1138,19 @@ class TestSearchPrompt:
 
 
 class TestLegacySync:
-    def test_sync_all_returns_expected_keys(self, tmp_path):
+    def test_sync_all_returns_expected_keys(self, tmp_path, settings):
         from seo_ops.services.legacy_sync import sync_all
 
-        report = sync_all(tmp_path)
+        report = sync_all(tmp_path, settings=settings, site_id=1)
         assert "published_index" in report
         assert "published_articles" in report
         assert "products" in report
         assert "internal_links_map" in report
         assert "seo_data_manual" in report
 
-    def test_published_index_valid_json(self, tmp_path):
+    def test_published_index_valid_json(self, tmp_path, settings):
         from seo_ops.services.legacy_sync import sync_all
-        sync_all(tmp_path)
+        sync_all(tmp_path, settings=settings, site_id=1)
         idx_path = tmp_path / "published" / "published-index.json"
         assert idx_path.exists()
         data = json.loads(idx_path.read_text(encoding="utf-8"))
@@ -1162,26 +1162,26 @@ class TestLegacySync:
             assert "tags" in entry
             assert "url" in entry
 
-    def test_products_table_generated(self, tmp_path):
+    def test_products_table_generated(self, tmp_path, settings):
         from seo_ops.services.legacy_sync import sync_all
-        sync_all(tmp_path)
+        sync_all(tmp_path, settings=settings, site_id=1)
         prod_path = tmp_path / "products" / "live_products_report.md"
         assert prod_path.exists()
         text = prod_path.read_text(encoding="utf-8")
         assert "Live Products Report" in text
 
-    def test_ilm_generated(self, tmp_path):
+    def test_ilm_generated(self, tmp_path, settings):
         from seo_ops.services.legacy_sync import sync_all
-        sync_all(tmp_path)
+        sync_all(tmp_path, settings=settings, site_id=1)
         ilm_path = tmp_path / "context" / "internal-links-map.md"
         assert ilm_path.exists()
         text = ilm_path.read_text(encoding="utf-8")
         assert "Internal Links Map" in text
         assert "已发布文章" in text
 
-    def test_seo_manual_generated(self, tmp_path):
+    def test_seo_manual_generated(self, tmp_path, settings):
         from seo_ops.services.legacy_sync import sync_all
-        sync_all(tmp_path)
+        sync_all(tmp_path, settings=settings, site_id=1)
         manual_path = tmp_path / "context" / "seo-data-manual.md"
         assert manual_path.exists()
         text = manual_path.read_text(encoding="utf-8")
