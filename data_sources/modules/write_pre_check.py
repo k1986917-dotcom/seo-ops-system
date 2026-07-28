@@ -110,29 +110,33 @@ def words_before_n(text: str, n: int) -> str:
 
 # ── material-pack entity coverage helpers (check 13) ────────────────────
 #
-# Pre-check only flags entities that BOTH have material-pack evidence AND
-# are reasonably tied to the article's primary intent. There is no fixed
-# entity list (target-keywords.md is no longer consulted) and no fixed
-# coverage threshold. Each missing entity the check reports must include:
-#   - entity  (string)
-#   - intent_relevance  (core | supporting | unrelated)
-#   - evidence  (Source URL or quote fragment from the material pack)
-#   - severity  (blocking if core, warning if supporting)
+# Material pack entries are research support material, NOT a required-
+# coverage checklist. Each entry carries a Source URL (evidence). The
+# check only flags entries that BOTH have evidence AND are reasonably
+# related to the article.
 #
-# An entity with no evidence is NEVER listed as missing — the check would
-# otherwise beguile the writer into fabricating facts.
+# Severity rules:
+#   [search] / [library] — never blocking; warning if missing + evidence
+#   [required] — blocking only if ALL four conditions met:
+#     1. has evidence URL
+#     2. has Quote or Key finding text
+#     3. intent_relevance = supporting (i.e. related to article)
+#     4. tagged as [required] in the pack
+#
+# No evidence → never in missing list. Generic word overlap (laser/
+# pointer/construction) is supporting, NOT core — it does not make an
+# entity automatically required. Intent_relevance is binary: supporting
+# (related) or unrelated (skip).
 
-# Domain-glue words that signal "supporting" rather than "core" relation-
-# ship. Sharing one of these is supporting; sharing a non-glue primary
-# intent token is core; otherwise unrelated. Kept narrow on purpose: only
-# words that describe the article *form* (review/guide) and trivial
-# article-task verbs go here. The subject nouns (laser/pointer/beam)
-# stay in primary intent so a sub-topic that uses them is still scored
-# as "supporting" (since they're central) rather than "unrelated".
-_DOMAIN_GLUE_WORDS = {
+# Words that describe article *form* (review/guide) and trivial article-
+# task verbs. These don't make an entity "related" — they're ignored
+# in token matching. Subject words like "laser"/"pointer"/"construction"
+# are also too generic to single-handedly make something required.
+_DOMAIN_STOP_WORDS = {
     "review", "guide", "best", "buy", "comparison", "use", "using",
     "how", "what", "why", "tips", "tip", "top", "vs",
     "price", "cheap", "expensive",
+    "just", "need", "look", "way", "time",
 }
 
 
@@ -143,16 +147,29 @@ def _tokenize(s: str) -> list[str]:
     ]
 
 
-def _primary_intent_tokens(
-    title: str,
-    h1: str,
-    keywords: list[str],
-) -> list[str]:
-    """Tokens that represent the article's primary search intent.
+def _entity_supporting(entity_text: str, article_intent_words: list[str]) -> bool:
+    """True if the entity shares at least one meaningful word with the
+    article's intent, beyond generic stopwords.
 
-    Combine frontmatter Title, the body H1, and the SEO Keywords. Stopwords
-    and tiny tokens are dropped. Used to classify entity intent_relevance.
+    Returns False (unrelated) when the entity is clearly about a
+    different domain — telescope stargazing for a construction laser
+    pointer article.
     """
+    if not entity_text or not article_intent_words:
+        return False
+    entity_tokens = _tokenize(entity_text)
+    if not entity_tokens:
+        return False
+    entity_lower = entity_text.lower()
+    for intent_word in article_intent_words:
+        if intent_word in entity_lower or intent_word in entity_tokens:
+            return True
+    return False
+
+
+def _intent_words(title: str, h1: str, keywords: list[str]) -> list[str]:
+    """Extract meaningful tokens from the article's title+H1+keywords,
+    dropping meaningless stopwords so they don't match everything."""
     parts: list[str] = []
     if title:
         parts.append(title)
@@ -164,50 +181,18 @@ def _primary_intent_tokens(
     seen: set[str] = set()
     out: list[str] = []
     for t in tokens:
-        if t not in seen and t not in _DOMAIN_GLUE_WORDS:
+        if t not in seen and t not in _DOMAIN_STOP_WORDS:
             seen.add(t)
             out.append(t)
     return out
-
-
-def classify_intent_relevance(
-    entity_text: str,
-    primary_tokens: list[str],
-) -> str:
-    """Return 'core' / 'supporting' / 'unrelated' for a candidate entity.
-
-    Rules:
-      - 'core' if any non-glue token of the entity matches any primary
-        intent token (or vice versa, case-insensitive substring on the
-        original text).
-      - 'supporting' if the entity and intent share at least one domain
-        glue word (laser / pointer / safety / spec / etc.).
-      - 'unrelated' otherwise.
-    """
-    if not entity_text or not primary_tokens:
-        return "unrelated"
-    entity_tokens = _tokenize(entity_text)
-    if not entity_tokens:
-        return "unrelated"
-    entity_lower = entity_text.lower()
-    for pt in primary_tokens:
-        if pt in entity_lower or any(pt == et for et in entity_tokens):
-            return "core"
-    for et in entity_tokens:
-        if et in _DOMAIN_GLUE_WORDS:
-            return "supporting"
-    for pt in primary_tokens:
-        if pt in _DOMAIN_GLUE_WORDS:
-            return "supporting"
-    return "unrelated"
 
 
 # Material-pack entry line patterns. Sub-entry lines are indented by
 # 2 spaces in the canonical pack layout, so we accept any leading
 # whitespace.
 _PACK_ENTRY_RE = re.compile(
-    r'^\s*-\s*\*\*\[(?P<tag>search|library)(?:\s+(?P<tag_section>[A-Z]))?\]\s*'
-    r'(?P<title>[^*]+?)\*\*\s*$'
+    r'^\s*-\s*\*\*\[(?P<tag>required|search|library)(?:\s+(?P<tag_section>[A-Z]))?\]\s*'
+    r'(?P<title>[^*]+?)\*\*'
 )
 _PACK_SOURCE_RE = re.compile(r'^\s*-\s*Source:\s*(?P<url>.+?)\s*$')
 _PACK_KEYFINDING_RE = re.compile(r'^\s*-\s*Key finding:\s*(?P<text>.+?)\s*$')
@@ -306,28 +291,25 @@ def _entity_present(entity: str, text_lower: str) -> bool:
 
 def check_pack_entity_coverage(
     draft_text_lower: str,
-    primary_tokens: list[str],
+    article_intent_words: list[str],
     pack_entities: list[dict[str, str]],
 ) -> dict[str, object]:
-    """Compare the draft to material-pack entities and return the missing
+    """Compare the draft to material-pack entries and return the missing
     list plus an aggregate pass/fail verdict.
 
-    Verdict rules:
-      - ok: no missing entities, or all missing have intent_relevance='unrelated'
-      - warn: at least one supporting missing, no core missing
-      - fail: at least one core missing (i.e. the article omitted a
-              directly-relevant term that the material pack has evidence for)
-    Only entries with non-empty `evidence` are considered. Entries with
-    no Source line are NEVER in the missing list.
+    Verdict rules (severity):
+      - [search]/[library]: always warning (never blocking) if related + evidence
+      - [required]: blocking only if ALL FOUR conditions met:
+        1. has non-empty evidence URL
+        2. has a Quote or Key finding text
+        3. tag is ``required``
+        4. entity is related to article intent (not unrelated)
+      - unrelated entities: never in missing list
+      - no evidence: never in missing list
     """
     missing: list[dict[str, str]] = []
     if not pack_entities:
-        return {
-            "level": "ok",
-            "missing": missing,
-            "matched": [],
-            "skipped_unsourced": 0,
-        }
+        return {"level": "ok", "missing": missing, "matched": [], "skipped_unsourced": 0}
     matched: list[str] = []
     skipped_unsourced = 0
     for ent in pack_entities:
@@ -337,16 +319,20 @@ def check_pack_entity_coverage(
         if _entity_present(ent["entity"], draft_text_lower):
             matched.append(ent["entity"])
             continue
-        relevance = classify_intent_relevance(ent["entity"], primary_tokens)
-        if relevance == "unrelated":
+        if not _entity_supporting(ent["entity"], article_intent_words):
             continue
-        severity = "blocking" if relevance == "core" else "warning"
+        tag = ent.get("source_tag", "search")
+        has_required_text = bool(ent.get("source_quote") or ent.get("source_key_finding"))
+        if tag == "required" and has_required_text:
+            severity = "blocking"
+        else:
+            severity = "warning"
         missing.append({
             "entity": ent["entity"],
-            "intent_relevance": relevance,
+            "intent_relevance": "supporting",
             "evidence": ent.get("evidence", ""),
             "severity": severity,
-            "source_tag": ent.get("source_tag", ""),
+            "source_tag": tag,
             "source_section": ent.get("source_section", ""),
             "source_quote": ent.get("source_quote", ""),
             "source_key_finding": ent.get("source_key_finding", ""),
@@ -507,14 +493,12 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '') -> dict:
     pack_path = Path(pack) if pack else None
     pack_entities = parse_pack_entities(pack_path) if pack_path else []
     primary_h1 = h1.group(1).strip() if h1 else ''
-    primary_tokens = _primary_intent_tokens(
-        meta.get('title', ''),
-        primary_h1,
-        kws,
+    article_intent_words = _intent_words(
+        meta.get('title', ''), primary_h1, kws,
     )
     cov = check_pack_entity_coverage(
         prose.lower(),
-        primary_tokens,
+        article_intent_words,
         pack_entities,
     )
     if not pack:
