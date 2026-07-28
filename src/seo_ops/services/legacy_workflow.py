@@ -1349,7 +1349,7 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     # insert the missing closing `---` so the pre-check parser sees the
     # SEO Title / Description fields. This does NOT alter the post-W1b
     # gate; the pre-check still runs against the now-well-formed draft.
-    repair = repair_draft_frontmatter(workspace, slug)
+    repair_draft_frontmatter(workspace, slug)
 
     # Re-running pre-check invalidates everything from W2 onward so a stale
     # gate_passed/applied verdict cannot survive a re-run on the same draft.
@@ -1361,6 +1361,15 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     keywords = _primary_keywords(draft)
     if keywords:
         args += ["--keywords", keywords]
+
+    # Pass the material pack so the entity-coverage check can use the
+    # pack's [search]/[library] entries (with their Source evidence) as
+    # the candidate entity list. Without --pack the check skips coverage
+    # and only warns.
+    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
+    if mp:
+        args += ["--pack", str(mp)]
+
     args.append("--json")
 
     stdout, stderr, rc = await runner.run("write_pre_check.py", args)
@@ -1455,7 +1464,6 @@ async def stage_w1b_revise(
     Frontmatter self-heal runs before AI so the AI sees a well-formed
     draft and the re-run W1b sees the SEO Title/Description fields.
     """
-    runner = LegacyRunner(workspace)
     slug = _slugify(topic)
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:

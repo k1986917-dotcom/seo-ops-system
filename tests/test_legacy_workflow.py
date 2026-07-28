@@ -601,6 +601,369 @@ class TestStructuredPreCheck:
         assert "boom" in result["error"]
 
 
+class TestMaterialPackEntityCoverage:
+    """W1b entity-coverage check is now material-pack driven, not target-
+    keywords.md driven. Every reported missing entity must include:
+      - entity
+      - intent_relevance (core | supporting | unrelated)
+      - evidence (material pack Source URL)
+      - severity (blocking | warning)
+    Entities with no Source line are NEVER in the missing list."""
+
+    def _pack(self, tmp_path, body: str) -> Path:
+        p = tmp_path / "material-pack.md"
+        _write(p, body)
+        return p
+
+    def test_parse_pack_extracts_entries_with_source(self, tmp_path):
+        from data_sources.modules.write_pre_check import parse_pack_entities
+
+        pack = self._pack(tmp_path, """\
+# 写作素材包
+
+### A. 用户痛点 (≥3)
+
+- **[search] Laser pointer button gets pressed accidentally**
+  - Source: https://reddit.com/r/flashlight/comments/abc
+  - Quote: "my pouch, but I have a problem with the button"
+
+- **[search A] Electrician needs surgical dot for ceiling work**
+  - Source: https://reddit.com/r/laserpointerforums
+  - Summary: 5mW green beam, tight divergence
+
+- **[library E] FDA Import Alert 89-01**
+  - Source: https://www.fda.gov/radiation-emitting-products/laser-pointer
+  - Key finding: Class 3R ≤5mW for pointing
+""")
+        ents = parse_pack_entities(pack)
+        assert len(ents) == 3
+        assert ents[0]["entity"] == "Laser pointer button gets pressed accidentally"
+        assert ents[0]["source_tag"] == "search"
+        assert ents[0]["source_quote"].startswith("my pouch")
+        assert ents[1]["source_section"] == "A"
+        assert ents[2]["source_tag"] == "library"
+        assert ents[2]["source_key_finding"].startswith("Class 3R")
+
+    def test_unsourced_entries_are_kept_but_marked(self, tmp_path):
+        from data_sources.modules.write_pre_check import parse_pack_entities
+
+        pack = self._pack(tmp_path, """\
+### A. 用户痛点
+
+- **[search] No source line here**
+""")
+        ents = parse_pack_entities(pack)
+        assert len(ents) == 1
+        assert ents[0]["entity"] == "No source line here"
+        assert ents[0]["evidence"] == ""  # empty, will be skipped by check
+
+    def test_classify_intent_core_when_entity_token_in_title(self):
+        from data_sources.modules.write_pre_check import (
+            classify_intent_relevance,
+            _primary_intent_tokens,
+        )
+        primary = _primary_intent_tokens(
+            "Laser Pointer for Pointing Above Ceilings in Commercial Construction",
+            "# Laser Pointer for Pointing Above Ceilings in Commercial Construction",
+            ["commercial construction laser pointer"],
+        )
+        # "construction" is a non-glue primary token
+        assert "construction" in primary
+        # An entity containing "construction" is core
+        assert classify_intent_relevance("Construction electrician", primary) == "core"
+        # An entity containing "ceilings" (from the title) is core
+        assert classify_intent_relevance("Drop ceilings above junction", primary) == "core"
+        # An entity that has no shared token with the title is unrelated
+        assert classify_intent_relevance("Stargazing telescope adapter", primary) == "unrelated"
+
+    def test_classify_intent_supporting_for_glue_word_only(self):
+        from data_sources.modules.write_pre_check import (
+            classify_intent_relevance,
+            _primary_intent_tokens,
+        )
+        primary = _primary_intent_tokens(
+            "Best Laser Pointers — 2026 Buyer's Guide",
+            "# Best Laser Pointers — 2026 Buyer's Guide",
+            ["best laser pointers", "buy guide"],
+        )
+        # The entity "How to choose vs what to read" shares only
+        # article-form glue (how/vs/what) with the primary intent —
+        # it does not mention the actual subject. → supporting, not
+        # core, not unrelated.
+        assert classify_intent_relevance(
+            "How to choose vs what to read", primary
+        ) == "supporting"
+
+    def test_classify_intent_unrelated_when_no_overlap(self):
+        from data_sources.modules.write_pre_check import (
+            classify_intent_relevance,
+            _primary_intent_tokens,
+        )
+        primary = _primary_intent_tokens(
+            "Laser Pointer for Pointing Above Ceilings in Commercial Construction",
+            "# Laser Pointer for Pointing Above Ceilings in Commercial Construction",
+            ["commercial construction laser pointer"],
+        )
+        # Stargazing/telescope is unrelated to construction.
+        assert classify_intent_relevance(
+            "Stargazing with telescope",
+            primary,
+        ) == "unrelated"
+
+    def test_check_core_missing_is_blocking(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage,
+            _primary_intent_tokens,
+            parse_pack_entities,
+        )
+        pack = self._pack(tmp_path, """\
+- **[search] Construction electrician pointing at junction box**
+  - Source: https://example.com/a
+- **[search] Buying tips vs what to look for**
+  - Source: https://example.com/b
+""")
+        ents = parse_pack_entities(pack)
+        primary = _primary_intent_tokens(
+            "Commercial Construction Laser Pointer",
+            "# Commercial Construction Laser Pointer",
+            ["construction laser pointer"],
+        )
+        # Draft doesn't mention either entity
+        result = check_pack_entity_coverage(
+            "Some prose about lasers with no specific terms.", primary, ents
+        )
+        assert result["level"] == "fail"  # at least one core missing
+        # First entity is core (matches "construction"); second is
+        # supporting (shares "buying/tips/vs/what" glue with article).
+        core = [m for m in result["missing"] if m["intent_relevance"] == "core"]
+        supp = [m for m in result["missing"] if m["intent_relevance"] == "supporting"]
+        assert len(core) == 1
+        assert len(supp) == 1
+        assert core[0]["severity"] == "blocking"
+        assert supp[0]["severity"] == "warning"
+        # Each missing item carries evidence + source_tag
+        for m in result["missing"]:
+            assert m["evidence"] != ""
+            assert m["source_tag"] in ("search", "library")
+
+    def test_check_supporting_only_missing_is_warning_not_fail(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage,
+            _primary_intent_tokens,
+            parse_pack_entities,
+        )
+        pack = self._pack(tmp_path, """\
+- **[search] Top reviews comparison guide**
+  - Source: https://example.com/a
+- **[search] Buying tips vs what to look for**
+  - Source: https://example.com/b
+""")
+        ents = parse_pack_entities(pack)
+        primary = _primary_intent_tokens(
+            "Commercial Construction Laser Pointer",
+            "# Commercial Construction Laser Pointer",
+            ["construction laser pointer"],
+        )
+        # Both entities share only article-form glue words (top/buy/
+        # tips/vs/what) with the primary intent. No core missing → level
+        # is warn, not fail.
+        result = check_pack_entity_coverage(
+            "Prose about construction pointing.",
+            primary, ents,
+        )
+        assert result["level"] == "warn"
+        assert all(m["severity"] == "warning" for m in result["missing"])
+
+    def test_check_unrelated_entity_never_appears_in_missing(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage,
+            _primary_intent_tokens,
+            parse_pack_entities,
+        )
+        pack = self._pack(tmp_path, """\
+- **[search] Telescope stargazing visibility**
+  - Source: https://example.com/astro
+""")
+        ents = parse_pack_entities(pack)
+        primary = _primary_intent_tokens(
+            "Commercial Construction Laser Pointer",
+            "# Commercial Construction Laser Pointer",
+            ["construction laser pointer"],
+        )
+        result = check_pack_entity_coverage(
+            "Prose about construction.", primary, ents,
+        )
+        # Even though the entity is missing from the draft, it's
+        # unrelated to the topic, so it must NOT be in the missing list.
+        assert result["missing"] == []
+        assert result["level"] == "ok"
+
+    def test_check_no_pack_returns_ok_and_skips(self):
+        from data_sources.modules.write_pre_check import check_pack_entity_coverage
+
+        result = check_pack_entity_coverage("any prose", [], [])
+        assert result["level"] == "ok"
+        assert result["missing"] == []
+        assert result["skipped_unsourced"] == 0
+
+    def test_check_unsourced_entity_never_appears_in_missing(self, tmp_path):
+        """Entities without a Source line must NOT be in the missing list.
+
+        Hard rule: no evidence, no inclusion. The check must never tell
+        the writer to fabricate content for an unsourced entry.
+        """
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage,
+            _primary_intent_tokens,
+            parse_pack_entities,
+        )
+        pack = self._pack(tmp_path, """\
+- **[search] Nd:YAG laser physics**
+- **[search] Construction electrician pointing at junction box**
+  - Source: https://example.com/c
+""")
+        ents = parse_pack_entities(pack)
+        primary = _primary_intent_tokens(
+            "Commercial Construction Laser Pointer",
+            "# Commercial Construction Laser Pointer",
+            ["construction laser pointer"],
+        )
+        result = check_pack_entity_coverage(
+            "Prose about construction pointing.",
+            primary, ents,
+        )
+        # Only the entity with source evidence can appear in missing.
+        missing_entities = [m["entity"] for m in result["missing"]]
+        assert "Nd:YAG laser physics" not in missing_entities
+        # The "skipped_unsourced" counter records that we saw but ignored it.
+        assert result["skipped_unsourced"] >= 1
+
+    def test_check_present_entity_not_in_missing(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage,
+            _primary_intent_tokens,
+            parse_pack_entities,
+        )
+        pack = self._pack(tmp_path, """\
+- **[search] Construction electrician pointing at junction box**
+  - Source: https://example.com/c
+""")
+        ents = parse_pack_entities(pack)
+        primary = _primary_intent_tokens(
+            "Commercial Construction Laser Pointer",
+            "# Commercial Construction Laser Pointer",
+            ["construction laser pointer"],
+        )
+        # Draft already mentions "construction" and "junction box".
+        result = check_pack_entity_coverage(
+            "A construction electrician pointing at a junction box above the ceiling.",
+            primary, ents,
+        )
+        # Matched, not missing.
+        assert result["missing"] == []
+        assert any("junction" in m.lower() for m in result["matched"])
+        assert result["level"] == "ok"
+
+    def test_check_old_target_keywords_md_no_longer_consulted(self, tmp_path):
+        """Regression: verify the old target-keywords.md fixed-entity
+        list no longer drives the check. Even if the file has a giant
+        list of cluster entities, only material-pack entries with
+        source evidence are reported."""
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage,
+            _primary_intent_tokens,
+        )
+        # Create a fake target-keywords.md under the project layout the
+        # old code used to scan. New code must NOT touch it.
+        target = tmp_path / "laserpointerhub" / "context" / "target-keywords.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "## Topic Cluster 1: Foo\n"
+            "**Primary:** foo bar baz\n"
+            "**Secondary:** a, b, c\n"
+            "**Must-mention Entities / LSI:** DPSS, Nd:YAG, frequency-doubled 1064nm, "
+            "Rayleigh scattering, photopic vs scotopic visibility, IR leakage, "
+            "532nm vs 520nm, IR filter, frequency-doubled Nd:YVO4, "
+            "CPS, FPS, GPS, UPS\n",
+            encoding="utf-8",
+        )
+        # No pack provided → no entity list to check → ok
+        result = check_pack_entity_coverage(
+            "any draft", ["laser", "pointer"], []
+        )
+        assert result["level"] == "ok"
+        assert result["missing"] == []
+        # The old fixed-entity list (11 entities) must NOT appear in
+        # the missing list — those entries aren't in any pack.
+        missing_str = " ".join(m["entity"] for m in result["missing"])
+        assert "Nd:YAG" not in missing_str
+        assert "DPSS" not in missing_str
+        assert "Rayleigh" not in missing_str
+
+    def test_run_includes_missing_entities_in_check_payload(self, tmp_path, monkeypatch):
+        """End-to-end: stage_w1b_pre_check passes --pack to the script and
+        the pre-check report contains the structured missing_entities
+        payload with entity / intent_relevance / evidence / severity."""
+        from seo_ops.services import legacy_workflow as lw
+
+        # Material pack and draft live in the action workspace.
+        slug = "coverage-topic"
+        ws = tmp_path
+        _write(
+            ws / "drafts" / f"{slug}-2026-01-15.md",
+            "SEO Title: T\nSEO Description: x\nSEO Keywords: construction laser pointer\n\n"
+            "# Construction Laser Pointer\n\nbody\n",
+        )
+        _write(
+            ws / "material-packs" / f"{slug}-2026-01-15.md",
+            "- **[search] Construction electrician pointing at junction box**\n"
+            "  - Source: https://example.com/c\n",
+        )
+
+        payload = {
+            "word_count": 100,
+            "warn_count": 0,
+            "fail_count": 1,
+            "checks": [
+                {
+                    "item": "关键实体覆盖（material pack）",
+                    "pass": False,
+                    "level": "fail",
+                    "detail": "1 个有证据的核心实体未在正文中体现",
+                    "missing_entities": [
+                        {
+                            "entity": "Construction electrician pointing at junction box",
+                            "intent_relevance": "core",
+                            "evidence": "https://example.com/c",
+                            "severity": "blocking",
+                            "source_tag": "search",
+                            "source_section": "",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        async def fake_run(self, script, args):
+            assert "--pack" in args
+            return (json.dumps(payload, ensure_ascii=False), "", 1)
+
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+        result = asyncio.run(
+            lw.stage_w1b_pre_check(
+                "coverage topic", "Cluster Content", ws
+            )
+        )
+        # fail_count from the script payload
+        assert result["fail_count"] == 1
+        # The pre-check report line is present in the rendered report.
+        assert "关键实体覆盖" in result["report"]
+        # And the structured payload survives the round trip.
+        assert "missing_entities" not in result  # not bubbled up by the
+        # service layer; consumed by the renderer instead.
+
+
+
 class TestRevisionLoop:
     def _prepare(self, tmp_path):
         from seo_ops.services import legacy_workflow as lw

@@ -16,22 +16,25 @@ Checks:
   7. No "click here" / "read more" anchor text
   8. FAQ: 3+ questions + FAQPage schema present
   9. Paragraph cap: no paragraph > 4 sentences
-  10. E-E-A-T signals: 2+ experience patterns present
-  11. H2/H3 hierarchy: no level jumping (H2→H4)
-  12. 字数 vs tier 下限 硬门控（三档 ✅/⚠️/❌，close-to-min 报黄）
-  13. 关键实体覆盖率（cluster Must-mention LSI，target-keywords.md）
+ 10. E-E-A-T signals: 2+ experience patterns present
+ 11. H2/H3 hierarchy: no level jumping (H2→H4)
+ 12. 字数 vs tier 下限 硬门控（三档 ✅/⚠️/❌，close-to-min 报黄）
+ 13. 素材包实体证据覆盖（material-pack entities with evidence）。
+     不再读 target-keywords.md 固定集群，不要求 80% 覆盖率，不强行让
+     AI 填补与本文意图无关的术语。缺什么、补不补，取决于实体是否同时
+     满足"intent_relevance ∈ {core, supporting}" + "有 material-pack
+     Source 证据"。core + 有证据的缺失才会 blocking；supporting + 有
+     证据的缺失只是 warning；没有 evidence 的实体不进入缺失清单。
 
 Usage:
   python3 write_pre_check.py --draft path/to/draft.md
-  python3 write_pre_check.py --draft draft.md --tier "Pillar Page"
-  python3 write_pre_check.py --draft draft.md --keywords "handheld printer, buy guide" --tier "Cluster Content"
+  python3 write_pre_check.py --draft draft.md --tier "Pillar Page" --pack path/to/material-pack.md
 """
 
 import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 try:
     from seo_common import classify_value
@@ -63,7 +66,7 @@ CTA_INDICATORS = r'(?i)(?:browse|shop|buy now|get started|learn more|see our|che
 CTA_INDICATORS += r'explore|try|contact us|request|get yours|view|find your)'
 
 
-def parse_draft(path: str) -> Tuple[Dict, str, str, str, str]:
+def parse_draft(path: str) -> tuple[dict, str, str, str, str]:
     """Return (meta, body, clean, prose, raw).
 
     body / clean  — as before (frontmatter stripped, links/html tags flattened).
@@ -105,115 +108,267 @@ def words_before_n(text: str, n: int) -> str:
     return ' '.join(re.findall(r'\b[a-z0-9]+\b', text.lower())[:n])
 
 
-# ── cluster entity coverage helpers (check 13) ─────────────────────────
+# ── material-pack entity coverage helpers (check 13) ────────────────────
+#
+# Pre-check only flags entities that BOTH have material-pack evidence AND
+# are reasonably tied to the article's primary intent. There is no fixed
+# entity list (target-keywords.md is no longer consulted) and no fixed
+# coverage threshold. Each missing entity the check reports must include:
+#   - entity  (string)
+#   - intent_relevance  (core | supporting | unrelated)
+#   - evidence  (Source URL or quote fragment from the material pack)
+#   - severity  (blocking if core, warning if supporting)
+#
+# An entity with no evidence is NEVER listed as missing — the check would
+# otherwise beguile the writer into fabricating facts.
 
-def _entity_variants(entity: str) -> List[str]:
-    """Expand an LSI entity string into searchable variants.
+# Domain-glue words that signal "supporting" rather than "core" relation-
+# ship. Sharing one of these is supporting; sharing a non-glue primary
+# intent token is core; otherwise unrelated. Kept narrow on purpose: only
+# words that describe the article *form* (review/guide) and trivial
+# article-task verbs go here. The subject nouns (laser/pointer/beam)
+# stay in primary intent so a sub-topic that uses them is still scored
+# as "supporting" (since they're central) rather than "unrelated".
+_DOMAIN_GLUE_WORDS = {
+    "review", "guide", "best", "buy", "comparison", "use", "using",
+    "how", "what", "why", "tips", "tip", "top", "vs",
+    "price", "cheap", "expensive",
+}
 
-    "NOHD (Nominal Ocular Hazard Distance)"  →  ["NOHD"]
-    "Nichia NDB4916 / NUGM01 diode"          →  ["Nichia NDB4916", "NUGM01 diode"]
-    "21 CFR 1040.10"                          →  ["21 CFR 1040.10", "21 CFR 1040"]
+
+def _tokenize(s: str) -> list[str]:
+    return [
+        t for t in re.findall(r"[a-z0-9]+", (s or "").lower())
+        if len(t) >= 3
+    ]
+
+
+def _primary_intent_tokens(
+    title: str,
+    h1: str,
+    keywords: list[str],
+) -> list[str]:
+    """Tokens that represent the article's primary search intent.
+
+    Combine frontmatter Title, the body H1, and the SEO Keywords. Stopwords
+    and tiny tokens are dropped. Used to classify entity intent_relevance.
     """
-    ent = re.sub(r'\s*\([^)]*\)\s*', ' ', entity).strip()
-    out = []
-    for v in ent.split('/'):
-        v = v.strip()
-        if not v:
-            continue
-        out.append(v)
-        m = re.match(r'^(.+?\b\w+)(\.\d+)\b', v)
-        if m:
-            out.append(m.group(1))
+    parts: list[str] = []
+    if title:
+        parts.append(title)
+    if h1:
+        parts.append(h1)
+    for kw in keywords or []:
+        parts.append(kw)
+    tokens = _tokenize(" ".join(parts))
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tokens:
+        if t not in seen and t not in _DOMAIN_GLUE_WORDS:
+            seen.add(t)
+            out.append(t)
     return out
 
 
-def _entity_in_text(entity: str, text_lower: str) -> bool:
-    """True if any variant of `entity` appears in `text_lower`.
+def classify_intent_relevance(
+    entity_text: str,
+    primary_tokens: list[str],
+) -> str:
+    """Return 'core' / 'supporting' / 'unrelated' for a candidate entity.
 
-    Short alnum-only acronyms (DPSS, NOHD, OD, IR) use word-boundary matching
-    to avoid noisy false positives inside other words. Multi-token strings
-    (with a space) use straight substring matching so "21 cfr 1040" matches
-    "21 cfr 1040.10" written either way.
+    Rules:
+      - 'core' if any non-glue token of the entity matches any primary
+        intent token (or vice versa, case-insensitive substring on the
+        original text).
+      - 'supporting' if the entity and intent share at least one domain
+        glue word (laser / pointer / safety / spec / etc.).
+      - 'unrelated' otherwise.
     """
-    for v in _entity_variants(entity):
-        v_n = v.lower().strip()
-        if not v_n:
+    if not entity_text or not primary_tokens:
+        return "unrelated"
+    entity_tokens = _tokenize(entity_text)
+    if not entity_tokens:
+        return "unrelated"
+    entity_lower = entity_text.lower()
+    for pt in primary_tokens:
+        if pt in entity_lower or any(pt == et for et in entity_tokens):
+            return "core"
+    for et in entity_tokens:
+        if et in _DOMAIN_GLUE_WORDS:
+            return "supporting"
+    for pt in primary_tokens:
+        if pt in _DOMAIN_GLUE_WORDS:
+            return "supporting"
+    return "unrelated"
+
+
+# Material-pack entry line patterns. Sub-entry lines are indented by
+# 2 spaces in the canonical pack layout, so we accept any leading
+# whitespace.
+_PACK_ENTRY_RE = re.compile(
+    r'^\s*-\s*\*\*\[(?P<tag>search|library)(?:\s+(?P<tag_section>[A-Z]))?\]\s*'
+    r'(?P<title>[^*]+?)\*\*\s*$'
+)
+_PACK_SOURCE_RE = re.compile(r'^\s*-\s*Source:\s*(?P<url>.+?)\s*$')
+_PACK_KEYFINDING_RE = re.compile(r'^\s*-\s*Key finding:\s*(?P<text>.+?)\s*$')
+_PACK_QUOTE_RE = re.compile(r'^\s*-\s*Quote:\s*"(?P<text>.+)"\s*$')
+_PACK_SUMMARY_RE = re.compile(r'^\s*-\s*Summary:\s*(?P<text>.+?)\s*$')
+
+
+def parse_pack_entities(pack_path: Path) -> list[dict[str, str]]:
+    """Walk a material pack and extract candidate entities with evidence.
+
+    Each entry in the A/C/E/G sections typically looks like::
+
+        - **[search] Laser pointer button gets pressed accidentally**
+          - Source: [Reddit](https://...)
+          - Quote: "..."
+
+    We pull the entry title as the candidate entity, the Source URL as
+    the evidence, and the section letter as the origin tag. Entries with
+    no Source line are still returned but with empty `evidence` — the
+    caller must treat them as un-sourced and exclude from the missing list.
+
+    Returns a list of dicts with keys:
+        entity, evidence, source_tag, source_section, source_quote,
+        source_key_finding, source_summary
+    """
+    if not pack_path or not pack_path.exists():
+        return []
+    lines = pack_path.read_text(encoding="utf-8").splitlines()
+    out: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in lines:
+        m_entry = _PACK_ENTRY_RE.match(line)
+        if m_entry:
+            if current and current.get("entity"):
+                out.append(current)
+            current = {
+                "entity": m_entry.group("title").strip(),
+                "evidence": "",
+                "source_tag": m_entry.group("tag"),
+                "source_section": m_entry.group("tag_section") or "",
+                "source_quote": "",
+                "source_key_finding": "",
+                "source_summary": "",
+            }
             continue
-        if ' ' not in v_n and len(v_n) <= 5 and v_n.isalnum():
-            if re.search(r'\b' + re.escape(v_n) + r'\b', text_lower):
-                return True
+        if current is None:
+            continue
+        m_src = _PACK_SOURCE_RE.match(line)
+        if m_src:
+            current["evidence"] = m_src.group("url").strip()
+            continue
+        m_kf = _PACK_KEYFINDING_RE.match(line)
+        if m_kf and not current.get("source_key_finding"):
+            current["source_key_finding"] = m_kf.group("text").strip()
+            continue
+        m_q = _PACK_QUOTE_RE.match(line)
+        if m_q and not current.get("source_quote"):
+            current["source_quote"] = m_q.group("text").strip()
+            continue
+        m_sum = _PACK_SUMMARY_RE.match(line)
+        if m_sum and not current.get("source_summary"):
+            current["source_summary"] = m_sum.group("text").strip()
+            continue
+    if current and current.get("entity"):
+        out.append(current)
+    return out
+
+
+def _entity_present(entity: str, text_lower: str) -> bool:
+    """True if the entity (or a recognizable token of it) appears in the
+    draft text. We deliberately allow substring matches for multi-word
+    entities and word-boundary matches for short alnum tokens so the check
+    doesn't claim a term is missing when its acronym or hyphenated form
+    is present."""
+    if not entity:
+        return False
+    ent = entity.lower()
+    head = re.sub(r"\s*\([^)]*\)\s*", " ", ent).strip()
+    head = head.split("/")[0].strip()
+    if not head:
+        return False
+    tokens = _tokenize(head)
+    if not tokens:
+        return False
+    if head in text_lower:
+        return True
+    for tok in tokens:
+        if len(tok) <= 4 and tok.isalnum():
+            if not re.search(r"\b" + re.escape(tok) + r"\b", text_lower):
+                return False
         else:
-            if v_n in text_lower:
-                return True
-    return False
+            if tok not in text_lower:
+                return False
+    return True
 
 
-def _find_cluster_entities(keywords: List[str], project_root: Path
-                           ) -> Tuple[str, List[str]]:
-    """Match the given keywords against target-keywords.md clusters.
+def check_pack_entity_coverage(
+    draft_text_lower: str,
+    primary_tokens: list[str],
+    pack_entities: list[dict[str, str]],
+) -> dict[str, object]:
+    """Compare the draft to material-pack entities and return the missing
+    list plus an aggregate pass/fail verdict.
 
-    Returns (cluster_header, entity_list). For each cluster builds a term
-    pool from Primary + Secondary + first tokens of each Must-mention entity,
-    then scores +1 per keyword that substring-matches any term (in either
-    direction). Highest-scoring cluster wins; ties resolve to first-seen
-    (which prefers more specific clusters).
+    Verdict rules:
+      - ok: no missing entities, or all missing have intent_relevance='unrelated'
+      - warn: at least one supporting missing, no core missing
+      - fail: at least one core missing (i.e. the article omitted a
+              directly-relevant term that the material pack has evidence for)
+    Only entries with non-empty `evidence` are considered. Entries with
+    no Source line are NEVER in the missing list.
     """
-    target = project_root / 'laserpointerhub' / 'context' / 'target-keywords.md'
-    if not target.exists() or not keywords:
-        return '', []
-    content = target.read_text(encoding='utf-8')
-    parts = re.split(r'\n(?=## Topic Cluster\s+\d+[:：])', content)
-    best_body = best_header = ''
-    best_score = 0
-    for part in parts:
-        if not part.startswith('## Topic Cluster'):
+    missing: list[dict[str, str]] = []
+    if not pack_entities:
+        return {
+            "level": "ok",
+            "missing": missing,
+            "matched": [],
+            "skipped_unsourced": 0,
+        }
+    matched: list[str] = []
+    skipped_unsourced = 0
+    for ent in pack_entities:
+        if not ent.get("evidence"):
+            skipped_unsourced += 1
             continue
-        hdr_m = re.match(r'^## Topic Cluster\s+\d+[:：]\s*(.+)$', part, re.MULTILINE)
-        primary_m = re.search(r'\*\*Primary:\*\*\s*(.+?)$', part, re.MULTILINE)
-        secondary_m = re.search(r'\*\*Secondary:\*\*\s*(.+?)$', part, re.MULTILINE)
-        entities_m = re.search(r'\*\*Must-mention Entities\s*/\s*LSI:\*\*\s*(.+?)$',
-                               part, re.MULTILINE)
-        terms = []
-        if primary_m:
-            terms.append(primary_m.group(1).strip().lower())
-        if secondary_m:
-            terms += [t.strip().lower()
-                      for t in secondary_m.group(1).split(',') if t.strip()]
-        if entities_m:
-            for ent in entities_m.group(1).split(','):
-                head = ent.split('(')[0].strip()
-                if not head:
-                    continue
-                head_tokens = head.split('/')[:2]
-                for frag in head_tokens:
-                    frag = frag.strip().lower()
-                    if frag and len(frag) < 40 and not frag.startswith('按'):
-                        terms.append(frag)
-        terms = list(dict.fromkeys(t for t in terms if t))
-        score = 0
-        for kw in keywords:
-            kw_l = kw.lower().strip()
-            if not kw_l:
-                continue
-            for term in terms:
-                if kw_l in term or term in kw_l:
-                    score += 1
-                    break
-        if score > best_score:
-            best_score = score
-            best_body = part
-            best_header = hdr_m.group(1).strip() if hdr_m else ''
-    if not best_body or best_score == 0:
-        return '', []
-    em = re.search(r'\*\*Must-mention Entities\s*/\s*LSI:\*\*\s*(.+?)$',
-                   best_body, re.MULTILINE)
-    if not em:
-        return best_header, []
-    raw = em.group(1).strip()
-    return best_header, [e.strip() for e in raw.split(',') if e.strip()]
+        if _entity_present(ent["entity"], draft_text_lower):
+            matched.append(ent["entity"])
+            continue
+        relevance = classify_intent_relevance(ent["entity"], primary_tokens)
+        if relevance == "unrelated":
+            continue
+        severity = "blocking" if relevance == "core" else "warning"
+        missing.append({
+            "entity": ent["entity"],
+            "intent_relevance": relevance,
+            "evidence": ent.get("evidence", ""),
+            "severity": severity,
+            "source_tag": ent.get("source_tag", ""),
+            "source_section": ent.get("source_section", ""),
+            "source_quote": ent.get("source_quote", ""),
+            "source_key_finding": ent.get("source_key_finding", ""),
+            "source_summary": ent.get("source_summary", ""),
+        })
+    has_blocking = any(m["severity"] == "blocking" for m in missing)
+    has_warning = any(m["severity"] == "warning" for m in missing)
+    if has_blocking:
+        level = "fail"
+    elif has_warning:
+        level = "warn"
+    else:
+        level = "ok"
+    return {
+        "level": level,
+        "missing": missing,
+        "matched": matched,
+        "skipped_unsourced": skipped_unsourced,
+    }
 
 
-def run(draft: str, tier: str = '', keywords: str = '') -> Dict:
+def run(draft: str, tier: str = '', keywords: str = '', pack: str = '') -> dict:
     meta, body, clean, prose, raw = parse_draft(draft)
     results = []
     tier = tier or meta.get('page type', meta.get('tier', ''))
@@ -252,11 +407,11 @@ def run(draft: str, tier: str = '', keywords: str = '') -> Dict:
        f'H1={raw_h1[:40]} Title={fm_title[:40]}')
 
     # 3. Primary keyword in first 100 words
-    ok(f'主关键词在前100词', primary and primary in first_100, first_100[:80])
+    ok('主关键词在前100词', primary and primary in first_100, first_100[:80])
 
     # 4. Primary keyword in 2+ H2s
     h2_hits = sum(1 for h in h2s if primary and primary in h.lower())
-    ok(f'H2 含主关键词 ≥2次', h2_hits >= 2, f'{h2_hits} hits in {len(h2s)} H2s')
+    ok('H2 含主关键词 ≥2次', h2_hits >= 2, f'{h2_hits} hits in {len(h2s)} H2s')
 
     # 5. Meta Title 50-60
     mt = meta.get('seo title', meta.get('title', ''))
@@ -344,32 +499,78 @@ def run(draft: str, tier: str = '', keywords: str = '') -> Dict:
         grade('fail', f'字数 vs tier 下限 硬门控 ({tier})',
               f'{wc_prose}词 < 下限 {min_w_gate}, 不足')
 
-    # 17. 关键实体覆盖率（cluster Must-mention LSI）
-    #     从 --keywords 或 frontmatter Tags 推断所属集群，对照
-    #     laserpointerhub/context/target-keywords.md 的 Must-mention Entities。
-    kw_for_cluster = kws
-    if not kw_for_cluster:
-        tag_str = meta.get('tags', '')
-        kw_for_cluster = [t.strip().lower() for t in tag_str.split(',') if t.strip()]
-    cluster_header, entities = _find_cluster_entities(
-        kw_for_cluster, Path(draft).resolve().parents[2])
-    if not entities:
-        grade('warn', '关键实体覆盖率',
-              '未找到集群实体配置，跳过 (cluster=' + (cluster_header or 'N/A') + ')')
+    # 13. 素材包实体证据覆盖（material-pack entities with evidence）
+    #     No fixed entity list, no fixed coverage threshold. Each missing
+    #     entry carries entity + intent_relevance + evidence + severity.
+    #     The hard rule is "don't write factual claims without source
+    #     evidence" — entries with no Source are NEVER in the missing list.
+    pack_path = Path(pack) if pack else None
+    pack_entities = parse_pack_entities(pack_path) if pack_path else []
+    primary_h1 = h1.group(1).strip() if h1 else ''
+    primary_tokens = _primary_intent_tokens(
+        meta.get('title', ''),
+        primary_h1,
+        kws,
+    )
+    cov = check_pack_entity_coverage(
+        prose.lower(),
+        primary_tokens,
+        pack_entities,
+    )
+    if not pack:
+        grade('warn', '关键实体覆盖（素材包缺失）',
+              '未提供 material pack，跳过覆盖检查（建议在 legacy_workflow 阶段传入）')
+    elif not pack_entities:
+        grade('warn', '关键实体覆盖（无候选）',
+              'material pack 不含 [search]/[library] 条目，无实体可对照；'
+              '若素材包有 A/C/E/G 节，请确认其格式包含 ** [search/library] Title ** + Source 行')
+    elif cov['level'] == 'ok':
+        detail_parts = [f'已覆盖 {len(cov["matched"])} 个有证据的实体']
+        if cov.get('skipped_unsourced', 0):
+            detail_parts.append(
+                f'跳过 {cov["skipped_unsourced"]} 个无 Source 的实体（不会进入缺失清单）'
+            )
+        grade('ok', '关键实体覆盖（material pack）',
+              '; '.join(detail_parts))
     else:
-        prose_lower = prose.lower()
-        matched = [e for e in entities if _entity_in_text(e, prose_lower)]
-        missing = [e for e in entities if e not in matched]
-        cov = len(matched) / len(entities) if entities else 0.0
-        if cov >= 0.80:
-            cls = 'ok'
-        elif cov >= 0.30:
-            cls = 'warn'
-        else:
+        # warn or fail — list each missing item with its evidence and severity
+        miss = cov["missing"]
+        if cov['level'] == 'fail':
             cls = 'fail'
-        miss_show = ', '.join(missing[:6]) + (f' (+{len(missing)-6})' if len(missing) > 6 else '')
-        grade(cls, f'关键实体覆盖率 ≥80% (cluster: {cluster_header})',
-              f'{cov*100:.0f}% ({len(matched)}/{len(entities)}); 缺: {miss_show}')
+        else:
+            cls = 'warn'
+        # Per-missing report payload
+        per_item_lines = []
+        for m in miss[:8]:
+            tag = m.get("source_tag", "")
+            sec = m.get("source_section", "")
+            src = m.get("source_section") and f"{tag}{sec}" or tag
+            per_item_lines.append(
+                f"  • [{m['severity']}] {m['entity']} "
+                f"(intent={m['intent_relevance']}; src={src}; "
+                f"evidence={m['evidence']})"
+            )
+        if len(miss) > 8:
+            per_item_lines.append(f"  • (+{len(miss) - 8} more)")
+        miss_show = '\n'.join(per_item_lines)
+        msg = (
+            f"关键实体覆盖（material pack）— "
+            f"{len(miss)} 个有证据的 {'核心' if cls == 'fail' else '支撑'} 实体未在正文中体现"
+        )
+        grade(cls, msg, miss_show)
+        # Always attach the structured payload so the Legacy workflow UI
+        # can show per-entity detail without re-parsing the report.
+        results[-1]['missing_entities'] = [
+            {
+                'entity': m['entity'],
+                'intent_relevance': m['intent_relevance'],
+                'evidence': m['evidence'],
+                'severity': m['severity'],
+                'source_tag': m.get('source_tag', ''),
+                'source_section': m.get('source_section', ''),
+            }
+            for m in miss
+        ]
 
     return {'draft': draft, 'tier': tier, 'word_count': wc, 'checks': results,
             'pass_count': sum(1 for r in results if r['pass']),
@@ -393,7 +594,21 @@ def _fix_hint(item: str) -> str:
         '段落': '将超标段落拆分为 2-4 句的短段落',
         'EEAT': '若素材包 C/E 有真实测试/场景数据，引用到正文中（非阻塞警告）',
         '层级': '修复标题层级跳跃（H2→H3 递进，不可越级）',
-        '关键实体覆盖率': '对照 laserpointerhub/context/target-keywords.md 对应集群 Must-mention Entities，在正文补充缺失的 LSI 实体',
+        '关键实体覆盖（material pack）': (
+            '正文中缺少 material pack 中已有 Source 证据且与主意图直接相关的实体。'
+            '若 evidence 不足，请在素材包补充证据；'
+            '若 evidence 充分，请把该实体自然写入正文。'
+            '绝不要为了过检而写入无证据的术语。'
+        ),
+        '关键实体覆盖（素材包缺失）': (
+            'W1b 阶段未把 material pack 路径传给预检。'
+            '请确认 legacy_workflow 在调用 write_pre_check.py 时附带 --pack 参数。'
+        ),
+        '关键实体覆盖（无候选）': (
+            'material pack 解析后没有 [search/library] 条目。'
+            '确认 A/C/E/G 节中的条目使用「- **[search/library] 标题**」格式，'
+            '并紧跟「- Source: ...」行。'
+        ),
     }
     for k, v in hints.items():
         if k in item:
@@ -401,7 +616,7 @@ def _fix_hint(item: str) -> str:
     return '编辑 draft 修复此项'
 
 
-def render(report: Dict) -> str:
+def render(report: dict) -> str:
     L = []
     L.append(f"# WRITE 预检报告 — {Path(report['draft']).name}")
     L.append(f"> 层级: {report['tier']} | 字数: {report['word_count']} | "
@@ -438,9 +653,10 @@ def main():
     ap.add_argument('--draft', required=True, help='Path to draft .md file')
     ap.add_argument('--tier', help='Page tier (Pillar Page / Cluster Content / Product Roundup)')
     ap.add_argument('--keywords', help='Comma-separated primary keywords')
+    ap.add_argument('--pack', default='', help='Path to material pack .md (used for entity-coverage check)')
     ap.add_argument('--json', action='store_true')
     args = ap.parse_args()
-    report = run(args.draft, args.tier or '', args.keywords or '')
+    report = run(args.draft, args.tier or '', args.keywords or '', args.pack or '')
     if args.json:
         import json
         print(json.dumps(report, ensure_ascii=False, indent=2))
