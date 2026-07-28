@@ -1,0 +1,14 @@
+{
+  "rounds": 0,
+  "gate_passed": true,
+  "applied": true,
+  "score": 84.5,
+  "cannibal": 0.18,
+  "cannibal_block": false,
+  "score_block": false,
+  "precheck_passed": true,
+  "precheck_draft_sha256": "sha256:placeholder0000000000000000000000000000000000000000000000000000000000",
+  "precheck_tier": "Cluster Content",
+  "applied_draft_sha256": "sha256:placeholder0000000000000000000000000000000000000000000000000000000000",
+  "force_confirmed": false
+}

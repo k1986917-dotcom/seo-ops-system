@@ -1,0 +1,61 @@
+[
+  {
+    "slug": "example-article-1",
+    "title": "Example Article One: A Complete Walkthrough",
+    "tags": [
+      "example cluster one",
+      "walkthrough",
+      "tutorial"
+    ],
+    "url": "https://example.com/blog/example-article-1",
+    "updated": "2026-01-10T00:00:00.000Z",
+    "link_counts": {
+      "blog": 0,
+      "product": 0
+    }
+  },
+  {
+    "slug": "example-article-2",
+    "title": "Example Article Two: A Practical Checklist",
+    "tags": [
+      "example cluster one",
+      "example cluster two",
+      "checklist"
+    ],
+    "url": "https://example.com/blog/example-article-2",
+    "updated": "2026-01-12T00:00:00.000Z",
+    "link_counts": {
+      "blog": 0,
+      "product": 0
+    }
+  },
+  {
+    "slug": "example-article-3",
+    "title": "Example Article Three: A Comparison Table",
+    "tags": [
+      "example cluster two",
+      "comparison"
+    ],
+    "url": "https://example.com/blog/example-article-3",
+    "updated": "2026-01-13T00:00:00.000Z",
+    "link_counts": {
+      "blog": 0,
+      "product": 0
+    }
+  },
+  {
+    "slug": "example-article-4",
+    "title": "Example Article Four: A Buying Guide",
+    "tags": [
+      "example cluster three",
+      "buying guide",
+      "review"
+    ],
+    "url": "https://example.com/blog/example-article-4",
+    "updated": "2026-01-14T00:00:00.000Z",
+    "link_counts": {
+      "blog": 0,
+      "product": 0
+    }
+  }
+]

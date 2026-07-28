@@ -1,0 +1,134 @@
+{
+  "topic": "Example Topic for Testing the Legacy Pipeline",
+  "slug": "example-topic-for-testing-the-legacy-pipeline",
+  "website": "examplesite",
+  "date": "2026-01-15",
+  "topic_context": {
+    "slug": "example-topic-for-testing-the-legacy-pipeline",
+    "topic": "Example Topic for Testing the Legacy Pipeline",
+    "source": "heuristic",
+    "intent": "混合型",
+    "tier": "Cluster Content",
+    "primary_keyword": "Example Topic for Testing the Legacy Pipeline",
+    "signals": {
+      "facts": 5,
+      "sources": 3,
+      "queries_used": 0
+    },
+    "cannibal_risk": "low",
+    "guidance": "Synthetic site; tests file shape conformance, not content quality.",
+    "updated": "2026-01-15"
+  },
+  "seo_data": {
+    "exists": false,
+    "updated": "2026-01-15",
+    "gsc_opportunities": [],
+    "e1_keywords": [],
+    "e2_keywords": [
+      "example primary cluster keyword",
+      "example secondary cluster keyword",
+      "example best-of commercial keyword"
+    ],
+    "missing_sections": [
+      "A1 (GSC Top 20)",
+      "A2 (Quick Win)",
+      "E1 (GSC measured)"
+    ],
+    "sufficiency": "low"
+  },
+  "search_results": {
+    "filepath": "tests/fixtures/legacy_pipeline/workflow_run/02_search-results.md",
+    "serp": "Synthetic SERP. Top 4 results are placeholder articles on example.com. Common H2 topics: getting-started, prerequisites, comparisons, FAQ.",
+    "pain_points": "Synthetic pain points: 1) Where do I start? 2) Which one should I pick? 3) Is this safe to use?",
+    "market_data": "",
+    "cases": "Synthetic cases: 1) Onboarding via example pipeline took 2 days vs 2 weeks. 2) CI integration under 30 seconds.",
+    "citations": "Synthetic citations: W3C, NIST, ISO/IEC.",
+    "gaps": "No top-4 article covers CI/CD integration patterns, failure modes, or migration paths from manual workflows.",
+    "paa": "15 synthetic PAA questions, all using example.com URLs.",
+    "paa_data": "5 structured PAA entries with verbatim phrasing.",
+    "parsed_sections": [
+      "serp",
+      "pain_points",
+      "market_data",
+      "cases",
+      "citations",
+      "gaps",
+      "paa",
+      "paa_data"
+    ]
+  },
+  "search_file": "tests/fixtures/legacy_pipeline/workflow_run/02_search-results.md",
+  "target_keywords": {
+    "topic_clusters": [
+      {
+        "name": "example primary cluster (synthetic)",
+        "primary": "example primary cluster keyword",
+        "secondaries": [
+          "secondary cluster keyword",
+          "related cluster term",
+          "support cluster term",
+          "related support",
+          "related context"
+        ],
+        "gsc_verified": [],
+        "products": ["EXAMPLE-001", "EXAMPLE-002"],
+        "articles": ["#1", "#2"],
+        "must_mention_entities": [
+          "example entity A",
+          "example entity B",
+          "synthetic standard XYZ",
+          "fake regulation reference",
+          "placeholder acronym QRS"
+        ]
+      },
+      {
+        "name": "example secondary cluster (synthetic)",
+        "primary": "example secondary cluster keyword",
+        "secondaries": [
+          "secondary keyword",
+          "support keyword",
+          "related term",
+          "variation term"
+        ],
+        "gsc_verified": [],
+        "products": ["EXAMPLE-003"],
+        "articles": ["#3"],
+        "must_mention_entities": [
+          "example entity C",
+          "example entity D",
+          "related standard",
+          "placeholder metric ABC"
+        ]
+      }
+    ]
+  },
+  "published": {
+    "total": 4,
+    "articles": [
+      {
+        "slug": "example-article-1",
+        "title": "Example Article One: A Complete Walkthrough",
+        "tags": ["example cluster one", "walkthrough", "tutorial"],
+        "url": "https://example.com/blog/example-article-1"
+      },
+      {
+        "slug": "example-article-2",
+        "title": "Example Article Two: A Practical Checklist",
+        "tags": ["example cluster one", "example cluster two", "checklist"],
+        "url": "https://example.com/blog/example-article-2"
+      },
+      {
+        "slug": "example-article-3",
+        "title": "Example Article Three: A Comparison Table",
+        "tags": ["example cluster two", "comparison"],
+        "url": "https://example.com/blog/example-article-3"
+      },
+      {
+        "slug": "example-article-4",
+        "title": "Example Article Four: A Buying Guide",
+        "tags": ["example cluster three", "buying guide", "review"],
+        "url": "https://example.com/blog/example-article-4"
+      }
+    ]
+  }
+}

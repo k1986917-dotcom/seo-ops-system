@@ -1,66 +1,89 @@
-# Integration Guide — plan → research → write 三个 Skill 接入
+# Integration Guide — research + write Skill 接入 Hermes 工作流
 
-本仓库维护了 3 个旧 SKILL 的原件 + 它们依赖的冻结脚本，供 Codex/AI 助手参考并接入到新 SEO Ops 系统。
-
----
-
-## Skill 列表
-
-| Skill | 触发 | 依赖脚本 | 输出 |
-|-------|------|----------|------|
-| [plan](../legacy-skills/plan/SKILL.md) | `/plan` 或 `/plan laserpointerhub` | `plan_collector.py` → `plan_scorer.py` → `plan_feedback.py` | 主题推荐（首推 + 备选 + 优化） |
-| [research](../legacy-skills/research/SKILL.md) | `/research [topic]` | `research_collector.py` → `research_scorer.py` → AI | 素材包 + 调研简报 |
-| [write](../legacy-skills/write/SKILL.md) | `/write [topic]` | `write_collector.py` → `write_pre_check.py` → `content_scorer.py` → AI | 草稿 → 后处理 → 注册 |
-
-## 文件结构
-
-```
-docs/legacy-skills/
-├── MANIFEST.md                      # 12 个文件的 SHA-256 + 来源说明
-├── plan/SKILL.md                    # 6.7 KB
-├── research/SKILL.md                # 12.6 KB
-├── write/SKILL.md                   # 14.2 KB
-└── data_sources/modules/
-    ├── plan_collector.py            # 46.8 KB  (Step 1 收集)
-    ├── plan_scorer.py               # 21.5 KB  (Step 2 确定性打分)
-    ├── plan_feedback.py             # 5.6 KB   (Step 5 闭环)
-    ├── research_collector.py        # 68.4 KB  (段0/1/3 数据收集)
-    ├── research_scorer.py           # 10.6 KB  (Step 5 评分)
-    ├── cannibalization_checker.py   # 10.2 KB  (Step 1 蚕食预检)
-    ├── write_collector.py           # 53.2 KB  (段0/2/3 后处理)
-    ├── write_pre_check.py           # 19.9 KB  (段1b 15 项机械检查)
-    └── content_scorer.py            # 39.9 KB  (段2 质量评分)
-```
+本仓库维护了 3 个旧 SKILL 的原件 + 它们依赖的冻结脚本 + Hermes 接入说明，供
+Codex/AI 助手把它们接入 Hermes 驱动的端到端工作流。
 
 ---
 
-## Skill 之间的输入输出接口
-
-### plan → research
+## 真实目标链（已确认）
 
 ```
-plan 产出:
-  {website}/research/plan-brief-{date}.md     ← 人读
-  {website}/research/plan-brief-{date}.json   ← 机读
-  {website}/research/plan-candidates-{date}.md ← Top 6 优化 + Top 8 发现
-  {website}/research/cannibalization-report.txt
-
-research 接收:
-  /research [topic] 或 /research [topic] [website]
-  从 plan-candidates 选出首推，slug 作为 topic-context 来源
-  自动读 seo-data-manual.md（GSC 数据）+ published-index.json（已发布列表）
+SEO Ops（历史、上下文、主题调研、主题选择）
+       │
+       │  1. 主题调研 (GSC 信号 / 主题缺口 / 边界)
+       │  2. 推荐候选 → 运营者接受
+       │
+       ▼
+   actions 行（accepted / planned / target_ref = 主题）
+       │
+       │  Hermes 接收 action，根据 SKILL.md 调用旧 research Skill
+       ▼
+旧 research Skill（深度研究）
+       │
+       │  3. 搜索提示词（R0） → 运营者粘贴搜索结果
+       │  4. 数据收集（R1）
+       │  5. AI 分析 + 评分（R3）
+       │  产出：material-pack + brief
+       │
+       ▼
+旧 write Skill（写作 + 检查 + 注册）
+       │
+       │  6. AI 写正文（W0）
+       │  7. 15 项机械预检（W1b）
+       │  8. 后处理（链接 + 蚕食 + 评分 + apply）（W2）
+       │  9. 注册到 internal-links-map + 回溯链接（W3）
+       │
+       ▼
+   published/ 新文章 + material-pack 归档 + 素材库追加
+       │
+       │  Hermes 向运营者汇报
+       ▼
+   运营者确认发布
 ```
+
+**关键边界**：
+
+- SEO Ops 负责**第 1、2 步**（主题调研 + 主题选择 + 创建 action）
+- 旧 research Skill 负责**第 3、4、5 步**（深度研究 + 素材包）
+- 旧 write Skill 负责**第 6、7、8、9 步**（写作 + 检查 + 注册）
+- Hermes 负责**统一调用、恢复任务状态、向运营者汇报**
+
+---
+
+## 旧 plan Skill 暂时不接入第一阶段
+
+`docs/legacy-skills/plan/SKILL.md` 和 `plan_collector.py` / `plan_scorer.py` /
+`plan_feedback.py` 目前**只作为业务规则参考和备用方案**，不作为整合目标。
+
+理由：
+
+1. SEO Ops 当前已经有自己的 opportunity / research_candidates / actions 机制做
+   主题选择，与 plan_collector.py 的"plan-brief-*.md / plan-candidates-*.md"
+   输出格式不兼容
+2. plan 的"双管线"（优化 vs 发现）已经被 SEO Ops 的"2 篇旧 + 2 篇新"建议规则
+   取代
+3. Hermes 已经在 `~/.hermes/skills/software-development/plan/` 和
+   `~/.hermes/skills/research/seo-content-gap-analyst/` 里有同类 skill
+
+**未来可能的状态**：
+
+- 如果运营者决定"全部迁移到 Hermes 驱动 plan"，再做 plan 集成
+- 短期推荐：**保留** `docs/legacy-skills/plan/` 作历史参考，**不**写
+  `POST /legacy/plan` 路由
+
+---
+
+## 三个 Skill 的输入输出接口
 
 ### research → write
 
 ```
 research 产出:
-  {website}/material-packs/[slug]-[date].md   ← 唯一给 write 的输入
+  {website}/material-packs/[slug]-[date].md   ← write 的唯一输入
   {website}/research/brief-[slug]-[date].md   ← 审计归档
   {website}/research/research-score-[slug]-[date].md ← 6 因子评分
 
 write 接收:
-  /write [topic] 或 /write [topic] [website]
   自动定位 material-packs/{slug}-{date}.md
   加载 6 个 context 文件（brand-voice、writing-examples、style-guide、seo-guidelines、target-keywords、internal-links-map）
 ```
@@ -69,10 +92,10 @@ write 接收:
 
 ```
 write 产出:
-  {website}/drafts/[slug]-[date].md         ← 最终文章
-  reports/post-process-{slug}-*.md          ← 后处理报告
-  reports/register-{slug}-*.md             ← 注册报告
-  research/backlink-suggestions-{slug}-{date}.md ← 回溯链接清单
+  {website}/drafts/[slug]-[date].md
+  reports/post-process-{slug}-*.md
+  reports/register-{slug}-*.md
+  research/backlink-suggestions-{slug]-[date}.md
 
 副作用:
   internal-links-map.md       ← 新增条目
@@ -83,57 +106,66 @@ write 产出:
 
 ---
 
-## 接入新系统的路径
+## 集成路径
 
-新系统的 SEO Ops（`src/seo_ops/services/legacy_workflow.py`）**已经接管了** R/R3/W0/W1b/W2/W3 的所有产物管理。但**plan** 完全独立 —— plan_collector.py、plan_scorer.py、plan_feedback.py **没有任何代码调用它们**。
-
-### 当前实际情况
+新系统的 SEO Ops（`src/seo_ops/services/legacy_workflow.py`）**已经接管了**
+R0/R1/R3/W0/W1b/W2/W3 的所有产物管理和 HTTP 路由。
 
 | 阶段 | 旧 SKILL 入口 | 新系统入口 | 集成状态 |
 |------|-------------|-----------|---------|
-| plan | `/plan` | 无 | ❌ 未集成 |
+| 主题调研 + 选择 | （SEO Ops 内部） | `/actions/{id}` + GSC 入口 | ✅ 已集成 |
 | R0-R3 | `/research [topic]` | `/actions/{id}/legacy/stage/r0..r3` | ✅ 已集成 |
 | W0-W3 | `/write [topic]` | `/actions/{id}/legacy/stage/w0..w3` | ✅ 已集成 |
+| Hermes 统一调用 | （新增） | 同上 | ⚠️ 待 Hermes skill 包装 |
+| plan | `/plan` | 无 | ❌ **第一阶段不做** |
 
-### 集成方案
+### Hermes 集成的最小路径（推荐 Codex 实施）
 
-**最简方案（推荐 Codex 实施）**：
-1. 在 `src/seo_ops/web/app.py` 新增 `POST /plan` 路由
-2. 调用 `plan_collector.py` → 把输出写到 `data/legacy_workflow/laserpointerhub/research/plan-brief-{date}.md`
-3. 调用 `plan_scorer.py` → 把候选写到 `plan-candidates-{date}.md`
-4. UI 显示候选列表，运营者选 → 创建 `actions` 行（`action_type='create'`、`target_ref=slug`、`legacy_stage='r0_pending'`）
-5. 现有的 `/actions/{id}/legacy/stage/r0..r3` 自动接管后续
+1. 在 `~/.hermes/skills/software-development/` 下新建 `seo-ops-orchestrator/`：
+   - `SKILL.md` — frontmatter + 工作流步骤
+   - `scripts/` — `stage_r0.sh`、`stage_r1.sh`、`stage_r3.sh`、`stage_w0.sh`、
+     `stage_w1b.sh`、`stage_w2.sh`、`stage_w3.sh`
+   - 每个脚本用 `curl` POST 到 `http://127.0.0.1:8787/actions/{id}/legacy/stage/{stage}`
+   - 脚本接受 `--action-id` 和（必要时）stage-specific 参数
 
-**注意事项**：
-- `plan_collector.py` 需要 `TAVILY_KEY` 环境变量（从 `data/plan-config.json` 或参数读）
-- 新系统的 action 没有 `plan_id` 字段，要加 `actions.plan_run_id` 列（MIGRATION_14？）
-- `plan_feedback.py` 的 accept/reject 需要写 `topic_decisions` 表，新系统已有
+2. SKILL.md 告诉 Hermes：
+   - "操作 SEO Ops HTTP API"
+   - "**绝不**直接写 `data/legacy_workflow/...` 或 `data/seo_ops.db`"
+   - "所有状态变更通过 POST 端点"
+   - "用 `GET /actions` 读当前状态"
+
+3. 测试用 `tests/fixtures/legacy_pipeline/` 的合成数据：
+   - 复制到 `data/legacy_workflow/examplesite/runs/action-99/current/laserpointerhub/`
+   - UI 渲染应该能识别 R0..W3 各阶段
 
 ---
 
-## 给 Codex 的任务提示
+## 给 Hermes / Codex 的任务提示
 
-如果你（AI 助手）正在做 plan 集成，请按以下顺序：
+如果你（AI 助手）正在做 Hermes 集成，请按以下顺序：
 
 1. **先读**：
-   - `docs/legacy-skills/plan/SKILL.md`
-   - `docs/legacy-skills/data_sources/modules/plan_collector.py` 的 docstring 和 Step 1 实现
-   - `docs/legacy-skills/data_sources/modules/plan_scorer.py` 的 Step 2 实现
-   - `src/seo_ops/services/action_workflow.py` 了解新系统的 action 创建流程
-   - `src/seo_ops/services/research_workflow.py` 了解 research 阶段如何被触发
+   - `docs/hermes/README.md`（当前版本是 `hermes` 而非 `tirith`）
+   - `docs/hermes/RUNTIME_REPORT.md`（实际安装环境报告）
+   - `docs/legacy-skills/research/SKILL.md` 和 `write/SKILL.md`
+   - `src/seo_ops/services/legacy_workflow.py` 的 `action_workspace()` 和
+     stage 函数（理解 R0..W3 行为）
 
 2. **再改**：
-   - 在 `src/seo_ops/web/app.py` 加 `/plan` 路由（POST）
-   - 复用 `legacy_sync_all(LEGACY_WS)` 确保 GSC/已发布文章已同步
-   - 把 plan 的输出从 `{website}/research/` 重定向到 `data/legacy_workflow/laserpointerhub/research/` （新系统已 gitignore 这条路径，运行时产物本就该在这里）
-   - 不要改 `plan_collector.py` / `plan_scorer.py` / `plan_feedback.py`（冻结脚本）
+   - 在 `~/.hermes/skills/software-development/seo-ops-orchestrator/` 下创建
+     skill 目录
+   - 写 SKILL.md + scripts/ 下的 6 个 stage 脚本
+   - 脚本**只**用 `curl` HTTP 调用，**不**直接读写文件
+   - SKILL.md 中要明确：所有状态变更通过 HTTP API
 
 3. **测试**：
-   - 加 `tests/test_plan_integration.py`
-   - 不调真实 Tavily，用 monkeypatch 注入假的 brief
-   - 验证：plan 输出 → action 创建 → R0 自动可用
+   - 加 `tests/test_hermes_skill_layout.py`（如果有对应的镜像在 repo）
+   - 跑 `hermes skills list` 验证 skill 被发现
+   - 手动触发一次 R0 看实际行为
 
 4. **不要做**：
-   - 不要把 plan 跟 opportunities 表混合（plan 推荐是新文章的种子，opportunities 是分析运行的结果）
-   - 不要让 AI 重算 plan_scorer.py 已经确定性算出的分数
-   - 不要把 plan 的 SKILL.md 写到 templates/ 目录（它是 AI 的指令，不是用户的 UI）
+   - **不要**直接写 `data/legacy_workflow/laserpointerhub/runs/action-*/` 下的文件
+   - **不要**修改 `data/seo_ops.db`（用 SQL 都不行）
+   - **不要**修改 `docs/legacy-skills/` 下的原件
+   - **不要**在第一阶段碰 `docs/legacy-skills/plan/` 或写 `/legacy/plan` 路由
+   - **不要**修改 SEO Ops 的 `legacy_workflow.py`
