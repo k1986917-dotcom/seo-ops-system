@@ -34,6 +34,7 @@ EOF
 }
 
 parse_flags "$@"
+set -- "${REMAINING_ARGS[@]}"
 require_action_id "$@"
 ACTION_ID="$1"
 
@@ -43,7 +44,7 @@ if [[ -t 0 ]]; then
     exit 2
 fi
 
-# Build a curl-compatible multipart form data file in /tmp.
+# Build a curl-compatible form file in /tmp.
 TMP_FORM=$(mktemp)
 trap 'rm -f "${TMP_FORM}"' EXIT
 {
@@ -56,4 +57,4 @@ sys.stdout.write(urllib.parse.quote(sys.stdin.read(), safe=""))
 } > "${TMP_FORM}"
 
 http_post_form "/actions/${ACTION_ID}/legacy/stage/r1" "${TMP_FORM}"
-summarize "${ACTION_ID}" r1
+summarize_response "${ACTION_ID}" r1

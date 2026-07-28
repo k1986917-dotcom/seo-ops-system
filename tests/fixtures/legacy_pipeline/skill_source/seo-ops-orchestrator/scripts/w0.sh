@@ -29,8 +29,6 @@ Calls external AI (largest single AI call in the pipeline, ~16k tokens).
 EOF
 }
 
-parse_flags "$@"
-
 AUTHOR="LaserPointerHub"
 ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -74,4 +72,4 @@ trap 'rm -f "${TMP_FORM}"' EXIT
 printf 'author=%s' "$(python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1]))' "${AUTHOR}")" > "${TMP_FORM}"
 
 http_post_form "/actions/${ACTION_ID}/legacy/stage/w0" "${TMP_FORM}"
-summarize "${ACTION_ID}" w0
+summarize_response "${ACTION_ID}" w0

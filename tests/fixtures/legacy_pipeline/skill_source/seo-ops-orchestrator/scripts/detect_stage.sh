@@ -33,3 +33,8 @@ EOF
 parse_flags "$@"
 
 http_get "/api/health"
+echo "[detect_stage] http_status=${HTTP_CODE:-?} base_url=${SEO_OPS_BASE_URL}"
+if [[ "${HTTP_CODE:-}" =~ ^2 ]]; then
+    exit 0
+fi
+exit 1

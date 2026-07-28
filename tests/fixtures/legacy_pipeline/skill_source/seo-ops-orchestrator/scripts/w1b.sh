@@ -33,8 +33,6 @@ gate verdict without touching any other stage.
 EOF
 }
 
-parse_flags "$@"
-
 TIER=""
 ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -82,4 +80,4 @@ else
 fi
 
 http_post_form "/actions/${ACTION_ID}/legacy/stage/w1b" "${TMP_FORM}"
-summarize "${ACTION_ID}" w1b
+summarize_response "${ACTION_ID}" w1b

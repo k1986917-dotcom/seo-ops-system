@@ -31,8 +31,9 @@ EOF
 }
 
 parse_flags "$@"
+set -- "${REMAINING_ARGS[@]}"
 require_action_id "$@"
 ACTION_ID="$1"
 
 http_post_form_no_body "/actions/${ACTION_ID}/legacy/stage/r3"
-summarize "${ACTION_ID}" r3
+summarize_response "${ACTION_ID}" r3

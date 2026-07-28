@@ -31,8 +31,6 @@ Effects (handled by SEO Ops):
 EOF
 }
 
-parse_flags "$@"
-
 APPLY="0"
 FORCE="0"
 ARGS=()
@@ -89,4 +87,4 @@ sys.stdout.write("&".join(parts))
 ' "${APPLY}" "${FORCE}" > "${TMP_FORM}"
 
 http_post_form "/actions/${ACTION_ID}/legacy/stage/w2" "${TMP_FORM}"
-summarize "${ACTION_ID}" w2
+summarize_response "${ACTION_ID}" w2
