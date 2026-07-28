@@ -116,7 +116,7 @@ R0/R1/R3/W0/W1b/W2/W3 的所有产物管理和 HTTP 路由。
 | 主题调研 + 选择 | （SEO Ops 内部） | `/actions/{id}` + GSC 入口 | ✅ 已集成 |
 | R0-R3 | `/research [topic]` | `/actions/{id}/legacy/stage/r0..r3` | ✅ 已集成 |
 | W0-W3 | `/write [topic]` | `/actions/{id}/legacy/stage/w0..w3` | ✅ 已集成 |
-| Hermes 统一调用 | （新增） | 同上 | ⚠️ 待 Hermes skill 包装 |
+| Hermes 统一调用 | （新增） | 同上 | ✅ 已完成 |
 | plan | `/plan` | 无 | ❌ **第一阶段不做** |
 
 ### Hermes 集成的最小路径（推荐 Codex 实施）

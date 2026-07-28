@@ -172,8 +172,15 @@ are **not** in Hermes's native format and would need to be wrapped:
             └── detect_stage.sh       # GET /actions/{id} and read legacy.stage
 ```
 
-This conversion is **planned** but **not done**. See
-`docs/KNOWN_ISSUES.md` for the gap.
+This conversion is **done**. The official SEO Ops skill lives at
+`integrations/hermes/seo-ops-orchestrator/` in the SEO Ops repository
+(SKILL.md + README.md + install.sh + 9 stage scripts). Install it with:
+
+```bash
+cd integrations/hermes/seo-ops-orchestrator
+bash install.sh --force
+hermes skills list
+```
 
 ## Gateway status
 
