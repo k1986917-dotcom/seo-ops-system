@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -374,93 +375,277 @@ def _load_json(path: str) -> list | dict:
         return []
 
 
-def _run_fact_check(results: list, grade, evidence_path: str, claim_path: str) -> None:
-    """Check 14: Verify that every factual claim in the claim-ledger has
-    a valid evidence_id with source_url + quote/key_finding in the evidence-ledger.
+# ── Factual sentence extraction ─────────────────────────────────────────
 
-    Blocking rules:
-      - claim has evidence_id that is missing from evidence-ledger → blocking
-      - claim has evidence_id whose entry has no source_url → blocking
-      - claim has evidence_id whose entry has no quote AND no key_finding → blocking
-      - claim has no evidence_ids → warning (unverifiable claim)
+_FACTUAL_SIGNAL_RE = re.compile(
+    r"(?i)"
+    r"(?:\d+(?:\.\d+)?\s*(?:mW|nm|W|mw|m[cm]?m?|km|V|A|Hz|%|°C|F|W/cm))|"
+    r"(?:Class\s+[234][A-Z]?|FDA|IEC|ISO\s+\d+|CFR\s+\d+|ANSI|EN\s+\d+|RoHS|CE\s+mark)|"
+    r"(?:(?:is|are|was|were)\s+(?:better|stronger|faster|brighter|safer|more|less)\s+"
+    r"(?:than|at|up\s+to|over\s+\d+))|"
+    r"(?:because|therefore|causes?|leads?\s+to|results?\s+in|due\s+to|"
+    r"can\s+(?:cause|lead|result|damage|harm|produce|deliver|output)|"
+    r"not\s+(?:recommended|allowed|permitted|safe|legal|compliant|sufficient))|"
+    r"(?:wavelength|beam\s*divergence|output\s*power|battery\s*life|beam\s+profile|"
+    r"operating\s+voltage|power\s+consumption|luminous\s+flux|optical\s+power)|"
+    r"(?:\b[A-Z]{2,6}-\d{3,}\b|NDB\d{4}|NUGM\d{4}|Nichia|Osram|Sharp)"
+)
 
-    The results list is mutated in-place.
+
+def _extract_factual_sentences(draft_body: str) -> list[dict]:
+    """Find sentences in the draft that contain factual assertions.
+
+    Returns a list of ``{"sentence": str, "sentence_sha": str}`` dicts.
+    Each sentence is the original text, unstripped, so that
+    ``_normalize_claim`` on the ledger can match it.
     """
-    claims = _load_json(claim_path)
-    evidences = _load_json(evidence_path)
-
-    if not claim_path:
-        grade('warn', '事实校验（无 claim-ledger）',
-              '未提供 claim-ledger JSON，跳过事实校验（不需要强制，但建议 W0 启用）')
-        return
-    if not claims:
-        grade('ok', '事实校验',
-              'claim-ledger 为空（没有需要校验的 claims）')
-        return
-
-    ev_map: dict[str, dict] = {}
-    for ev in evidences:
-        eid = ev.get('evidence_id', '')
-        if eid:
-            ev_map[eid] = ev
-
-    issue_count = 0
-    blocking_items: list[str] = []
-    for claim in claims:
-        claim_text = claim.get('claim', '')
-        eids = claim.get('evidence_ids', []) if isinstance(claim.get('evidence_ids'), list) else []
-        if not eids:
-            issue_count += 1
-            detail = f"  • [warning] claim 无 evidence_id: {claim_text[:80]}"
-            blocking_items.append(detail)
+    import re as _re
+    # Split on sentence boundaries.
+    sents = _re.split(r'(?<=[.!?])\s+', draft_body)
+    out: list[dict] = []
+    for s in sents:
+        s = s.strip()
+        if not s or len(s) < 15:
             continue
-        valid = True
-        for eid in eids:
-            ev = ev_map.get(eid)
-            if ev is None:
-                valid = False
-                detail = (
-                    f"  • [blocking] claim 引用了不存在的 evidence_id={eid}"
-                    f" — claim: {claim_text[:60]}"
-                )
-                blocking_items.append(detail)
-                continue
-            if not ev.get('source_url'):
-                valid = False
-                detail = (
-                    f"  • [blocking] evidence_id={eid} 缺 source_url"
-                    f" — claim: {claim_text[:60]}"
-                )
-                blocking_items.append(detail)
-                continue
-            has_quote = bool(ev.get('quote'))
-            has_kf = bool(ev.get('key_finding'))
-            if not has_quote and not has_kf:
-                valid = False
-                detail = (
-                    f"  • [blocking] evidence_id={eid} 无 quote 也无 key_finding"
-                    f" — claim: {claim_text[:60]}"
-                )
-                blocking_items.append(detail)
-                continue
-        if not valid:
-            issue_count += 1
+        if _FACTUAL_SIGNAL_RE.search(s):
+            out.append({
+                "sentence": s,
+                "sentence_sha": hashlib.sha256(s.encode("utf-8")).hexdigest(),
+            })
+    return out
 
+
+# ── Normalized claim matching ───────────────────────────────────────────
+
+def _normalize(text: str) -> str:
+    """Normalize a claim_text or draft sentence for exact full-string match.
+
+    - strip
+    - collapse all runs of whitespace (including \n) to single space
+    - strip trailing punctuation (.,;:!?)
+    """
+    if not text:
+        return ""
+    text = text.strip()
+    text = " ".join(text.split())
+    text = text.rstrip(".,;:!?")
+    return text.strip()
+
+
+def _claim_in_draft(claim_text: str, draft_body: str) -> bool:
+    """True if the normalized claim_text exists as a normalized line in the
+    draft body.  This is a full-sentence equality check (not substring)."""
+    if not claim_text or not draft_body:
+        return False
+    norm_ct = _normalize(claim_text)
+    if not norm_ct:
+        return False
+    # Attempt exact normalized match against each draft line.
+    for line in draft_body.split("\n"):
+        if _normalize(line) == norm_ct:
+            return True
+    # Also try split on sentence boundaries.
+    import re as _re
+    for sent in _re.split(r'(?<=[.!?])\s+', draft_body):
+        if _normalize(sent) == norm_ct:
+            return True
+    return False
+
+
+# ── Fact check (check 14) ──────────────────────────────────────────────
+
+def _run_fact_check(
+    results: list,
+    grade,
+    evidence_path: str,
+    claim_path: str,
+    material_pack_path: str,
+    draft_path: str,
+) -> None:
+    """Check 14: Fail-closed evidence-driven fact verification.
+
+    Each failure outputs a structured entry with claim_text, claim_type,
+    reason, evidence_id, URL, and quote/kf for use in the AI revision prompt.
+    """
+    # Helper to emit a structured-grade entry.
+    def grade_detail(level: str, msg: str, detail: str) -> None:
+        grade(level, msg, detail)
+
+    # 1. Evidence-ledger exists & is valid.
+    if not evidence_path or not Path(evidence_path).exists():
+        grade_detail("fail", "事实校验",
+                     "evidence-ledger 文件不存在: 必须先生成 evidence-ledger（运行 R3）")
+        return
+
+    try:
+        ev_data = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
+    except Exception as e:
+        grade_detail("fail", "事实校验", f"evidence-ledger 解析失败: {e}")
+        return
+
+    if not isinstance(ev_data, dict) or ev_data.get("version") != 1:
+        grade_detail("fail", "事实校验",
+                     f"evidence-ledger version 不为 1: {ev_data.get('version')}")
+        return
+
+    evidence_list = ev_data.get("evidence", [])
+    if not isinstance(evidence_list, list):
+        grade_detail("fail", "事实校验", "evidence-ledger.evidence 不是 list")
+        return
+
+    # 2. Material pack SHA-256 matches.
+    if not material_pack_path or not Path(material_pack_path).exists():
+        grade_detail("fail", "事实校验", "material pack 文件不存在，无法校验 SHA")
+        return
+
+    mp_sha = hashlib.sha256(
+        Path(material_pack_path).read_bytes()
+    ).hexdigest()
+    ev_mp_sha = ev_data.get("material_pack_sha256", "")
+    if ev_mp_sha != mp_sha:
+        grade_detail(
+            "fail", "事实校验",
+            f"material_pack_sha256 不匹配 (ledger={ev_mp_sha[:12]}..."
+            f" vs file={mp_sha[:12]}...)：material pack 已被修改，请重新运行 R3",
+        )
+        return
+
+    # 3. Claim-ledger exists & is valid.
+    if not claim_path or not Path(claim_path).exists():
+        grade_detail("fail", "事实校验",
+                     "claim-ledger 文件不存在: 必须先生成 claim-ledger（运行 W0）")
+        return
+
+    try:
+        cl_data = json.loads(Path(claim_path).read_text(encoding="utf-8"))
+    except Exception as e:
+        grade_detail("fail", "事实校验", f"claim-ledger 解析失败: {e}")
+        return
+
+    if not isinstance(cl_data, dict) or cl_data.get("version") != 1:
+        grade_detail("fail", "事实校验",
+                     f"claim-ledger version 不为 1: {cl_data.get('version')}")
+        return
+
+    claims = cl_data.get("claims", [])
+    if not isinstance(claims, list):
+        grade_detail("fail", "事实校验", "claim-ledger.claims 不是 list")
+        return
+
+    # 4. Draft SHA matches.
+    if not draft_path or not Path(draft_path).exists():
+        grade_detail("fail", "事实校验", "draft 文件不存在")
+        return
+
+    draft_text = Path(draft_path).read_text(encoding="utf-8")
+    # Only the article body (before ===CLAIM_LEDGER===) is hashed.
+    draft_body = draft_text.split("===CLAIM_LEDGER===")[0].strip()
+    actual_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+    expected_sha = cl_data.get("draft_sha256", "")
+    if not expected_sha or actual_sha != expected_sha:
+        grade_detail(
+            "fail", "事实校验",
+            f"claim-ledger draft_sha256 不匹配: ledger={expected_sha[:12]}..."
+            f" actual={actual_sha[:12]}...；草稿已被修改，请重新运行 W0",
+        )
+        return
+
+    # 5. Build evidence index and check for ID collisions.
+    ev_map: dict[str, dict] = {}
+    seen_ids: set[str] = set()
+    for ev in evidence_list:
+        eid = ev.get("evidence_id", "")
+        if not eid:
+            continue
+        if eid in seen_ids:
+            grade_detail("fail", "事实校验",
+                         f"evidence-ledger 含重复 evidence_id={eid}")
+            return
+        seen_ids.add(eid)
+        ev_map[eid] = ev
+
+    # 6. Validate each claim.
+    blocking_items: list[str] = []
+    for idx, claim in enumerate(claims):
+        ct = (claim.get("claim_text") or "").strip()
+        ctype = (claim.get("claim_type") or "").strip()
+        eids = claim.get("evidence_ids", [])
+        if not isinstance(eids, list):
+            eids = []
+
+        if not ct:
+            blocking_items.append(f"  • [blocking] claims[{idx}].claim_text 为空")
+            continue
+        if not ctype:
+            blocking_items.append(
+                f"  • [blocking] claim '{ct[:40]}' 缺 claim_type"
+            )
+            continue
+        if not _claim_in_draft(ct, draft_body):
+            blocking_items.append(
+                f"  • [blocking] claim_text 不在草稿正文中: '{ct[:60]}'"
+            )
+            continue
+
+        if not eids:
+            blocking_items.append(
+                f"  • [blocking] claim '{ct[:40]}' 缺 evidence_ids"
+            )
+            continue
+
+        for eid in eids:
+            if not eid or not isinstance(eid, str):
+                blocking_items.append(
+                    f"  • [blocking] claim '{ct[:40]}' 含空的 evidence_id"
+                )
+                continue
+            ev = ev_map.get(eid)
+            if not ev:
+                blocking_items.append(
+                    f"  • [blocking] claim '{ct[:40]}' 引用了不存在的 "
+                    f"evidence_id={eid}"
+                )
+                continue
+            url = (ev.get("source_url") or "").strip()
+            if not url:
+                blocking_items.append(
+                    f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
+                    f"缺 source_url"
+                )
+                continue
+            quote = (ev.get("quote") or "").strip()
+            kf = (ev.get("key_finding") or "").strip()
+            if not quote and not kf:
+                blocking_items.append(
+                    f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
+                    f"无 quote 也无 key_finding"
+                )
+                continue
+
+    # 7. Extract factual sentences from draft and check coverage.
+    extracted = _extract_factual_sentences(draft_body)
+    claimed_texts = {_normalize(c.get("claim_text", "")) for c in claims if c.get("claim_text")}
+    for cand in extracted:
+        norm = _normalize(cand["sentence"])
+        if norm and norm not in claimed_texts:
+            blocking_items.append(
+                f"  • [blocking] 文章含事实句但 ledger 未覆盖: "
+                f"'{cand['sentence'][:80]}'"
+            )
+
+    # 8. Verdict.
     if not blocking_items:
-        grade('ok', '事实校验',
-              f'全部 {len(claims)} 个 claim 都有有效 evidence 支持')
+        grade_detail("ok", "事实校验",
+                     f"全部 {len(claims)} 个 claim 通过 evidence 验证")
     else:
-        has_blocking = any('blocking' in item for item in blocking_items)
-        level = 'fail' if has_blocking else 'warn'
-        detail_text = '\n'.join(blocking_items[:10])
-        if len(blocking_items) > 10:
-            detail_text += f'\n  • (+{len(blocking_items)-10} more)'
-        grade(level, '事实校验（claim → evidence 映射）',
-              f'{issue_count} 个 claim 存在证据问题：\n' + detail_text)
+        detail_text = "\n".join(blocking_items)
+        grade_detail("fail", "事实校验",
+                     f"{len(blocking_items)} 个事实校验问题:\n{detail_text}")
 
 
 def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
-        evidence_ledger: str = '', claim_ledger: str = '') -> dict:
+        evidence_ledger: str = '', claim_ledger: str = '',
+        material_pack: str = '') -> dict:
     meta, body, clean, prose, raw = parse_draft(draft)
     results = []
     tier = tier or meta.get('page type', meta.get('tier', ''))
@@ -663,7 +848,8 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
         ]
 
     # 14. Claim-ledger fact check (evidence-driven)
-    _run_fact_check(results, grade, evidence_ledger, claim_ledger)
+    _run_fact_check(results, grade, evidence_ledger, claim_ledger,
+                    material_pack, draft)
 
     return {'draft': draft, 'tier': tier, 'word_count': wc, 'checks': results,
             'pass_count': sum(1 for r in results if r['pass']),
@@ -749,10 +935,12 @@ def main():
     ap.add_argument('--pack', default='', help='Path to material pack .md (used for entity-coverage check)')
     ap.add_argument('--evidence-ledger', default='', help='Path to evidence-ledger JSON')
     ap.add_argument('--claim-ledger', default='', help='Path to claim-ledger JSON')
+    ap.add_argument('--material-pack', default='', help='Path to material pack (for SHA check)')
     ap.add_argument('--json', action='store_true')
     args = ap.parse_args()
     report = run(args.draft, args.tier or '', args.keywords or '',
-                 args.pack or '', args.evidence_ledger or '', args.claim_ledger or '')
+                 args.pack or '', args.evidence_ledger or '',
+                 args.claim_ledger or '', args.material_pack or '')
     if args.json:
         import json
         print(json.dumps(report, ensure_ascii=False, indent=2))

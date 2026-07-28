@@ -572,18 +572,22 @@ async def _run_ai_text(purpose: str, system: str, user: str, *,
 
 # ── Evidence + Claim ledger helpers ────────────────────────────────────
 
-# Stable ID namespace: evidence-{slug}-{uuid_prefix}.
-# uuid4 is imported at the top of the file.
 
-# Re-import the parser functions from write_pre_check at call time so that
-# even if data_sources is not on sys.path at module load time, the helpers
-# can still be called at runtime from the proper environment.
 
 def _parse_material_pack(mp_path: Path) -> list[dict]:
-    """Shortcut: parse a material pack markdown file into entry dicts
-    using the shared parser from write_pre_check.py."""
     from data_sources.modules.write_pre_check import parse_pack_entities
     return parse_pack_entities(mp_path)
+
+
+def _compute_evidence_id(payload: dict) -> str:
+    """Stable SHA-256 based evidence ID.
+
+    ``payload`` must contain ``source_url``, ``quote``, ``key_finding``,
+    and ``canonical_concepts`` (sorted).  All fields participate in the
+    hash.  The same payload always produces the same ID.
+    """
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "ev_" + hashlib.sha256(raw).hexdigest()[:12]
 
 
 def _write_evidence_ledger(
@@ -591,57 +595,270 @@ def _write_evidence_ledger(
 ) -> dict:
     """Parse the material pack and write a structured evidence-ledger JSON.
 
-    Each evidence entry gets a stable ID and includes the original source
-    URL, a canonical concept tag, and whether this evidence is required.
-    The file lives at ``workspace / research / evidence-ledger-{slug}.json``.
+    Evidence ID is a stable SHA-256 hash of the source_url + quote +
+    key_finding + canonical_concepts.  Entries without a valid URL or
+    without both quote AND key_finding empty are skipped.
+
+    Returns ``{"count": N, "path": str, "skipped": M}``.
     """
+    mp_bytes = mp_path.read_bytes()
+    mp_sha = hashlib.sha256(mp_bytes).hexdigest()
     entries = _parse_material_pack(mp_path)
+
+    seen_ids: set[str] = set()
     ledger: list[dict[str, object]] = []
-    for i, ent in enumerate(entries):
-        evidence_id = f"evidence-{slug}-{i:03d}-{uuid4().hex[:6]}"
+    skipped = 0
+
+    for ent in entries:
+        source_url = (ent.get("evidence") or "").strip()
+        quote = (ent.get("source_quote") or "").strip()
+        key_finding = (ent.get("source_key_finding") or "").strip()
+        if not source_url or (not quote and not key_finding):
+            skipped += 1
+            continue
+
+        concepts_raw = ent.get("entity") or ""
+        # Canonical concepts from the entity title: split on / and strip.
+        concepts = sorted(
+            c.strip().lower() for c in concepts_raw.split("/") if c.strip()
+        )
+        if not concepts:
+            concepts = ["uncategorized"]
+
+        payload = {
+            "source_url": source_url,
+            "quote": quote,
+            "key_finding": key_finding,
+            "canonical_concepts": concepts,
+        }
+        ev_id = _compute_evidence_id(payload)
+
+        if ev_id in seen_ids:
+            # Same payload → deduplicate (skip duplicate entry)
+            continue
+        seen_ids.add(ev_id)
+
         tag = ent.get("source_tag", "search")
         is_required = (tag == "required")
-        entry: dict[str, object] = {
-            "evidence_id": evidence_id,
-            "source_url": ent.get("evidence", ""),
-            "canonical_concept": ent.get("entity", ""),
-            "claim_type": ent.get("source_section", "search"),
-            "quote": ent.get("source_quote", ""),
-            "key_finding": ent.get("source_key_finding", ""),
-            "summary": ent.get("source_summary", ""),
-            "required": is_required,
-        }
-        ledger.append(entry)
+        # Infer claim_types from section letter.
+        section = (ent.get("source_section") or "").strip()
+        claim_types: list[str] = []
+        if section == "A":
+            claim_types = ["pain_point"]
+        elif section == "C":
+            claim_types = ["case_study"]
+        elif section == "E":
+            claim_types = ["authority_citation"]
+        elif section == "G":
+            claim_types = ["paa_question"]
+        else:
+            claim_types = ["search_result"]
 
+        ledger.append({
+            "evidence_id": ev_id,
+            "source_url": source_url,
+            "quote": quote,
+            "key_finding": key_finding,
+            "canonical_concepts": concepts,
+            "claim_types": claim_types,
+            "required": is_required,
+        })
+
+    # Collision check: distinct payloads that hash to the same ID must
+    # not silently overwrite.  We only have deduplicated entries in the
+    # ledger already, so this check is for extra safety.
+    payload_by_id: dict[str, str] = {}
+    for entry in ledger:
+        eid = entry["evidence_id"]
+        canon = json.dumps(
+            {
+                "source_url": entry["source_url"],
+                "quote": entry["quote"],
+                "key_finding": entry["key_finding"],
+                "canonical_concepts": sorted(entry["canonical_concepts"]),
+            },
+            sort_keys=True, separators=(",", ":"),
+        )
+        if eid in payload_by_id and payload_by_id[eid] != canon:
+            raise RuntimeError(
+                f"Evidence ID collision: {eid} maps to distinct payloads — "
+                "aborting.  This should not happen with SHA-256."
+            )
+        payload_by_id[eid] = canon
+
+    out_data = {
+        "version": 1,
+        "material_pack_sha256": mp_sha,
+        "evidence": ledger,
+    }
     out_path = workspace / "research" / f"evidence-ledger-{slug}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"count": len(ledger), "path": str(out_path)}
+        json.dumps(out_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"count": len(ledger), "path": str(out_path), "skipped": skipped}
 
 
-def _write_claim_ledger(
-    workspace: Path, slug: str, claim_ledger_text: str,
-) -> dict:
-    """Write the structured claim-ledger JSON from the AI-chunk that W0
-    appended after ``===CLAIM_LEDGER===``.
-
-    The claim_ledger_text should already be valid JSON (the AI is
-    instructed to output a JSON array). Returns how many claims were
-    persisted.
-    """
-    import json as _json
-    out_path = workspace / "research" / f"claim-ledger-{slug}.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+def _read_evidence_ledger(workspace: Path, slug: str) -> dict | None:
+    """Load the evidence-ledger JSON, or None if missing / invalid."""
+    p = workspace / "research" / f"evidence-ledger-{slug}.json"
+    if not p.exists():
+        return None
     try:
-        data = _json.loads(claim_ledger_text)
-        if not isinstance(data, list):
-            data = []
-    except (_json.JSONDecodeError, Exception):
-        data = []
-    out_path.write_text(
-        _json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"count": len(data), "path": str(out_path)}
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _read_claim_ledger(workspace: Path, slug: str) -> dict | None:
+    """Load the claim-ledger JSON, or None if missing / invalid."""
+    p = workspace / "research" / f"claim-ledger-{slug}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _remove_ledger_files(workspace: Path, slug: str) -> None:
+    """Delete evidence-ledger and claim-ledger for the given slug."""
+    for name in ("evidence-ledger", "claim-ledger"):
+        p = workspace / "research" / f"{name}-{slug}.json"
+        if p.exists():
+            p.unlink()
+
+
+def _normalize_claim(text: str) -> str:
+    """Normalize a claim_text or draft sentence for exact matching.
+
+    - strip
+    - collapse all runs of whitespace/newlines to single space
+    - strip trailing punctuation (.,;:!?)
+
+    This ensures that an AI-generated claim_text of the form
+    ``"5mW is enough\\nfor ceiling work."`` matches the draft
+    sentence ``5mW is enough for ceiling work``.
+    """
+    if not text:
+        return ""
+    text = text.strip()
+    text = " ".join(text.split())  # collapse any whitespace
+    text = text.rstrip(".,;:!?")
+    return text.strip()
+
+
+def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
+    """Parse and validate the AI-provided claim ledger JSON against the
+    article body.  Returns the validated dict or raises ValueError with
+    a human-readable reason.
+
+    * ``version`` must be 1
+    * ``claims`` must be a list
+    * each claim must have non-empty ``claim_text``, ``claim_type``,
+      and a non-empty list ``evidence_ids`` (each non-empty string)
+    * each ``claim_text`` must exist in ``draft_body`` after normalization
+    """
+    if not cl_json or not cl_json.strip():
+        raise ValueError("===CLAIM_LEDGER=== section is empty")
+
+    try:
+        data = json.loads(cl_json)
+    except Exception as exc:
+        raise ValueError(f"CLAIM_LEDGER JSON parse failed: {exc}") from None
+
+    if not isinstance(data, dict):
+        raise ValueError("CLAIM_LEDGER must be a JSON object")
+    if data.get("version") != 1:
+        raise ValueError(f"CLAIM_LEDGER version must be 1, got {data.get('version')}")
+    claims = data.get("claims")
+    if not isinstance(claims, list):
+        raise ValueError("CLAIM_LEDGER.claims must be a list")
+
+    normalized_draft = [_normalize_claim(s) for s in draft_body.split("\n")]
+
+    for idx, c in enumerate(claims):
+        if not isinstance(c, dict):
+            raise ValueError(f"claims[{idx}] is not a dict")
+        ct = (c.get("claim_text") or "").strip()
+        ctype = (c.get("claim_type") or "").strip()
+        if not ct:
+            raise ValueError(f"claims[{idx}].claim_text is empty")
+        if not ctype:
+            raise ValueError(f"claims[{idx}].claim_type is empty")
+        eids = c.get("evidence_ids")
+        if not isinstance(eids, list) or not eids:
+            raise ValueError(f"claims[{idx}] evidence_ids is empty or not a list")
+        for eid in eids:
+            if not isinstance(eid, str) or not eid.strip():
+                raise ValueError(f"claims[{idx}] contains empty evidence_id")
+
+        norm_ct = _normalize_claim(ct)
+        if not norm_ct:
+            raise ValueError(f"claims[{idx}].claim_text is empty after normalization")
+        if norm_ct not in normalized_draft:
+            raise ValueError(
+                f"claims[{idx}].claim_text not found as full sentence in draft: "
+                f"{ct[:60]}"
+            )
+
+    return data
+
+
+def _write_ahead_draft_and_ledger(
+    workspace: Path, slug: str,
+    draft_text: str, cl_data: dict,
+) -> dict:
+    """Atomically write a draft .md and its claim-ledger, returning
+    ``{"draft_path": str, "claim_path": str}``.
+
+    Uses Python-level write-ahead: write temp files first, then rename.
+    If either write fails, the old files remain in place.
+    """
+    import os as _os
+    import tempfile as _tf
+
+    draft_path = workspace / "drafts" / f"{slug}-{_today_str()}.md"
+    cl_path = workspace / "research" / f"claim-ledger-{slug}.json"
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    cl_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write-ahead: temp files before touching originals.
+    _, tmp_draft_path_str = _tf.mkstemp(
+        dir=str(draft_path.parent),
+        prefix=f".{slug}-", suffix=".md.tmp"
+    )
+    tmp_draft_path = Path(tmp_draft_path_str)
+    tmp_draft_path.write_text(draft_text, encoding="utf-8")
+
+    _, tmp_cl_path_str = _tf.mkstemp(
+        dir=str(cl_path.parent),
+        prefix=f".{slug}-", suffix=".json.tmp"
+    )
+    tmp_cl_path = Path(tmp_cl_path_str)
+    tmp_cl_path.write_text(
+        json.dumps(cl_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Rename temp → real (atomic on same filesystem)
+    _os.replace(tmp_draft_path, draft_path)
+    _os.replace(tmp_cl_path, cl_path)
+
+    return {"draft_path": str(draft_path), "claim_path": str(cl_path)}
+
+
+def _ledger_refs(workspace: Path, slug: str) -> str:
+    """Return a human-readable evidence reference block for the W0 prompt."""
+    ev = _read_evidence_ledger(workspace, slug)
+    if not ev or not ev.get("evidence"):
+        return ""
+    lines: list[str] = []
+    for e in ev["evidence"]:
+        eid = e.get("evidence_id", "?")
+        url = e.get("source_url", "")
+        q = e.get("quote") or e.get("key_finding") or ""
+        required = e.get("required", False)
+        tag = " [required]" if required else ""
+        lines.append(f"- {eid}: {url} | {q[:100]}{tag}")
+    return "\n".join(lines) + "\n"
 
 
 # ── R0: Generate Search Prompt ──────────────────────────────────────────
@@ -1081,6 +1298,8 @@ async def stage_r3_ai_analyze(topic: str, workspace: Path, settings=None) -> dic
         }
 
     clear_stage_artifacts(workspace, slug, "w0")
+    # Purge stale ledgers so a failed R3 cannot leave orphaned evidence.
+    _remove_ledger_files(workspace, slug)
 
     score_path = workspace / "research" / f"research-score-{slug}-{today}.md"
     score_run_path = (
@@ -1252,11 +1471,24 @@ SEO Keywords: [comma-separated, primary first]
 6. No generic link anchors
 7. No fabricated numbers
 
-8. After the article, output ``===CLAIM_LEDGER===`` and a JSON array of
-   factual claims from the article (technical_specification,
-   numerical_claim, comparison, causal_statement, safety_regulation).
-   Every claim must be supported by the Material Pack — do not fabricate.
-   If nothing factual, output ``===CLAIM_LEDGER===\n[]``.
+8. After the article, output ``===CLAIM_LEDGER===`` and a JSON object:
+
+   {
+     "version": 1,
+     "claims": [
+       {
+         "claim_text": "Exactly one full sentence from the article, verbatim",
+         "claim_type": "technical_specification|numeric|comparison|causal|safety|regulatory|general",
+         "evidence_ids": ["ev_xxx"]
+       }
+     ]
+   }
+
+   Every claim_text must be a sentence that also appears in the article body
+   (the service checks this).  claim_types: specification / numeric /
+   comparison / causal / safety / regulatory / general.  evidence_ids must
+   be from the Evidence References section above.  Do NOT fabricate IDs.
+   If no factual claims, output ``===CLAIM_LEDGER===\n{"version":1,"claims":[]}``.
 
 Output the article Markdown, then ``===CLAIM_LEDGER===``, then the JSON.
 No preamble, no commentary, no code fence around the whole document."""
@@ -1298,6 +1530,10 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
     # Use "w0" as the marker so the function also clears W0's own outputs
     # (drafts, w2-state); the explicit old-draft loop below re-creates the draft.
     clear_stage_artifacts(workspace, slug, "w0")
+    # Purge stale claim-ledger so an illegal W0 output cannot reuse old data.
+    cl_p = workspace / "research" / f"claim-ledger-{slug}.json"
+    if cl_p.exists():
+        cl_p.unlink()
 
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not mp:
@@ -1316,6 +1552,11 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
 
     ctx = read_topic_context(topic, workspace)
     tier = resolve_tier(topic, workspace)
+
+    # Build evidence reference block for the AI prompt.
+    ev_refs = _ledger_refs(workspace, slug)
+    ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
+
     user_prompt = f"""Write: "{topic}"
 
 ## Topic Context
@@ -1329,8 +1570,9 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
 
 ## Context
 {_write_context_block(workspace)}
-
-Follow the system instructions. Output the full article Markdown with frontmatter."""
+{ev_section}
+Follow the system instructions. Output the full article Markdown, then
+===CLAIM_LEDGER=== and the claim ledger JSON."""
 
     try:
         content = await _run_ai_text(
@@ -1339,27 +1581,31 @@ Follow the system instructions. Output the full article Markdown with frontmatte
     except Exception as exc:
         return {"success": False, "error": str(exc), "report": report}
 
-    # Strip code fences and split on claim-ledger separator.
     clean = _strip_code_fence(content)
-    draft_md, cl_text = clean, ""
     sep = "===CLAIM_LEDGER==="
-    if sep in clean:
-        parts = clean.split(sep, 1)
-        draft_md = parts[0].strip()
-        cl_text = parts[1].strip()
+    if sep not in clean:
+        return {
+            "success": False,
+            "error": "AI 输出未包含 ===CLAIM_LEDGER=== 区块；请重试 W0",
+            "report": report,
+        }
+    parts = clean.split(sep, 1)
+    draft_md = parts[0].strip()
+    cl_json = parts[1].strip()
 
-    draft_path = workspace / "drafts" / f"{slug}-{today}.md"
-    draft_path.parent.mkdir(parents=True, exist_ok=True)
-    # Overwrite any prior draft for this slug so re-running W0 cannot leave
-    # an old draft sitting alongside the new one.
-    for old in (workspace / "drafts").glob(f"{slug}-*.md"):
-        if old.is_file():
-            old.unlink()
-    draft_path.write_text(draft_md, encoding="utf-8")
+    if not draft_md:
+        return {"success": False, "error": "AI 输出了空的文章正文", "report": report}
 
-    # Write claim ledger if the AI produced one.
-    if cl_text:
-        _write_claim_ledger(workspace, slug, cl_text)
+    # Parse and validate the claim ledger, then compute draft_sha256 serverside.
+    try:
+        cl_data = _validate_claim_ledger_json(cl_json, draft_md)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc), "report": report}
+
+    cl_data["draft_sha256"] = hashlib.sha256(draft_md.encode("utf-8")).hexdigest()
+
+    # Write-ahead: write temp files then rename.
+    _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
 
     # A fresh draft invalidates any previous post-process verdict.
     save_w2_state(workspace, slug, {"rounds": 0, "gate_passed": False, "applied": False})
@@ -1469,12 +1715,15 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
         args += ["--pack", str(mp)]
 
     # Pass evidence-ledger and claim-ledger for fact checking (check 14).
+    # Fail-closed: the pre-check script blocks if these files are missing.
     ev_ledger = workspace / "research" / f"evidence-ledger-{slug}.json"
     cl_ledger = workspace / "research" / f"claim-ledger-{slug}.json"
-    if ev_ledger.exists():
-        args += ["--evidence-ledger", str(ev_ledger)]
-    if cl_ledger.exists():
-        args += ["--claim-ledger", str(cl_ledger)]
+    args += ["--evidence-ledger", str(ev_ledger)]
+    args += ["--claim-ledger", str(cl_ledger)]
+
+    # Pass material pack path for SHA-256 comparison.
+    if mp:
+        args += ["--material-pack", str(mp)]
 
     args.append("--json")
 
@@ -1596,6 +1845,9 @@ async def stage_w1b_revise(
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     resolved_tier = resolve_tier(topic, workspace, tier)
 
+    ev_refs = _ledger_refs(workspace, slug)
+    ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
+
     user_prompt = f"""Revise the article for: "{topic}"
 
 The article failed the W1b pre-check. Fix the items listed below using
@@ -1613,8 +1865,9 @@ invent facts, numbers, quotes, or URLs.
 
 ## Valid internal link targets
 {_read_text(workspace / 'context' / 'internal-links-map.md', _CONTEXT_CHAR_LIMIT)}
-
-Output the complete revised article Markdown with frontmatter."""
+{ev_section}
+Output the complete revised article Markdown, then ===CLAIM_LEDGER=== and
+the updated claim ledger JSON matching the new draft."""
 
     try:
         revised = await _run_ai_text(
@@ -1624,9 +1877,29 @@ Output the complete revised article Markdown with frontmatter."""
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
+    clean = _strip_code_fence(revised)
+    sep = "===CLAIM_LEDGER==="
+    if sep not in clean:
+        return {"success": False, "error": "修订输出未含 ===CLAIM_LEDGER==="}
+    parts = clean.split(sep, 1)
+    new_draft_md = parts[0].strip()
+    cl_json = parts[1].strip()
+    if not new_draft_md:
+        return {"success": False, "error": "修订输出文章正文为空"}
+
+    try:
+        cl_data = _validate_claim_ledger_json(cl_json, new_draft_md)
+    except ValueError as exc:
+        return {"success": False, "error": f"修订 CLAIM_LEDGER 校验失败: {exc}"}
+
+    cl_data["draft_sha256"] = hashlib.sha256(new_draft_md.encode("utf-8")).hexdigest()
+
+    # Backup the original draft.
     backup = draft.with_suffix(f".precheck-rev{rounds + 1}.md")
     backup.write_text(_read_text(draft), encoding="utf-8")
-    draft.write_text(_strip_code_fence(revised), encoding="utf-8")
+
+    # Write-ahead: temp files → rename.  On failure, old files survive.
+    _write_ahead_draft_and_ledger(workspace, slug, new_draft_md, cl_data)
 
     state["rounds"] = rounds + 1
     save_w2_state(workspace, slug, state)
@@ -1834,9 +2107,13 @@ Rules:
    post-process script generates those.
 7. Preserve the required structure: Key Takeaways block, H2 body, FAQ section,
    FAQPage JSON-LD.
+8. After the revised article, output ``===CLAIM_LEDGER===`` and an updated claim
+   ledger JSON (same format as W0: ``{"version":1,"claims":[...]}``). Every
+   claim_text must be a sentence from the new article and evidence_ids must
+   reference the Evidence References section.
 
-Output ONLY the complete revised article Markdown. No preamble, no commentary,
-no explanation of what you changed, no code fence around the whole document."""
+Output the article Markdown, then ``===CLAIM_LEDGER===``, then the JSON.
+No preamble, no commentary, no code fence around the whole document."""
 
 
 async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:

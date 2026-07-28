@@ -92,6 +92,10 @@ def _synthetic_ai_response(purpose: str) -> str:
             '<script type="application/ld+json">\n'
             '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[]}\n'
             "</script>\n"
+            "===CLAIM_LEDGER===\n"
+            '{"version":1,"claims":['
+            '{"claim_text":"This is a synthetic draft used as a test fixture.","claim_type":"technical_specification","evidence_ids":["ev_test001"]}'
+            ']}\n'
         )
     if purpose == "legacy_write_revise":
         return (
@@ -101,7 +105,7 @@ def _synthetic_ai_response(purpose: str) -> str:
             "Author: TestAuthor\n"
             "Summary: Synthetic revised summary.\n"
             "Tags: tag1, tag2, tag3\n"
-            "SEO Title: \"Synthetic Revised SEO Title Here\"\n"
+            "SEO Title: \"Synthetic Revised SEO Title That Is Long Enough\"\n"
             "SEO Description: " + ("B" * 152) + "\n"
             "SEO Keywords: synthetic, revised, fixture\n"
             "---\n\n"
@@ -119,7 +123,11 @@ def _synthetic_ai_response(purpose: str) -> str:
             "### Q: revised question 2?\n\n"
             "A: revised answer 2.\n\n"
             "### Q: revised question 3?\n\n"
-            "A: revised answer 3.\n"
+            "A: revised answer 3.\n\n"
+            "===CLAIM_LEDGER===\n"
+            '{"version":1,"claims":['
+            '{"claim_text":"This is a revised synthetic draft.","claim_type":"general","evidence_ids":["ev_revised001"]}'
+            ']}\n'
         )
     if purpose == "legacy_backlink_select":
         return (

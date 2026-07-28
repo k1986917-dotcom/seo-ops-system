@@ -946,42 +946,52 @@ class TestFactCheck:
             assert m["severity"] == "warning", f"Should be warning: {m}"
 
     def test_unsourced_technical_fact_blocked(self, tmp_path):
-        """A claim referencing non-existent evidence_id or missing
-        source_url/quote must be blocking."""
         from data_sources.modules.write_pre_check import _run_fact_check
         ev_f = tmp_path / "ev.json"
         cl_f = tmp_path / "cl.json"
-        ev_f.write_text(
-            '[]', encoding="utf-8"
-        )
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("fake material pack", encoding="utf-8")
+        dr_f.write_text("draft", encoding="utf-8")
         cl_f.write_text(
-            '[{"claim": "Technical claim without evidence", "evidence_ids": []}]',
+            '{"version":1,"claims":[{"claim_text":"draft","claim_type":"test","evidence_ids":[]}],"draft_sha256":"' +
+            hashlib.sha256(b"draft").hexdigest() + '"}',
             encoding="utf-8",
         )
+        # Empty evidence ledger is invalid — should block.
+        ev_f.write_text('{"version":1,"material_pack_sha256":"' +
+                        hashlib.sha256(b"fake material pack").hexdigest() +
+                        '","evidence":[]}', encoding="utf-8")
         results = []
         def grade(level, msg, detail=''):
             results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
-        _run_fact_check(results, grade, str(ev_f), str(cl_f))
-        # A claim with no evidence_ids → warning (not blocking), or if no warning → still pass
-        fact_check = [r for r in results if '事实校验' in r['item']]
-        assert any(fact_check)
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        # claim has empty evidence_ids → blocking
+        assert not all(r['pass'] for r in fact), f"Should block: {results}"
 
     def test_valid_evidence_pass(self, tmp_path):
         from data_sources.modules.write_pre_check import _run_fact_check
         ev_f = tmp_path / "ev.json"
         cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("A green 5mW laser is bright.", encoding="utf-8")
+        dr_sha = hashlib.sha256(b"A green 5mW laser is bright.").hexdigest()
         ev_f.write_text(
-            '[{"evidence_id": "ev-001", "source_url": "https://ex.com/a", "quote": "data"}]',
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '","evidence":[{"evidence_id":"ev-001","source_url":"https://ex.com/a","quote":"data","canonical_concepts":["laser"],"claim_types":["spec"],"required":false}]}',
             encoding="utf-8",
         )
         cl_f.write_text(
-            '[{"claim": "Valid tech spec", "evidence_ids": ["ev-001"]}]',
+            '{"version":1,"claims":[{"claim_text":"A green 5mW laser is bright.","claim_type":"technical_specification","evidence_ids":["ev-001"]}],"draft_sha256":"' + dr_sha + '"}',
             encoding="utf-8",
         )
         results = []
         def grade(level, msg, detail=''):
             results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
-        _run_fact_check(results, grade, str(ev_f), str(cl_f))
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
         fact = [r for r in results if '事实校验' in r['item']]
         assert all(r['pass'] for r in fact), f"Should all pass: {results}"
 
@@ -989,18 +999,24 @@ class TestFactCheck:
         from data_sources.modules.write_pre_check import _run_fact_check
         ev_f = tmp_path / "ev.json"
         cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("claim text here", encoding="utf-8")
+        dr_sha = hashlib.sha256(b"claim text here").hexdigest()
         ev_f.write_text(
-            '[{"evidence_id": "ev-001", "source_url": "https://ex.com/a", "quote": "data"}]',
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '","evidence":[{"evidence_id":"ev-001","source_url":"https://ex.com/a","quote":"data","canonical_concepts":["x"],"claim_types":["y"],"required":false}]}',
             encoding="utf-8",
         )
         cl_f.write_text(
-            '[{"claim": "Claim with fake ID", "evidence_ids": ["ev-999"]}]',
+            '{"version":1,"claims":[{"claim_text":"claim text here","claim_type":"tech","evidence_ids":["ev-999"]}],"draft_sha256":"' + dr_sha + '"}',
             encoding="utf-8",
         )
         results = []
         def grade(level, msg, detail=''):
             results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
-        _run_fact_check(results, grade, str(ev_f), str(cl_f))
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
         fact = [r for r in results if '事实校验' in r['item']]
         fail = [r for r in fact if not r['pass']]
         assert len(fail) >= 1, f"Expected at least one fail: {results}"
