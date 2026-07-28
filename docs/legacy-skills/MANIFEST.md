@@ -1,6 +1,6 @@
 # Legacy Skills Reference Snapshot — MANIFEST
 
-Snapshot taken on: 2026-07-27
+Snapshot taken on: 2026-07-27 (research + write); 2026-07-28 (plan added)
 Snapshot purpose: Provide immutable reference copies of the original (legacy) SEO workflow skill definitions and the frozen scripts they invoke, so that downstream code review can verify whether the current system (`src/seo_ops/...`) conforms to the original business rules.
 
 This snapshot is **read-only reference material**. Do not edit, refactor, or "modernize" these files in place. If business rules need to change, create new ADR documents and update the live system; keep this snapshot as the historical baseline.
@@ -21,12 +21,16 @@ Original top-level layout:
 /home/laoma/seo-workflow/
 ├── .opencode/
 │   └── skills/
+│       ├── plan/SKILL.md
 │       ├── research/SKILL.md
 │       └── write/SKILL.md
 └── data_sources/
     └── modules/
         ├── cannibalization_checker.py
         ├── content_scorer.py
+        ├── plan_collector.py
+        ├── plan_feedback.py
+        ├── plan_scorer.py
         ├── research_collector.py
         ├── research_scorer.py
         ├── write_collector.py
@@ -41,6 +45,7 @@ Original top-level layout:
 
 | Original absolute path | Repository path | Type | SHA-256 | Size (bytes) |
 |---|---|---|---|---|
+| `/home/laoma/seo-workflow/.opencode/skills/plan/SKILL.md` | `docs/legacy-skills/plan/SKILL.md` | original skill doc | `ccba15d7db3f3e060448dd6faf9e65d53e034df5237ad65a3106c4bab05d0fe5` | 6952 |
 | `/home/laoma/seo-workflow/.opencode/skills/research/SKILL.md` | `docs/legacy-skills/research/SKILL.md` | original skill doc | `a2e9416be82230101c3b677df568f58dcdb0f4fadd4dcb138308df94d978caa7` | 12946 |
 | `/home/laoma/seo-workflow/.opencode/skills/write/SKILL.md` | `docs/legacy-skills/write/SKILL.md` | original skill doc | `bbaccea1a833a396b159aae6aabdad91362aabc3a972baf43090c88c4ca85337` | 14512 |
 
@@ -48,6 +53,9 @@ Original top-level layout:
 
 | Original absolute path | Repository path | Type | SHA-256 | Size (bytes) |
 |---|---|---|---|---|
+| `/home/laoma/seo-workflow/data_sources/modules/plan_collector.py` | `docs/legacy-skills/data_sources/modules/plan_collector.py` | referenced frozen script | `f81c1c86a8c5c633913241e7d3c612afc070ccfd0ee0662c083070f83d40912e` | 47966 |
+| `/home/laoma/seo-workflow/data_sources/modules/plan_scorer.py` | `docs/legacy-skills/data_sources/modules/plan_scorer.py` | referenced frozen script | `574c81c0076ae00ad7ff22a4e8a19ae5a78809444195a801df9df0b04a37de2e` | 22056 |
+| `/home/laoma/seo-workflow/data_sources/modules/plan_feedback.py` | `docs/legacy-skills/data_sources/modules/plan_feedback.py` | referenced frozen script | `f096c790f720f7cd32b40de81b0f788f89f4fa3f7172082bbca76790981b4bc0` | 5743 |
 | `/home/laoma/seo-workflow/data_sources/modules/research_collector.py` | `docs/legacy-skills/data_sources/modules/research_collector.py` | referenced frozen script | `aafa91c43661f4ca9ccdfba47a4d07379ce64de774ccbd81ca0b32039493cb7d` | 70055 |
 | `/home/laoma/seo-workflow/data_sources/modules/research_scorer.py` | `docs/legacy-skills/data_sources/modules/research_scorer.py` | referenced frozen script | `561384a2e4895176a330810cc1d0d19d4302f48acb706870e4915c4fefee9de5` | 10880 |
 | `/home/laoma/seo-workflow/data_sources/modules/cannibalization_checker.py` | `docs/legacy-skills/data_sources/modules/cannibalization_checker.py` | referenced frozen script | `b2fde8753f706b8ee2e731f1851cd4ce3cd4b294cd8e8ed348f2a15d2be5a1cb` | 10443 |
@@ -55,16 +63,19 @@ Original top-level layout:
 | `/home/laoma/seo-workflow/data_sources/modules/write_pre_check.py` | `docs/legacy-skills/data_sources/modules/write_pre_check.py` | referenced frozen script | `46575b268635e2b908e70197e4f3fcf907c4d6ef3fe8244914d716c357282640` | 20371 |
 | `/home/laoma/seo-workflow/data_sources/modules/content_scorer.py` | `docs/legacy-skills/data_sources/modules/content_scorer.py` | referenced frozen script | `777585808b6063a6de562bbbf97a2b2724b69793c867c463b2eeb5650187c1d1` | 40854 |
 
-**Total: 8 files, 234577 bytes.**
+**Total: 12 files, 392337 bytes.**
 
 ---
 
 ## Why each script was included
 
-Each file below is named or invoked in at least one of the two `SKILL.md` documents:
+Each file below is named or invoked in at least one of the three `SKILL.md` documents:
 
 | Script | Referenced by | Skill doc line(s) |
 |---|---|---|
+| `plan_collector.py` | Step 1 收集情报 | plan/SKILL.md line 31 |
+| `plan_scorer.py` | Step 2 确定性打分 | plan/SKILL.md lines 44, 77 |
+| `plan_feedback.py` | Step 5 记录反馈 | plan/SKILL.md lines 129, 130 |
 | `research_collector.py` | `generate-prompt`, `collect`, `archive` commands | research/SKILL.md lines 14, 108, 137, 289 |
 | `research_scorer.py` | Step 5 opportunity scoring | research/SKILL.md line 228 |
 | `cannibalization_checker.py` | Step 1 蚕食预检 | research/SKILL.md line 148 |
@@ -76,14 +87,10 @@ Each file below is named or invoked in at least one of the two `SKILL.md` docume
 
 ## Files NOT included (and why)
 
-The following files exist under `/home/laoma/seo-workflow/` but were intentionally excluded per the snapshot rules (only rules/templates/scripts directly related to research, scoring, gating, writing, revision; no runtime data, keys, tokens, databases, logs, or customer data):
+The following files exist under `/home/laoma/seo-workflow/` but were intentionally excluded per the snapshot rules (only rules/templates/scripts directly related to plan/research/scoring/gating/writing/revision; no runtime data, keys, tokens, databases, logs, or customer data):
 
 | Excluded path | Reason for exclusion |
 |---|---|
-| `/home/laoma/seo-workflow/.opencode/skills/plan/SKILL.md` | Planning skill is out of scope; only research and write were requested |
-| `/home/laoma/seo-workflow/data_sources/modules/plan_collector.py` | Plan collector is out of scope |
-| `/home/laoma/seo-workflow/data_sources/modules/plan_scorer.py` | Plan scorer is out of scope |
-| `/home/laoma/seo-workflow/data_sources/modules/plan_feedback.py` | Plan feedback is out of scope |
 | `/home/laoma/seo-workflow/data_sources/modules/seo_common.py` | Internal helper, not directly named in SKILL.md (only transitively imported by scripts) |
 | `/home/laoma/seo-workflow/data_sources/modules/seo_config.py` | Internal config, not named in SKILL.md |
 | `/home/laoma/seo-workflow/data_sources/modules/seo_quality_rater.py` | Quality rater is not invoked by SKILL.md |
@@ -103,7 +110,7 @@ Context files (brand-voice.md, writing-examples.md, style-guide.md, seo-guidelin
 
 ## Missing references (none)
 
-Every file directly invoked by name in `research/SKILL.md` and `write/SKILL.md` was found at the original location and copied. No references were missing.
+Every file directly invoked by name in `plan/SKILL.md`, `research/SKILL.md`, and `write/SKILL.md` was found at the original location and copied. No references were missing.
 
 ---
 
@@ -113,7 +120,10 @@ The hash values above can be re-verified any time with:
 
 ```bash
 cd docs/legacy-skills
-sha256sum research/SKILL.md write/SKILL.md \
+sha256sum plan/SKILL.md research/SKILL.md write/SKILL.md \
+  data_sources/modules/plan_collector.py \
+  data_sources/modules/plan_scorer.py \
+  data_sources/modules/plan_feedback.py \
   data_sources/modules/research_collector.py \
   data_sources/modules/research_scorer.py \
   data_sources/modules/cannibalization_checker.py \
@@ -126,7 +136,11 @@ Or against the originals:
 
 ```bash
 cd /home/laoma/seo-workflow
-sha256sum .opencode/skills/research/SKILL.md .opencode/skills/write/SKILL.md \
+sha256sum .opencode/skills/plan/SKILL.md \
+  .opencode/skills/research/SKILL.md .opencode/skills/write/SKILL.md \
+  data_sources/modules/plan_collector.py \
+  data_sources/modules/plan_scorer.py \
+  data_sources/modules/plan_feedback.py \
   data_sources/modules/research_collector.py \
   data_sources/modules/research_scorer.py \
   data_sources/modules/cannibalization_checker.py \
@@ -141,6 +155,6 @@ Both runs should produce identical output, byte-for-byte.
 
 ## Provenance
 
-- Snapshot created by: code review tooling (Claude Code, session 2026-07-27)
+- Snapshot created by: code review tooling (Claude Code, session 2026-07-27; plan SKILL added 2026-07-28)
 - Source directory SHA: not separately captured (each file's SHA-256 above is the authoritative hash)
-- Sensitive-info scan: completed before commit; no secrets, keys, tokens, customer data, or production databases found in the 8 included files
+- Sensitive-info scan: completed before commit; no secrets, keys, tokens, customer data, or production databases found in the 12 included files
