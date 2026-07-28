@@ -1,8 +1,8 @@
 import asyncio
+import hashlib
 import json
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def _write(path: Path, text: str = "x") -> Path:
@@ -11,15 +11,82 @@ def _write(path: Path, text: str = "x") -> Path:
     return path
 
 
+def _state_for(draft: Path, **overrides) -> dict:
+    digest = hashlib.sha256(draft.read_bytes()).hexdigest()
+    state = {
+        "rounds": 0,
+        "gate_passed": False,
+        "applied": False,
+        "precheck_passed": True,
+        "precheck_draft_sha256": digest,
+        "precheck_tier": "Cluster Content",
+    }
+    state.update(overrides)
+    if state.get("applied"):
+        state.setdefault("applied_draft_sha256", digest)
+    return state
+
+
 class TestStageDetection:
     def test_slugify(self):
+        from data_sources.modules import seo_common, write_collector
         from seo_ops.services.legacy_workflow import _slugify
+
         assert _slugify("Best Laser Pointer 2026") == "best-laser-pointer-2026"
         assert _slugify("What! is this?") == "what-is-this"
         assert _slugify("a--b") == "a-b"
+        for topic in (
+            "red/green laser",
+            "user's laser & optics",
+            "中文主题",
+            "very " * 30 + "long topic",
+        ):
+            assert _slugify(topic) == seo_common.slugify(topic)
+            assert _slugify(topic) == write_collector._slugify(topic)
+
+    def test_non_latin_slug_is_stable_digest(self):
+        from seo_ops.services.legacy_workflow import _slugify
+
+        assert _slugify("中文主题") == "topic-eb4d7be8dc5d"
+
+    def test_action_attempt_workspaces_are_isolated(self, tmp_path):
+        from seo_ops.services.legacy_workflow import (
+            current_legacy_run,
+            start_legacy_run,
+        )
+
+        _write(tmp_path / "context" / "brand-voice.md", "shared context")
+        _write(tmp_path / "published" / "published-index.json", "[]")
+        _write(tmp_path / "products" / "live_products_report.md", "# products")
+
+        first = start_legacy_run(tmp_path, action_id=7, topic="same topic")
+        other = start_legacy_run(tmp_path, action_id=8, topic="same topic")
+        _write(first / "research" / "research-data-same-topic-2026-01-01.md", "first")
+
+        assert first != other
+        assert (first / "context" / "brand-voice.md").read_text() == "shared context"
+        assert not list((other / "research").glob("research-data-*.md"))
+        assert current_legacy_run(tmp_path, 7, "same topic") == first
+        assert current_legacy_run(tmp_path, 8, "same topic") == other
+
+        retry = start_legacy_run(tmp_path, action_id=7, topic="same topic")
+        assert retry != first
+        assert current_legacy_run(tmp_path, 7, "same topic") == retry
+        assert (first / "research" / "research-data-same-topic-2026-01-01.md").exists()
+        assert not list((retry / "research").glob("research-data-*.md"))
+
+    def test_current_run_rejects_a_different_topic(self, tmp_path):
+        from seo_ops.services.legacy_workflow import (
+            current_legacy_run,
+            start_legacy_run,
+        )
+
+        start_legacy_run(tmp_path, action_id=7, topic="first topic")
+
+        assert current_legacy_run(tmp_path, 7, "different topic") is None
 
     def test_stage_labels_and_steps(self):
-        from seo_ops.services.legacy_workflow import stage_label, stage_step, STAGE_ORDER
+        from seo_ops.services.legacy_workflow import STAGE_ORDER, stage_label, stage_step
         assert stage_label("r0_pending") == "尚未开始"
         assert stage_label("w3_register") == "已注册，全部完成"
         assert stage_step("r0_pending") == 0
@@ -149,6 +216,17 @@ class TestReports:
         save_report(tmp_path, "pre-check", "slug-a", "报告正文 ❌")
         assert "报告正文" in load_report(tmp_path, "pre-check", "slug-a")
 
+    def test_same_day_reports_do_not_overwrite(self, tmp_path):
+        from seo_ops.services.legacy_workflow import load_report, save_report
+
+        first = save_report(tmp_path, "collect", "test-topic", "first")
+        second = save_report(tmp_path, "collect", "test-topic", "second")
+
+        assert first != second
+        assert first.read_text(encoding="utf-8") == "first"
+        assert second.read_text(encoding="utf-8") == "second"
+        assert load_report(tmp_path, "collect", "test-topic") == "second"
+
     def test_missing_report_is_empty(self, tmp_path):
         from seo_ops.services.legacy_workflow import load_report
         assert load_report(tmp_path, "post-process", "nope") == ""
@@ -160,7 +238,7 @@ class TestReports:
         assert load_w2_state(tmp_path, "s")["rounds"] == 2
 
     def test_corrupt_w2_state_falls_back(self, tmp_path):
-        from seo_ops.services.legacy_workflow import load_w2_state, _reports_dir
+        from seo_ops.services.legacy_workflow import _reports_dir, load_w2_state
         _write(_reports_dir(tmp_path) / "w2-state-s.json", "{not json")
         assert load_w2_state(tmp_path, "s")["rounds"] == 0
 
@@ -236,15 +314,179 @@ class TestRunnerEnvironment:
         assert (LEGACY_MODULES_DIR / "research_collector.py").exists()
 
 
+class TestResearchScoringOrder:
+    def _prepare(self, tmp_path):
+        _write(
+            tmp_path / "research" / "research-data-test-topic-2026-01-01.md",
+            "research data",
+        )
+        _write(
+            tmp_path / "research" / "research-data-test-topic-2026-01-01.json",
+            '{"topic": "test topic"}',
+        )
+
+    def test_score_runs_before_ai_and_is_in_prompt(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        calls = []
+
+        async def fake_run(self, script, args):
+            calls.append(script)
+            output = Path(args[args.index("--output") + 1])
+            output.write_text("deterministic score 0.72", encoding="utf-8")
+            return ("deterministic score 0.72", "", 0)
+
+        async def fake_ai(purpose, system, user, **kwargs):
+            calls.append("ai")
+            assert "deterministic score 0.72" in user
+            return "Part 1\n\nPart 3\n\n===BRIEF===\nBrief with score 0.72"
+
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+
+        result = asyncio.run(lw.stage_r3_ai_analyze("test topic", tmp_path))
+
+        assert result["success"] is True
+        assert result["stage"] == "r5_write_ready"
+        assert calls == ["research_scorer.py", "ai"]
+
+    def test_failed_current_score_cannot_reuse_stale_report(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        _write(
+            tmp_path / "research" / "research-score-test-topic-2026-01-01.md",
+            "stale score",
+        )
+        ai_called = False
+
+        async def fake_run(self, script, args):
+            return ("", "scorer crashed", 2)
+
+        async def fake_ai(*args, **kwargs):
+            nonlocal ai_called
+            ai_called = True
+            return ""
+
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+
+        result = asyncio.run(lw.stage_r3_ai_analyze("test topic", tmp_path))
+
+        assert result["success"] is False
+        assert result["stage"] == "r2_collect"
+        assert "scorer crashed" in result["error"]
+        assert ai_called is False
+        assert not (tmp_path / "material-packs").exists()
+
+    def test_collect_failure_cannot_reuse_previous_output(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        stale_md = _write(
+            tmp_path / "research" / "research-data-test-topic-2026-01-01.md",
+            "stale",
+        )
+        stale_json = _write(stale_md.with_suffix(".json"), "{}")
+
+        async def fake_run(self, script, args):
+            return "", "collector crashed", 2
+
+        monkeypatch.setattr(lw, "_today_str", lambda: "2026-01-01")
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(
+            lw.stage_r1_save_and_collect("test topic", "new search", tmp_path)
+        )
+
+        assert result["success"] is False
+        assert result["research_data_file"] is None
+        assert not stale_md.exists()
+        assert not stale_json.exists()
+
+
+class TestStructuredPreCheck:
+    def _prepare(self, tmp_path):
+        _write(
+            tmp_path / "drafts" / "test-topic-2026-01-01.md",
+            "SEO Keywords: test topic\n\nbody",
+        )
+
+    def test_business_failures_are_counted_from_json(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        payload = {
+            "word_count": 100,
+            "warn_count": 1,
+            "checks": [
+                {"item": "字数", "pass": False, "level": "fail", "detail": "100"},
+                {
+                    "item": "实体",
+                    "pass": True,
+                    "level": "warn",
+                    "detail": "low",
+                },
+            ],
+        }
+
+        async def fake_run(self, script, args):
+            assert "--json" in args
+            return (json.dumps(payload, ensure_ascii=False), "", 1)
+
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(
+            lw.stage_w1b_pre_check("test topic", "Cluster Content", tmp_path)
+        )
+
+        assert result["success"] is True
+        assert result["fail_count"] == 1
+        assert "| 字数 | ❌ |" in result["report"]
+        assert "| 实体 | ⚠️ |" in result["report"]
+
+    def test_script_crash_is_not_reported_as_pass(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+
+        async def fake_run(self, script, args):
+            return ("Traceback without JSON", "boom", 2)
+
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(
+            lw.stage_w1b_pre_check("test topic", "Cluster Content", tmp_path)
+        )
+
+        assert result["success"] is False
+        assert result["stage"] == "w1_draft"
+        assert "boom" in result["error"]
+
+
 class TestRevisionLoop:
     def _prepare(self, tmp_path):
-        _write(tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T\n\nbody")
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = _write(
+            tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T\n\nbody"
+        )
         _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
+        lw.save_w2_state(tmp_path, "test-topic", _state_for(draft))
 
     def test_revision_refused_after_cap(self, tmp_path):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
-        lw.save_w2_state(tmp_path, "test-topic", {"rounds": lw.MAX_REVISION_ROUNDS})
+        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, rounds=lw.MAX_REVISION_ROUNDS),
+        )
         lw.save_report(tmp_path, "post-process", "test-topic", _POST_PROCESS_REPORT)
 
         result = asyncio.run(lw.stage_w2_revise("test topic", tmp_path))
@@ -268,8 +510,31 @@ class TestRevisionLoop:
             return "Title: T\n\nrevised body"
 
         async def fake_run(self, script, args):
-            return ("## 质量评分\n- 总分: 88.0 → ✅ 通过\n\n"
-                    "## 🚦 总门控\n- ✅ 通过，可进入段3 register。", "", 0)
+            if script == "write_pre_check.py":
+                return (
+                    json.dumps(
+                        {
+                            "word_count": 1000,
+                            "warn_count": 0,
+                            "checks": [
+                                {
+                                    "item": "mechanical",
+                                    "pass": True,
+                                    "level": "ok",
+                                    "detail": "ok",
+                                }
+                            ],
+                        }
+                    ),
+                    "",
+                    0,
+                )
+            return (
+                "## 质量评分\n- 总分: 88.0 → ✅ 通过\n\n"
+                "## 🚦 总门控\n- ✅ 通过，可进入段3 register。",
+                "",
+                0,
+            )
 
         monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
         monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
@@ -283,10 +548,59 @@ class TestRevisionLoop:
         assert backup.exists() and "body" in backup.read_text(encoding="utf-8")
         assert lw.load_w2_state(tmp_path, "test-topic")["rounds"] == 1
 
+    def test_revision_stops_when_new_draft_fails_precheck(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        lw.save_report(tmp_path, "post-process", "test-topic", _POST_PROCESS_REPORT)
+        scripts = []
+
+        async def fake_ai(*args, **kwargs):
+            return "Title: T\n\nrevised body"
+
+        async def fake_run(self, script, args):
+            scripts.append(script)
+            return (
+                json.dumps(
+                    {
+                        "word_count": 20,
+                        "warn_count": 0,
+                        "checks": [
+                            {
+                                "item": "字数",
+                                "pass": False,
+                                "level": "fail",
+                                "detail": "20",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                "",
+                1,
+            )
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w2_revise("test topic", tmp_path))
+
+        assert result["success"] is False
+        assert result["stage"] == "w1b_pre_check"
+        assert "预检仍有 1 项" in result["error"]
+        assert scripts == ["write_pre_check.py"]
+
     def test_post_process_flags_human_review_at_cap(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
-        lw.save_w2_state(tmp_path, "test-topic", {"rounds": lw.MAX_REVISION_ROUNDS})
+        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, rounds=lw.MAX_REVISION_ROUNDS),
+        )
 
         async def fake_run(self, script, args):
             return ("## 质量评分\n- 总分: 55.0 → ❌\n\n"
@@ -301,7 +615,12 @@ class TestRevisionLoop:
     def test_post_process_flags_force_confirmation_at_cap(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
-        lw.save_w2_state(tmp_path, "test-topic", {"rounds": lw.MAX_REVISION_ROUNDS})
+        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, rounds=lw.MAX_REVISION_ROUNDS),
+        )
 
         async def fake_run(self, script, args):
             return (_POST_PROCESS_REPORT, "", 1)
@@ -310,9 +629,22 @@ class TestRevisionLoop:
         result = asyncio.run(lw.stage_w2_post_process("test topic", tmp_path))
         assert result["needs_force_confirmation"] is True
 
-    def test_apply_flag_reaches_the_script(self, tmp_path, monkeypatch):
+    def test_force_requires_capped_confirmed_cannibal_block(
+        self, tmp_path, monkeypatch
+    ):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
+        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(
+                draft,
+                rounds=lw.MAX_REVISION_ROUNDS,
+                cannibal_block=True,
+                score_block=False,
+            ),
+        )
         seen = {}
 
         async def fake_run(self, script, args):
@@ -325,6 +657,128 @@ class TestRevisionLoop:
         assert "--apply" in seen["args"] and "--force" in seen["args"]
         assert result["stage"] == "w2_post_process"
         assert lw.load_w2_state(tmp_path, "test-topic")["applied"] is True
+
+    def test_force_is_rejected_before_revision_cap(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(
+                draft, rounds=1, cannibal_block=True, score_block=False
+            ),
+        )
+
+        result = asyncio.run(
+            lw.stage_w2_post_process("test topic", tmp_path, apply=True, force=True)
+        )
+
+        assert result["success"] is False
+        assert "用满 2 轮" in result["error"]
+
+    def test_post_process_requires_current_precheck(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = _write(
+            tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T\n\nbody"
+        )
+        _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, precheck_passed=False),
+        )
+
+        result = asyncio.run(lw.stage_w2_post_process("test topic", tmp_path))
+
+        assert result["success"] is False
+        assert "重新运行预检" in result["error"]
+
+
+class TestPostProcessFileSafety:
+    def _prepare(self, tmp_path):
+        website = tmp_path / "testsite"
+        draft = _write(
+            website / "drafts" / "test-topic-2026-01-01.md",
+            (
+                "---\nTitle: Test\nSlug: test-topic\nSEO Title: "
+                "Test Topic Complete Reference Guide for Operators Today\n"
+                "SEO Description: "
+                + ("A" * 150)
+                + "\nSEO Keywords: test topic\n---\n\n# Test Topic\n\n"
+                "Original draft with [one](https://example.com/a) and "
+                "[duplicate](https://example.com/a)."
+            ),
+        )
+        return website, draft
+
+    def _mock_score(self, monkeypatch, module, score=80):
+        monkeypatch.setattr(
+            module.subprocess,
+            "run",
+            lambda *args, **kwargs: MagicMock(
+                stdout=json.dumps({"composite_score": score, "passed": score >= 70})
+            ),
+        )
+
+    def test_cannibal_checker_resolves_configured_workspace(
+        self, tmp_path, monkeypatch
+    ):
+        from data_sources.modules import cannibalization_checker as checker
+
+        monkeypatch.setattr(checker, "SITES_DIR", tmp_path)
+        _write(
+            tmp_path / "testsite" / "published" / "article.md",
+            "word " * 120,
+        )
+
+        instance = checker.CannibalizationChecker()
+
+        assert instance.load_published("testsite") == 1
+        assert "article" in instance.documents
+
+    def test_check_only_does_not_change_draft(self, tmp_path, monkeypatch):
+        from data_sources.modules import write_collector as wc
+
+        _, draft = self._prepare(tmp_path)
+        original = draft.read_bytes()
+        monkeypatch.setattr(wc, "SITES_DIR", tmp_path)
+        self._mock_score(monkeypatch, wc)
+        monkeypatch.setattr(
+            wc.seo_common,
+            "cannibal_new_article",
+            lambda *args, **kwargs: {"max_sim": 0.1, "top": []},
+        )
+
+        _, passed = wc.post_process("testsite", str(draft), apply=False)
+
+        assert passed is True
+        assert draft.read_bytes() == original
+        assert not list(draft.parent.glob(".*-post-process-*.md"))
+
+    def test_checker_crash_fails_closed_and_does_not_apply(
+        self, tmp_path, monkeypatch
+    ):
+        from data_sources.modules import write_collector as wc
+
+        _, draft = self._prepare(tmp_path)
+        original = draft.read_bytes()
+        monkeypatch.setattr(wc, "SITES_DIR", tmp_path)
+        self._mock_score(monkeypatch, wc)
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("checker unavailable")
+
+        monkeypatch.setattr(wc.seo_common, "cannibal_new_article", crash)
+
+        report, passed = wc.post_process("testsite", str(draft), apply=True)
+
+        assert passed is False
+        assert "蚕食检查运行失败" in report
+        assert "未修改 draft" in report
+        assert draft.read_bytes() == original
 
 
 _REGISTER_CANDIDATES = """Title: New Article
@@ -364,16 +818,58 @@ class TestBacklinkParsing:
 
     def test_register_needs_material_pack(self, tmp_path):
         from seo_ops.services import legacy_workflow as lw
-        _write(tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T")
+        draft = _write(
+            tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T"
+        )
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, gate_passed=True, applied=True),
+        )
         result = asyncio.run(lw.stage_w3_register("test topic", tmp_path))
         assert result["success"] is False
         assert "素材包" in result["error"]
+
+    def test_register_requires_passed_and_applied_gate(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        _write(tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T")
+        _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
+
+        result = asyncio.run(lw.stage_w3_register("test topic", tmp_path))
+
+        assert result["success"] is False
+        assert "尚未通过后处理" in result["error"]
+
+    def test_register_rejects_draft_changed_after_apply(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = _write(
+            tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T"
+        )
+        _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, gate_passed=True, applied=True),
+        )
+        draft.write_text("Title: changed after apply", encoding="utf-8")
+
+        result = asyncio.run(lw.stage_w3_register("test topic", tmp_path))
+
+        assert result["success"] is False
+        assert "又被修改" in result["error"]
 
     def test_register_writes_checklist(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw
         draft = _write(tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T")
         _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
         _write(tmp_path / "published" / "laser-pointer-battery-guide.md", "old body")
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, gate_passed=True, applied=True),
+        )
 
         async def fake_run(self, script, args):
             # register appends the candidate block to the draft itself
@@ -399,6 +895,11 @@ class TestBacklinkParsing:
         from seo_ops.services import legacy_workflow as lw
         draft = _write(tmp_path / "drafts" / "test-topic-2026-01-01.md", "Title: T")
         _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, gate_passed=True, applied=True),
+        )
 
         async def fake_run(self, script, args):
             draft.write_text(_REGISTER_CANDIDATES, encoding="utf-8")
@@ -504,9 +1005,10 @@ class TestSearchPrompt:
 
 
 class TestLegacySync:
-    def test_sync_all_returns_expected_keys(self):
+    def test_sync_all_returns_expected_keys(self, tmp_path):
         from seo_ops.services.legacy_sync import sync_all
-        report = sync_all()
+
+        report = sync_all(tmp_path)
         assert "published_index" in report
         assert "published_articles" in report
         assert "products" in report
@@ -515,7 +1017,7 @@ class TestLegacySync:
 
     def test_published_index_valid_json(self, tmp_path):
         from seo_ops.services.legacy_sync import sync_all
-        report = sync_all(tmp_path)
+        sync_all(tmp_path)
         idx_path = tmp_path / "published" / "published-index.json"
         assert idx_path.exists()
         data = json.loads(idx_path.read_text(encoding="utf-8"))
@@ -551,3 +1053,32 @@ class TestLegacySync:
         assert manual_path.exists()
         text = manual_path.read_text(encoding="utf-8")
         assert "SEO Data Manual" in text
+
+    def test_published_sync_removes_files_not_in_active_snapshot(self, tmp_path):
+        from seo_ops.services.legacy_sync import _gen_published_articles
+
+        class Cursor:
+            def fetchall(self):
+                return [
+                    (
+                        "active-article",
+                        "Active Article",
+                        "https://example.com/active",
+                        "Current body",
+                        "",
+                        "",
+                        "{}",
+                        "",
+                    )
+                ]
+
+        class Connection:
+            def execute(self, _sql):
+                return Cursor()
+
+        stale = _write(tmp_path / "published" / "inactive-article.md", "old body")
+        report = _gen_published_articles(Connection(), tmp_path)
+
+        assert not stale.exists()
+        assert (tmp_path / "published" / "active-article.md").exists()
+        assert report["removed"] == 1

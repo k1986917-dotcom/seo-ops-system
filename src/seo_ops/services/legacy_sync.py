@@ -85,6 +85,7 @@ def _gen_published_articles(conn: sqlite3.Connection, workspace: Path) -> dict:
     d = workspace / "published"
     d.mkdir(parents=True, exist_ok=True)
     count = 0
+    active_files: set[str] = set()
     for slug, title, _url, body, seo_t, seo_d, meta_json, summary in cursor.fetchall():
         if not body:
             continue
@@ -109,10 +110,21 @@ def _gen_published_articles(conn: sqlite3.Connection, workspace: Path) -> dict:
             fm.append(f"SEO Description: {_to_fm(seo_d)}")
         if seo_kw_str:
             fm.append(f"SEO Keywords: {_to_fm(seo_kw_str)}")
-        (d / f"{slug}.md").write_text(
+        file_name = f"{slug}.md"
+        (d / file_name).write_text(
             "---\n" + "\n".join(fm) + "\n---\n\n" + body + "\n", encoding="utf-8")
+        active_files.add(file_name)
         count += 1
-    return {"dir": str(d), "count": count}
+
+    # This directory is a generated DB snapshot. Leaving files for inactive or
+    # deleted articles lets the Legacy cannibalization checker treat stale pages
+    # as currently published.
+    removed = 0
+    for existing in d.glob("*.md"):
+        if existing.name not in active_files:
+            existing.unlink()
+            removed += 1
+    return {"dir": str(d), "count": count, "removed": removed}
 
 
 # ── products/live_products_report.md ─────────────────────────────────────

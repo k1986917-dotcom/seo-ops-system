@@ -30,6 +30,7 @@ data/legacy_workflow/laserpointerhub/research/backlink-suggestions-*.md
 data/legacy_workflow/laserpointerhub/drafts/*.md
 data/legacy_workflow/laserpointerhub/material-packs/*.md
 data/legacy_workflow/laserpointerhub/reports/
+data/legacy_workflow/laserpointerhub/runs/
 
 # Interrupted run (2026-07-27): runtime-generated topic-context for an unfinished action
 data/legacy_workflow/laserpointerhub/research/topic-context-laser-pointer-for-pointing-above-ceilings-in-commercial-construction-*.json

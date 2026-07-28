@@ -77,6 +77,7 @@ from seo_ops.services.legacy_workflow import (
     PROJECT_ROOT as LEGACY_PROJECT_ROOT,
 )
 from seo_ops.services.legacy_workflow import (
+    current_legacy_run,
     generate_topic_context_from_research,
     get_legacy_display_data,
     stage_r0_generate_prompt,
@@ -87,6 +88,7 @@ from seo_ops.services.legacy_workflow import (
     stage_w2_post_process,
     stage_w2_revise,
     stage_w3_register,
+    start_legacy_run,
 )
 from seo_ops.services.material_workflow import (
     MaterialWorkflowError,
@@ -467,8 +469,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if item["action_type"] == "create" and not item["deliverable"]:
                 try:
                     topic = item.get("target_ref", "") or ""
+                    run_workspace = current_legacy_run(
+                        LEGACY_WS, int(item["id"]), topic
+                    )
                     item["legacy"] = get_legacy_display_data(
-                        topic, LEGACY_WS, db_stage=item.get("legacy_stage")
+                        topic,
+                        run_workspace
+                        or LEGACY_WS
+                        / "runs"
+                        / f"action-{int(item['id'])}"
+                        / "unstarted"
+                        / "laserpointerhub",
+                        db_stage=item.get("legacy_stage"),
                     )
                 except Exception:
                     item["legacy"] = None
@@ -602,6 +614,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             conn.commit()
 
+    def _current_legacy_workspace(action_id: int, topic: str) -> Path | None:
+        return current_legacy_run(LEGACY_WS, action_id, topic)
+
     # Absolute: the Legacy scripts derive SEO_SITES_DIR from this path, and the
     # server is not guaranteed to be started from the repo root.
     LEGACY_WS = LEGACY_PROJECT_ROOT / "data" / "legacy_workflow" / "laserpointerhub"
@@ -616,12 +631,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not topic:
             return _redirect("/actions", "无法获取文章主题", "error")
         legacy_sync_all(LEGACY_WS)
+        run_workspace = start_legacy_run(LEGACY_WS, action_id, topic)
         generate_topic_context_from_research(
-            topic, LEGACY_WS,
+            topic, run_workspace,
             opportunity_evidence=action.get("opportunity_evidence"),
             action_id=action_id,
         )
-        result = stage_r0_generate_prompt(topic, LEGACY_WS)
+        result = stage_r0_generate_prompt(topic, run_workspace)
         _update_legacy_stage(action_id, result.get("stage"))
         return _redirect("/actions", "搜索提示词已生成")
 
@@ -634,7 +650,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _redirect("/actions", "请粘贴搜索结果")
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
-        result = await stage_r1_save_and_collect(topic, search_text, LEGACY_WS)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
+        result = await stage_r1_save_and_collect(topic, search_text, run_workspace)
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "数据已收集，等待 AI 分析"
         return _redirect("/actions", msg, "error" if not result.get("success") else "success")
@@ -644,7 +665,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_local_form(request)
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
-        result = await stage_r3_ai_analyze(topic, LEGACY_WS, active_settings)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
+        result = await stage_r3_ai_analyze(topic, run_workspace, active_settings)
         _update_legacy_stage(action_id, result.get("stage"))
         if not result.get("success"):
             return _redirect("/actions", result.get("error") or "AI 分析失败", "error")
@@ -660,7 +686,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         author = form.get("author", "") or "LaserPointerHub"
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
-        result = await stage_w0_validate_and_draft(topic, author, LEGACY_WS, active_settings)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
+        result = await stage_w0_validate_and_draft(
+            topic, author, run_workspace, active_settings
+        )
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "草稿已生成，等待预检"
         return _redirect("/actions", msg, "error" if not result.get("success") else "success")
@@ -672,7 +705,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tier = str(form.get("tier", "") or "")
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
-        result = await stage_w1b_pre_check(topic, tier, LEGACY_WS)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
+        result = await stage_w1b_pre_check(topic, tier, run_workspace)
         if not result.get("success"):
             return _redirect("/actions", result.get("error") or "预检失败", "error")
         _update_legacy_stage(action_id, result.get("stage"))
@@ -689,8 +727,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         do_force = str(form.get("force", "")) == "1"
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
         result = await stage_w2_post_process(
-            topic, LEGACY_WS, apply=do_apply, force=do_force
+            topic, run_workspace, apply=do_apply, force=do_force
         )
         if result.get("error"):
             return _redirect("/actions", result["error"], "error")
@@ -713,7 +756,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_local_form(request)
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
-        result = await stage_w2_revise(topic, LEGACY_WS, active_settings)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
+        result = await stage_w2_revise(topic, run_workspace, active_settings)
         if result.get("error"):
             return _redirect("/actions", result["error"], "error")
         _update_legacy_stage(action_id, result.get("stage"))
@@ -728,7 +776,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _require_local_form(request)
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
-        result = await stage_w3_register(topic, LEGACY_WS, active_settings)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        if run_workspace is None:
+            return _redirect(
+                "/actions", "当前任务没有运行记录，请重新生成搜索提示词", "error"
+            )
+        result = await stage_w3_register(topic, run_workspace, active_settings)
         if not result.get("success"):
             return _redirect("/actions", result.get("error") or "注册失败", "error")
         _update_legacy_stage(action_id, result.get("stage"))

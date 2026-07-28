@@ -1,10 +1,29 @@
 # Handoff — 当前接手状态
 
-最后更新：2026-07-21（Asia/Shanghai）
+最后更新：2026-07-28（Asia/Shanghai）
 
 ## 一句话状态
 
-源码 `0.10.9`、SQLite v12。旧 Research + Write 1:1 复原已完成资产冻结与计划，正在实施中。新文章制作通道将替换为 Legacy 七步向导（search-prompt → collect → AI 分析 → scoring → validate → draft → pre-check → post-process → register），旧文章制作通道不变。数据通过 DB → 文件系统同步层保证新鲜；素材库沿用旧文件累积模式；作者自动填 `LaserPointerHub`；搜索提示词恢复旧 8 段格式（Section 3 改为"误区与教训"）。
+源码 `0.11.0`、SQLite v13。Legacy Research + Write 的规则硬门和产物隔离已完成：确定性评分先于 AI；每个 action/attempt 使用独立运行目录；旧结果不能冒充本次成功；预检、后处理、人工 force 和注册均由后端硬门控。旧文章制作通道不变。
+
+## 2026-07-28 — Legacy action/attempt 产物隔离
+
+- R0 为当前 action 创建新的 attempt 与 run ID；Research、素材包、草稿、报告和 W2 状态只存在于该 attempt。网页后续阶段只解析与 action 和原始主题同时匹配的 current manifest。
+- 共享 context/published/products 在 R0 前由数据库同步，运行目录只通过同构链接读取；旧 `/home/laoma/seo-workflow` 仍不写入。
+- `legacy_workflow`、`research_collector`、`research_scorer` 和 `write_collector` 统一使用 `seo_common.slugify`；纯非拉丁主题改用稳定 SHA-256 摘要。
+- 报告文件加入 UTC 微秒和随机后缀；collect 重试必须生成本次 Markdown + JSON，失败时删除当前 attempt 的不完整派生文件。
+- published 同步删除不再 active 的文章 Markdown；修复 `cannibalization_checker.SITES_DIR` 缺失，检查器能实际读取当前同步快照。
+- 架构决定见 `docs/decisions/0012-legacy-action-attempt-workspaces.md`。
+- 当前验证：完整 `pytest -q` 172 passed，1 条既有 Starlette/httpx 弃用警告；compileall、F821、相关 Ruff 与 diff 检查通过。
+
+## 2026-07-27 — Legacy 第一批规则对齐与安全门
+
+- Research 严格执行“确定性 scorer → AI 解释分数”；scorer 使用本次明确的 JSON 输入和独立临时输出，失败时停止，不能复用旧同 slug 评分。
+- W1b 改读结构化 JSON 结果；脚本崩溃、非法输出与正常业务失败分开处理，不再通过统计 `❌` 字符判断。
+- W2 只接受与当前草稿 SHA-256 一致且全部通过的预检；AI 修订后重新预检。检查模式使用临时草稿，只有全部硬门通过并显式 `--apply` 才修改真实 draft。
+- 蚕食检查器或质量评分器失败时 fail-closed。`--force` 只允许在两轮修订用满、仍为蚕食阻塞、评分合格且人工最终写回时使用。
+- W3 注册要求 W2 已通过、已 apply，且当前草稿 SHA-256 与通过时完全一致；直接构造请求不能越级注册。
+- 当前验证：完整 `pytest -q` 165 passed，1 条既有 Starlette/httpx 弃用警告。
 
 ## 正在实施：旧 Research + Write 1:1 复原 — 替换新文章制作通道
 

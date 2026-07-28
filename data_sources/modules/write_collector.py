@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -59,11 +60,7 @@ except ImportError:
 
 
 def _slugify(topic: str) -> str:
-    s = topic.lower().strip()
-    s = re.sub(r'[^\w\s-]', '', s)
-    s = re.sub(r'[\s]+', '-', s)
-    s = re.sub(r'-+', '-', s)
-    return s[:80]
+    return seo_common.slugify(topic)
 
 
 # _date_str / _extract_section were local duplicates of seo_common.today_str /
@@ -444,14 +441,23 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
     if dedup_count > 0:
         print(f'       🔗 去重 {dedup_count} 条重复URL', file=sys.stderr)
 
-    # Write deduplicated version back
+    # Analyze the scrubbed/deduplicated candidate without touching the operator's
+    # draft. write/SKILL.md defines the first post-process run as "不改文件";
+    # the real draft is only replaced after every hard gate passes with --apply.
     fm_text = ''
     if scrubbed.startswith('---'):
         parts = scrubbed.split('---', 2)
         if len(parts) >= 2:
             fm_text = parts[1]
     final_content = f'---{fm_text}---\n\n{body}'
-    draft_file.write_text(final_content, encoding='utf-8')
+    temp_fd, temp_name = tempfile.mkstemp(
+        prefix=f'.{draft_file.stem}-post-process-',
+        suffix='.md',
+        dir=draft_file.parent,
+    )
+    os.close(temp_fd)
+    analysis_file = Path(temp_name)
+    analysis_file.write_text(final_content, encoding='utf-8')
 
     # ── Step 2: Extract links ──
     print('[2/5] extracting & validating links...', file=sys.stderr)
@@ -594,7 +600,7 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
     if scorer.exists():
         try:
             result = subprocess.run(
-                ['python3', str(scorer), str(draft_file), '--json'],
+                ['python3', str(scorer), str(analysis_file), '--json'],
                 capture_output=True, text=True, timeout=60, cwd=str(BASE_DIR)
             )
             scorer_output = result.stdout.strip()
@@ -614,12 +620,14 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
     print('[4b/5] cannibalization gate...', file=sys.stderr)
     cannibal = {'max_sim': 0.0, 'top': []}
     cannibal_block = False
+    cannibal_error = ''
     try:
         cannibal = seo_common.cannibal_new_article(
-            website, str(draft_file), threshold=seo_config.CANNIBAL_THRESHOLD_LOW)
+            website, str(analysis_file), threshold=seo_config.CANNIBAL_THRESHOLD_LOW)
         if cannibal['max_sim'] >= seo_config.CANNIBAL_THRESHOLD_HIGH:
             cannibal_block = True
     except Exception as e:
+        cannibal_error = str(e)
         cannibal = {'max_sim': 0.0, 'top': [], 'note': f'check failed: {e}'}
 
     # ── Step 5: Generate frontmatter ──
@@ -680,8 +688,8 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
     # Cannibalization gate
     lines.append('## 🔪 蚕食门控（新文 vs 已发布）')
     ms = cannibal.get('max_sim', 0.0)
-    if cannibal.get('note'):
-        lines.append(f'- ⚠️ {cannibal["note"]}')
+    if cannibal_error:
+        lines.append(f'- ❌ **检查失败**：{cannibal_error}')
     elif cannibal_block:
         lines.append(f'- ❌ **阻塞**：最高相似度 {ms} ≥ {seo_config.CANNIBAL_THRESHOLD_HIGH} — 与已发布文章重度重叠，必须换角度或合并')
     elif ms >= seo_config.CANNIBAL_THRESHOLD_MID:
@@ -704,7 +712,10 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
     # Overall gate verdict (score + cannibalization both must pass)
     lines.append('## 🚦 总门控')
     score_ok = (score is not None and score >= seo_config.PASS_SCORE)
-    if cannibal_block:
+    gate_passed = score_ok and not cannibal_error and (not cannibal_block or force)
+    if cannibal_error:
+        lines.append('- ❌ **不可进入段3**：蚕食检查运行失败，必须修复检查器并重跑。')
+    elif cannibal_block and not force:
         lines.append(f'- ❌ **不可进入段3**：蚕食 ≥{seo_config.CANNIBAL_THRESHOLD_HIGH}。修正正文差异化后重跑段2。')
     elif not score_ok:
         lines.append(f'- ❌ **不可进入段3**：评分 <{seo_config.PASS_SCORE}。')
@@ -754,7 +765,7 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
         lines.append('')
 
     # ── Apply: write back to draft file if requested ──
-    if apply:
+    if apply and gate_passed:
         # Keep existing frontmatter, only update link fields and word count
         existing_fm = ''
         if original.startswith('---'):
@@ -794,11 +805,14 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
         lines.append('---')
         lines.append(f'✅ Frontmatter 已更新 (仅链接字段): {draft_file.name}')
         lines.append('')
+    elif apply:
+        lines.append('⛔ 门控未通过，未修改 draft。')
+        lines.append('')
 
-    gate_passed = score_ok and (not cannibal_block or force)
     if force and cannibal_block:
         lines.append('')
         lines.append('⚡ --force：已跳过蚕食门控（人工确认差异化足够）')
+    analysis_file.unlink(missing_ok=True)
     return '\n'.join(lines), gate_passed
 
 

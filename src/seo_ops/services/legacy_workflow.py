@@ -17,6 +17,7 @@ never touched.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+from data_sources.modules import seo_common
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LEGACY_MODULES_DIR = PROJECT_ROOT / "data_sources" / "modules"
@@ -47,10 +51,7 @@ MAX_REVISION_ROUNDS = 2
 # ── Utilities ──────────────────────────────────────────────────────────
 
 def _slugify(topic: str) -> str:
-    s = topic.lower().strip()
-    s = re.sub(r"[^\w\s-]", "", s)
-    s = re.sub(r"[\s]+", "-", s)
-    return re.sub(r"-+", "-", s).strip("-")
+    return seo_common.slugify(topic)
 
 
 def _today_str() -> str:
@@ -58,8 +59,11 @@ def _today_str() -> str:
 
 
 def _latest_file(glob_pattern: str, directory: Path) -> Path | None:
-    candidates = sorted(directory.glob(glob_pattern),
-                        key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = sorted(
+        directory.glob(glob_pattern),
+        key=lambda p: (p.stat().st_mtime_ns, p.name),
+        reverse=True,
+    )
     return candidates[0] if candidates else None
 
 
@@ -76,6 +80,101 @@ def _read_text(path: Path | str | None, limit: int | None = None) -> str:
     return text[:limit] if limit else text
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _action_runs_dir(workspace: Path, action_id: int) -> Path:
+    if action_id <= 0:
+        raise ValueError("action_id must be positive")
+    return Path(workspace) / "runs" / f"action-{action_id}"
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def start_legacy_run(workspace: Path, action_id: int, topic: str) -> Path:
+    """Create a clean, action/attempt-scoped workspace for one Legacy run."""
+
+    workspace = Path(workspace)
+    action_dir = _action_runs_dir(workspace, action_id)
+    current_path = action_dir / "current.json"
+    attempt = 1
+    raw = _read_text(current_path)
+    if raw:
+        try:
+            current = json.loads(raw)
+            attempt = max(1, int(current.get("attempt", 0)) + 1)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    run_id = f"a{action_id}-n{attempt}-{uuid4().hex[:12]}"
+    run_workspace = action_dir / f"attempt-{attempt:04d}-{run_id}" / WEBSITE
+    for name in ("research", "material-packs", "drafts", "reports"):
+        (run_workspace / name).mkdir(parents=True, exist_ok=False)
+
+    # Context and published snapshots remain the shared, synchronized facts.
+    # Every generated Research/Write artifact stays inside this attempt.
+    for name in ("context", "published", "products"):
+        shared = (workspace / name).resolve()
+        shared.mkdir(parents=True, exist_ok=True)
+        (run_workspace / name).symlink_to(shared, target_is_directory=True)
+
+    manifest = {
+        "action_id": action_id,
+        "attempt": attempt,
+        "run_id": run_id,
+        "topic": topic,
+        "slug": _slugify(topic),
+        "workspace": str(run_workspace.relative_to(action_dir)),
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    _write_json_atomic(run_workspace.parent / "manifest.json", manifest)
+    _write_json_atomic(current_path, manifest)
+    return run_workspace
+
+
+def current_legacy_run(
+    workspace: Path, action_id: int, topic: str | None = None
+) -> Path | None:
+    """Resolve the current attempt only when its manifest matches the action."""
+
+    action_dir = _action_runs_dir(Path(workspace), action_id)
+    raw = _read_text(action_dir / "current.json")
+    if not raw:
+        return None
+    try:
+        manifest = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(manifest, dict) or manifest.get("action_id") != action_id:
+        return None
+    if topic is not None and (
+        manifest.get("topic") != topic or manifest.get("slug") != _slugify(topic)
+    ):
+        return None
+    relative = manifest.get("workspace")
+    if not isinstance(relative, str) or not relative:
+        return None
+    candidate = action_dir / relative
+    try:
+        if not candidate.resolve().is_relative_to(action_dir.resolve()):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return candidate if candidate.is_dir() else None
+
+
 # ── Report persistence ─────────────────────────────────────────────────
 #
 # Every script run keeps its full stdout on disk. Routes redirect after a POST,
@@ -88,7 +187,11 @@ def _reports_dir(workspace: Path) -> Path:
 
 
 def save_report(workspace: Path, kind: str, slug: str, content: str) -> Path:
-    path = _reports_dir(workspace) / f"{kind}-{slug}-{_today_str()}.md"
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    path = (
+        _reports_dir(workspace)
+        / f"{kind}-{slug}-{_today_str()}-{timestamp}-{uuid4().hex[:8]}.md"
+    )
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -712,6 +815,14 @@ async def stage_r1_save_and_collect(topic: str, search_text: str,
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(search_text, encoding="utf-8")
 
+    # A retry in the same attempt must prove that this subprocess produced its
+    # own data. Remove only the deterministic derived outputs for this invocation;
+    # previous attempts live in separate run directories and remain untouched.
+    rd_file = workspace / "research" / f"research-data-{slug}-{today}.md"
+    rd_json = rd_file.with_suffix(".json")
+    rd_file.unlink(missing_ok=True)
+    rd_json.unlink(missing_ok=True)
+
     stdout, stderr, rc = await runner.run(
         "research_collector.py",
         ["collect", "--website", WEBSITE, "--topic", topic,
@@ -719,12 +830,19 @@ async def stage_r1_save_and_collect(topic: str, search_text: str,
     )
     save_report(workspace, "collect", slug, _combined_output(stdout, stderr))
 
-    rd_file = _latest_file(f"research/research-data-{slug}-*.md", workspace)
-    ok = rc == 0 and rd_file is not None
+    ok = (
+        rc == 0
+        and rd_file.is_file()
+        and rd_json.is_file()
+        and bool(_read_text(rd_file).strip())
+    )
+    if not ok:
+        rd_file.unlink(missing_ok=True)
+        rd_json.unlink(missing_ok=True)
     return {
         "success": ok,
         "stage": "r2_collect" if ok else "r1_results",
-        "research_data_file": str(rd_file) if rd_file else None,
+        "research_data_file": str(rd_file) if ok else None,
         "error": None if ok else (stderr.strip() or "数据收集失败，请查看收集报告"),
         "report": stdout,
     }
@@ -841,7 +959,46 @@ async def stage_r3_ai_analyze(topic: str, workspace: Path, settings=None) -> dic
         return {"success": False, "stage": "r2_collect",
                 "error": "research-data 文件不存在，请先粘贴搜索结果"}
 
+    # research/SKILL.md Step 5 is explicit: the deterministic scorer runs
+    # before AI writes the brief, and AI may only explain that existing score.
+    # Pass exact input/output paths so a stale same-slug artifact cannot make a
+    # failed scorer run look successful.
+    rd_json = rd.with_suffix(".json")
+    if not rd_json.exists():
+        return {
+            "success": False,
+            "stage": "r2_collect",
+            "error": "research-data JSON 不存在，无法执行确定性评分",
+        }
+
+    score_path = workspace / "research" / f"research-score-{slug}-{today}.md"
+    score_run_path = (
+        workspace / "research" / f".research-score-{slug}-{uuid4().hex}.md"
+    )
+    runner = LegacyRunner(workspace)
+    stdout, stderr, rc = await runner.run(
+        "research_scorer.py",
+        [
+            "--website", WEBSITE,
+            "--data", str(rd_json),
+            "--output", str(score_run_path),
+        ],
+    )
+    score_report = _combined_output(stdout, stderr)
+    save_report(workspace, "score", slug, score_report)
+    current_score = _read_text(score_run_path)
+    if rc != 0 or not current_score.strip():
+        score_run_path.unlink(missing_ok=True)
+        return {
+            "success": False,
+            "stage": "r2_collect",
+            "error": stderr.strip() or "评分脚本失败或未产出本次评分报告",
+            "report": score_report,
+        }
+    score_run_path.replace(score_path)
+
     data_text = _read_text(rd, _RESEARCH_DATA_CHAR_LIMIT)
+    score_text = _read_text(score_path, _REPORT_CHAR_LIMIT)
 
     tc_raw = _read_text(workspace / "research" / f"topic-context-{slug}.json")
     tc_text = f"\n## Topic Context\n```json\n{tc_raw}\n```\n" if tc_raw else ""
@@ -856,6 +1013,9 @@ async def stage_r3_ai_analyze(topic: str, workspace: Path, settings=None) -> dic
 
 ## Research Data
 {data_text}
+
+## Deterministic Opportunity Score
+{score_text}
 
 Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, then Brief."""
 
@@ -878,17 +1038,10 @@ Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, 
         (workspace / "research" / f"brief-{slug}-{today}.md").write_text(
             brief_text, encoding="utf-8")
 
-    # Step 5: deterministic scorer — AI explains the score, never recomputes it.
-    runner = LegacyRunner(workspace)
-    stdout, stderr, rc = await runner.run(
-        "research_scorer.py", ["--website", WEBSITE, "--slug", slug])
-    save_report(workspace, "score", slug, _combined_output(stdout, stderr))
-
-    scored = _latest_file(f"research/research-score-{slug}-*.md", workspace) is not None
     return {
         "success": True,
-        "stage": "r5_write_ready" if scored else "r4_score",
-        "score_warning": None if scored else (stderr.strip() or "评分脚本未产出报告"),
+        "stage": "r5_write_ready",
+        "score_warning": None,
     }
 
 
@@ -1092,14 +1245,78 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     keywords = _primary_keywords(draft)
     if keywords:
         args += ["--keywords", keywords]
+    args.append("--json")
 
     stdout, stderr, rc = await runner.run("write_pre_check.py", args)
-    report = _combined_output(stdout, stderr)
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError:
+        result = None
+
+    if not isinstance(result, dict) or not isinstance(result.get("checks"), list):
+        report = _combined_output(stdout, stderr)
+        save_report(workspace, "pre-check", slug, report)
+        state = load_w2_state(workspace, slug)
+        state["precheck_passed"] = False
+        state["gate_passed"] = False
+        state["applied"] = False
+        state.pop("applied_draft_sha256", None)
+        save_w2_state(workspace, slug, state)
+        return {
+            "success": False,
+            "stage": "w1_draft",
+            "error": stderr.strip() or "预检脚本未返回有效的结构化结果",
+            "report": report,
+        }
+
+    fail_count = sum(1 for check in result["checks"] if not check.get("pass"))
+    if rc not in (0, 1):
+        report = _combined_output(stdout, stderr)
+        save_report(workspace, "pre-check", slug, report)
+        state = load_w2_state(workspace, slug)
+        state["precheck_passed"] = False
+        state["gate_passed"] = False
+        state["applied"] = False
+        state.pop("applied_draft_sha256", None)
+        save_w2_state(workspace, slug, state)
+        return {
+            "success": False,
+            "stage": "w1_draft",
+            "error": stderr.strip() or f"预检脚本异常退出（exit {rc}）",
+            "report": report,
+        }
+
+    lines = [
+        f"# WRITE 预检报告 — {draft.name}",
+        (
+            f"> 层级: {resolved_tier} | 字数: {result.get('word_count', 0)}"
+            f" | 失败: {fail_count} | 警告: {result.get('warn_count', 0)}"
+        ),
+        "",
+        "| 检查项 | 结果 | 详情 |",
+        "|---|---|---|",
+    ]
+    for check in result["checks"]:
+        level = check.get("level", "ok" if check.get("pass") else "fail")
+        icon = {"ok": "✅", "warn": "⚠️", "fail": "❌"}.get(level, "❌")
+        detail = str(check.get("detail", "")).replace("|", r"\|")
+        lines.append(f"| {check.get('item', '未命名检查')} | {icon} | {detail} |")
+    if stderr.strip():
+        lines.extend(["", "## 脚本日志", "```", stderr.strip(), "```"])
+    report = "\n".join(lines)
     save_report(workspace, "pre-check", slug, report)
+    state = load_w2_state(workspace, slug)
+    state["precheck_passed"] = fail_count == 0
+    state["precheck_draft_sha256"] = _sha256_file(draft)
+    state["precheck_tier"] = resolved_tier
+    state["gate_passed"] = False
+    state["applied"] = False
+    state.pop("applied_draft_sha256", None)
+    save_w2_state(workspace, slug, state)
 
     return {
         "success": True, "stage": "w1b_pre_check",
-        "report": report, "fail_count": stdout.count("❌"),
+        "report": report, "fail_count": fail_count,
         "tier": resolved_tier,
     }
 
@@ -1140,11 +1357,17 @@ def _parse_post_process(report: str) -> dict[str, Any]:
     if m:
         link_issues = m.group(1).strip()
 
+    cannibal_error = "蚕食检查运行失败" in report
+    score_error = "评分失败，请手动检查" in report
     return {
         "score": score,
         "cannibal": cannibal,
-        "cannibal_block": "**不可进入段3**：蚕食" in report,
+        "cannibal_block": (
+            "**不可进入段3**：蚕食" in report and not cannibal_error
+        ),
         "score_block": "**不可进入段3**：评分" in report,
+        "cannibal_error": cannibal_error,
+        "score_error": score_error,
         "fix_items": fix_items,
         "link_issues": link_issues,
     }
@@ -1161,6 +1384,42 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
         return {"success": False, "error": "草稿不存在"}
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
 
+    state = load_w2_state(workspace, slug)
+    rounds = int(state.get("rounds", 0))
+    current_draft_sha256 = _sha256_file(draft)
+    if (
+        not state.get("precheck_passed")
+        or state.get("precheck_draft_sha256") != current_draft_sha256
+    ):
+        return {
+            "success": False,
+            "error": "当前草稿尚未通过预检，或预检后草稿已改变；请重新运行预检",
+        }
+    if force:
+        if not apply:
+            return {
+                "success": False,
+                "error": "跳过蚕食门控只能在最终写回时使用",
+            }
+        if rounds < MAX_REVISION_ROUNDS or not state.get("cannibal_block"):
+            return {
+                "success": False,
+                "error": (
+                    f"只有用满 {MAX_REVISION_ROUNDS} 轮修订且蚕食仍被阻塞时，"
+                    "才能经人工确认后跳过蚕食门控"
+                ),
+            }
+        if state.get("cannibal_error") or state.get("score_error"):
+            return {
+                "success": False,
+                "error": "检查器运行失败时不能跳过门控",
+            }
+        if state.get("score_block"):
+            return {
+                "success": False,
+                "error": "评分未达标，不能用跳过蚕食门控进入注册",
+            }
+
     args = ["post-process", "--website", WEBSITE, "--draft", str(draft)]
     if mp:
         args += ["--pack", str(mp)]
@@ -1176,14 +1435,20 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
     metrics = _parse_post_process(stdout)
     gate_passed = rc == 0
 
-    state = load_w2_state(workspace, slug)
     state["gate_passed"] = gate_passed
     state["score"] = metrics["score"]
     state["cannibal"] = metrics["cannibal"]
     state["cannibal_block"] = metrics["cannibal_block"]
     state["score_block"] = metrics["score_block"]
-    if gate_passed and apply:
+    state["cannibal_error"] = metrics["cannibal_error"]
+    state["score_error"] = metrics["score_error"]
+    if not gate_passed:
+        state["applied"] = False
+        state.pop("applied_draft_sha256", None)
+    elif apply:
         state["applied"] = True
+        state["force_confirmed"] = force
+        state["applied_draft_sha256"] = _sha256_file(draft)
     save_w2_state(workspace, slug, state)
 
     rounds_left = max(0, MAX_REVISION_ROUNDS - int(state.get("rounds", 0)))
@@ -1203,6 +1468,10 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
         # publishing, but a score below the pass line stops the pipeline.
         result["needs_human_review"] = metrics["score_block"]
         result["needs_force_confirmation"] = metrics["cannibal_block"]
+    if metrics["cannibal_error"]:
+        result["error"] = "蚕食检查器运行失败；系统已停止，不能把失败当作安全"
+    elif metrics["score_error"]:
+        result["error"] = "质量评分器运行失败；系统已停止，不能进入注册"
     return result
 
 
@@ -1283,6 +1552,28 @@ Output the complete revised article Markdown."""
     state["rounds"] = rounds + 1
     save_w2_state(workspace, slug, state)
 
+    precheck = await stage_w1b_pre_check(
+        topic, str(state.get("precheck_tier") or ""), workspace
+    )
+    if not precheck.get("success") or precheck.get("fail_count", 0):
+        return {
+            "success": False,
+            "stage": "w1b_pre_check",
+            "gate_passed": False,
+            "revised": True,
+            "revision_round": rounds + 1,
+            "rounds_used": rounds + 1,
+            "rounds_left": MAX_REVISION_ROUNDS - (rounds + 1),
+            "backup": str(backup),
+            "previous_metrics": metrics,
+            "precheck_report": precheck.get("report", ""),
+            "error": precheck.get("error")
+            or (
+                f"第 {rounds + 1} 轮修订后预检仍有 "
+                f"{precheck.get('fail_count', 0)} 项未通过"
+            ),
+        }
+
     outcome = await stage_w2_post_process(topic, workspace)
     outcome["revised"] = True
     outcome["revision_round"] = rounds + 1
@@ -1355,11 +1646,22 @@ async def stage_w3_register(topic: str, workspace: Path, settings=None) -> dict:
     """Run 段3 register, then produce the backlink checklist via AI."""
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
-    today = _today_str()
 
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
+
+    state = load_w2_state(workspace, slug)
+    if not state.get("gate_passed") or not state.get("applied"):
+        return {
+            "success": False,
+            "error": "草稿尚未通过后处理并写回链接字段，不能进入注册",
+        }
+    if state.get("applied_draft_sha256") != _sha256_file(draft):
+        return {
+            "success": False,
+            "error": "草稿在后处理通过后又被修改，请重新预检并完成后处理",
+        }
 
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not mp:

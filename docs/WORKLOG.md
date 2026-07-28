@@ -1088,3 +1088,53 @@
 1. 仍先执行 Legacy 复原方案单元 A → F；V2 不得混入复原提交。
 2. 只有运营者另行批准 V2 后，才从 Phase 1 数据协议和三类黄金样例开始。
 3. V2 实施前把 proposed 规则按 METHOD_GOVERNANCE 正式登记，并重新核对届时官方文档。
+
+## 2026-07-27 — Legacy 旧 Skill 第一批规则对齐与安全门
+
+### 完成内容
+
+- 对照冻结的 `research/SKILL.md` 与 `write/SKILL.md` 修正 Research 顺序：`research_scorer.py` 使用本次明确的 JSON 输入和独立临时输出先计算分数，AI 随后读取并解释，不能重算。评分失败立即停止，不再以目录中旧评分文件是否存在判断成功。
+- W1b 使用 `write_pre_check.py --json` 的结构化 checks 计算失败数，区分正常检查不通过、非法输出和脚本异常；不再统计 Markdown 中的 `❌` 字符。
+- 预检结果绑定当前 draft SHA-256。W2 在预检未通过或草稿改变后拒绝运行；AI 修订后会重新执行预检。
+- `write_collector.py post-process` 改为在同目录临时草稿上 scrub、URL 去重、评分与蚕食检查。无 `--apply`、硬门失败或检查器异常时真实 draft 保持字节级不变。
+- 蚕食检查异常和评分异常改为 fail-closed。人工 `--force` 仅允许在两轮修订用满、前次仍为蚕食阻塞、评分没有失败且本次最终 apply 时使用。
+- W3 注册在服务层验证 `gate_passed + applied + applied_draft_sha256`，阻止绕过网页按钮或把旧门控结果套到修改后的草稿。
+
+### 验证结果
+
+- `pytest -q tests/test_legacy_workflow.py -k 'not LegacySync'`：54 passed。
+- 初始化空的本地测试数据库后运行完整 `pytest -q`：165 passed；仅 1 条既有 `StarletteDeprecationWarning`。
+- `python -m compileall -q src tests data_sources/modules` 与 `git diff --check`：通过。
+- 完整测试会按既有 LegacySync 测试刷新仓库内派生工作区文件；测试后已精确恢复这 4 个文件，未保留运行数据改动。
+
+### 遗留问题
+
+- register 多文件事务、归档失败回滚与并发写保护留待下一批。
+- action/attempt 历史运行目录暂不自动清理；若实际积累过快，再单独制定可审计保留策略。
+
+## 2026-07-28 — Legacy action/attempt 产物隔离
+
+### 完成内容
+
+- 新增 action/attempt 运行目录、current pointer 与 manifest。每次 R0 都创建新 attempt；后续网页阶段只使用与 action 和完整 topic 匹配的当前运行。
+- 每个 attempt 独占 Research、素材包、草稿、报告和 W2 状态；共享 context、published 与 products 链接到 R0 前完成的数据库同步快照。
+- 统一服务层、Research 与 Write 脚本的 slug 实现。纯非拉丁主题使用稳定 SHA-256 摘要，删除跨进程不稳定的 `hash()` fallback。
+- 报告使用 UTC 微秒时间和随机后缀，不再按 `kind-slug-date` 覆盖。collect 重试只接受本次同时生成的 Markdown 和 JSON；失败或不完整输出立即清理。
+- `legacy_sync._gen_published_articles()` 删除非 active 快照文件；修复 `cannibalization_checker.py` 未定义 `SITES_DIR`，让蚕食检查实际读取配置工作区。
+- 新增 ADR-0012，并补回归测试覆盖相同主题跨 action、同 action 新 attempt、topic 不匹配拒绝、报告不覆盖、collect 失败不复用、稳定 slug、checker 路径和 inactive 文件清理。
+- 将 LegacySync 默认路径测试改为临时目录，避免测试刷新仓库内跟踪的演示工作区文件。
+
+### 验证结果
+
+- `.venv/bin/pytest -q tests/test_web.py tests/test_legacy_workflow.py`：74 passed，1 条既有 Starlette/httpx 弃用警告。
+- `.venv/bin/pytest -q`：172 passed，1 条既有 Starlette/httpx 弃用警告。
+- `python -m compileall -q src tests data_sources/modules`：通过。
+- `.venv/bin/ruff check --select F821 src tests tools data_sources/modules`：通过。
+- `.venv/bin/ruff check src/seo_ops/services/legacy_sync.py src/seo_ops/services/legacy_workflow.py src/seo_ops/web/app.py tests/test_legacy_workflow.py`：通过。
+- `git diff --check`：通过。
+- 全量测试刷新过 4 个仓库内演示工作区文件；测试后已按 HEAD 精确恢复，未保留派生数据改动。
+
+### 遗留问题
+
+- register 对 internal-links-map、素材库归档、素材包清理和草稿追加仍不是单一事务；下一批需加入故障注入、回滚和并发保护。
+- 历史 attempt 当前完整保留，没有自动清理策略。

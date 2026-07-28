@@ -14,6 +14,7 @@ New code should import from here. Existing modules keep their local copies
 working until migrated, but this is the canonical definition.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -385,4 +386,9 @@ def slugify(text: str) -> str:
     """Canonical slug shared by all stages (keep in sync with collectors)."""
     s = re.sub(r'[^a-z0-9]+', '-', str(text).lower()).strip('-')
     s = re.sub(r'-+', '-', s)
-    return s if s else f'topic-{abs(hash(text)) % 10000}'  # fallback for non-latin input
+    if s:
+        return s
+    # Python's hash() is randomized per process, so it cannot identify files
+    # across CLI subprocesses or server restarts.
+    digest = hashlib.sha256(str(text).encode('utf-8')).hexdigest()[:12]
+    return f'topic-{digest}'

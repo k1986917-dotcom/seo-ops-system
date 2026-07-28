@@ -17,12 +17,15 @@ Cannibalization Checker — 基于 TF-IDF 的离线语义防蚕食检测器
 """
 
 import argparse
+import math
+import os
 import re
 import sys
-import math
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
 from collections import Counter
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+SITES_DIR = Path(os.environ.get('SEO_SITES_DIR') or Path(__file__).resolve().parents[2])
 
 try:
     import seo_config
