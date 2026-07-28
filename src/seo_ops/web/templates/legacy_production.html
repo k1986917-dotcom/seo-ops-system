@@ -114,15 +114,53 @@
     </form>
 
   {% elif stage == "w1b_pre_check" %}
-    <p>预检完成：{{ "有 " ~ fail_count ~ " 项需修复" if fail_count else "全部通过" }}</p>
+    {% set precheck_state = l.get("precheck_state", "no_precheck") %}
+    {% set precheck_passed = l.get("precheck_passed", False) %}
+    {% set precheck_blocker = l.get("precheck_blocker_message", "") %}
+    {% set draft_path = l.get("draft_path") %}
+
+    {% if precheck_state == "failed" %}
+      <div class="legacy-warning">
+        <p>⚠️ W1b 预检未通过：{{ fail_count }} 项需要修复</p>
+        <p class="legacy-hint">{{ precheck_blocker }}</p>
+      </div>
+    {% elif precheck_state == "stale_sha" %}
+      <div class="legacy-warning">
+        <p>⚠️ 草稿已被修改，预检结果已失效</p>
+        <p class="legacy-hint">{{ precheck_blocker }}</p>
+      </div>
+    {% elif precheck_state == "no_precheck" %}
+      <div class="legacy-warning">
+        <p>⏳ 尚未运行 W1b 预检</p>
+        <p class="legacy-hint">{{ precheck_blocker }}</p>
+      </div>
+    {% elif precheck_state == "no_draft" %}
+      <div class="legacy-warning">
+        <p>⚠️ 草稿不存在</p>
+        <p class="legacy-hint">{{ precheck_blocker }}</p>
+      </div>
+    {% else %}
+      <p>✅ 预检通过</p>
+    {% endif %}
+
     {% if l.get("pre_check_report") %}
-      <details {{ "open" if fail_count else "" }}>
+      <details {{ "open" if precheck_state in ("failed", "stale_sha") else "" }}>
         <summary>查看预检报告</summary>
         <pre class="legacy-prompt">{{ l.pre_check_report }}</pre>
       </details>
     {% endif %}
 
-    {% if l.get("post_process_report") %}
+    {% if l.get("draft_full") and precheck_state in ("failed", "stale_sha", "no_precheck") %}
+      <details open>
+        <summary>📝 当前草稿（点击折叠/展开；如需编辑，请在服务器上直接修改文件）</summary>
+        {% if draft_path %}
+          <p class="legacy-muted">路径: <code>{{ draft_path }}</code></p>
+        {% endif %}
+        <pre class="legacy-prompt">{{ l.draft_full }}</pre>
+      </details>
+    {% endif %}
+
+    {% if l.get("post_process_report") and precheck_passed %}
       <div class="legacy-result">
         <p>
           后处理门控：{{ "✅ 通过" if w2.get("gate_passed") else "❌ 未通过" }}
@@ -138,25 +176,39 @@
     {% endif %}
 
     <div class="legacy-actions">
-      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline">
-        <button type="submit" class="button">运行后处理检查</button>
-      </form>
+      {% if precheck_passed %}
+        {# W1b 通过（草稿 SHA 一致）才显示 W2 按钮。 #}
+        <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline">
+          <button type="submit" class="button">运行后处理检查</button>
+        </form>
 
-      {% if l.get("post_process_report") and not w2.get("gate_passed") and w2.get("rounds_left", 2) > 0 %}
-      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2-revise" style="display:inline; margin-left:0.5rem">
-        <button type="submit" class="button button-secondary">AI 修订并重跑（剩余 {{ w2.rounds_left }} 轮）</button>
-      </form>
-      {% endif %}
+        {% if l.get("post_process_report") and not w2.get("gate_passed") and w2.get("rounds_left", 2) > 0 %}
+        <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2-revise" style="display:inline; margin-left:0.5rem">
+          <button type="submit" class="button button-secondary">AI 修订并重跑（剩余 {{ w2.rounds_left }} 轮）</button>
+        </form>
+        {% endif %}
 
-      {% if w2.get("gate_passed") %}
-      <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline; margin-left:0.5rem">
-        <input type="hidden" name="apply" value="1">
-        <button type="submit" class="button button-secondary">写回链接字段 (--apply)</button>
-      </form>
+        {% if w2.get("gate_passed") %}
+        <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline; margin-left:0.5rem">
+          <input type="hidden" name="apply" value="1">
+          <button type="submit" class="button button-secondary">写回链接字段 (--apply)</button>
+        </form>
+        {% endif %}
+      {% else %}
+        {# W1b 未通过或草稿已变：隐藏 W2，给出修复入口。 #}
+        <form method="post" action="/actions/{{ action.id }}/legacy/stage/w1b" style="display:inline">
+          <button type="submit" class="button">重新运行预检</button>
+        </form>
+        {% if w2.get("rounds_left", 2) > 0 %}
+        <form method="post" action="/actions/{{ action.id }}/legacy/stage/w1b-revise" style="display:inline; margin-left:0.5rem"
+              onsubmit="return confirm('AI 将根据预检报告中的失败项修订草稿，并自动修补缺失的 frontmatter 收尾 ---。是否继续？')">
+          <button type="submit" class="button button-secondary">AI 修订草稿并重跑预检（剩余 {{ w2.get('rounds_left', 2) }} 轮）</button>
+        </form>
+        {% endif %}
       {% endif %}
     </div>
 
-    {% if w2.get("rounds_left") == 0 and not w2.get("gate_passed") %}
+    {% if precheck_passed and w2.get("rounds_left") == 0 and not w2.get("gate_passed") %}
       {% if w2.get("score_block") %}
         <p class="legacy-hint">⚠️ 需人工审阅：已用满 2 轮修订，评分仍低于 70。按 skill 规则不进入注册，请人工改稿后重跑后处理。</p>
       {% endif %}

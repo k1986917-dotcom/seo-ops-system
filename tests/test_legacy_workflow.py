@@ -1266,3 +1266,334 @@ class TestLegacySync:
             (expected / "published" / "published-index.json")
             != (hardcoded / "published" / "published-index.json")
         )
+
+
+class TestDraftFrontmatterRepair:
+    """Detect drafts that miss the closing `---` and self-heal so the
+    pre-check parser can read SEO Title / Description.
+
+    This is the parser-level fix for the production action where the
+    W0 AI output a draft with only an opening `---` and no closer,
+    causing the pre-check to report SEO Title/Description as 0 chars.
+    """
+
+    def test_well_formed_frontmatter_is_left_alone(self, tmp_path):
+        from seo_ops.services.legacy_workflow import repair_draft_frontmatter
+
+        slug = "well-formed-test"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        draft.write_text(
+            "---\n"
+            "Title: OK\n"
+            "SEO Title: Commercial Ceiling Laser Pointer: 5mW Green\n"
+            "SEO Description: A real SEO description that is over a hundred and fifty chars to pass the gate check easily.\n"
+            "---\n\n"
+            "# H1\n\nBody\n",
+            encoding="utf-8",
+        )
+        result = repair_draft_frontmatter(ws, slug)
+        assert result["repaired"] is False
+        assert result["reason"] == "already_well_formed"
+        # File unchanged (no double `---` injected).
+        assert draft.read_text(encoding="utf-8").count("---") == 2
+
+    def test_missing_closing_frontmatter_gets_inserted(self, tmp_path):
+        from seo_ops.services.legacy_workflow import repair_draft_frontmatter
+
+        slug = "missing-closer"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        seo_desc = (
+            "A real SEO description that is well over a hundred and fifty chars "
+            "to pass the gate check easily and demonstrate the parser now sees "
+            "the full frontmatter after repair."
+        )
+        original = (
+            "---\n"
+            "Title: Needs Repair\n"
+            "SEO Title: Commercial Ceiling Laser Pointer: 5mW Green\n"
+            f"SEO Description: {seo_desc}\n"
+            "\n"
+            "# H1\n\nBody\n"
+        )
+        draft.write_text(original, encoding="utf-8")
+        assert draft.read_text(encoding="utf-8").count("---") == 1
+
+        result = repair_draft_frontmatter(ws, slug)
+        assert result["repaired"] is True
+        assert result["reason"] == "inserted_closing"
+
+        new_text = draft.read_text(encoding="utf-8")
+        # Now has 2 `---` and parser can read the frontmatter.
+        assert new_text.count("---") == 2
+        # The H1 is preserved.
+        assert "\n# H1" in new_text
+
+        # And the parser can read it.
+        from data_sources.modules.write_pre_check import parse_draft
+        meta, body, *_ = parse_draft(str(draft))
+        assert meta.get("seo title", "").startswith("Commercial Ceiling")
+        assert len(meta.get("seo description", "")) > 100
+
+    def test_no_draft_returns_clean_result(self, tmp_path):
+        from seo_ops.services.legacy_workflow import repair_draft_frontmatter
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        result = repair_draft_frontmatter(ws, "nope")
+        assert result["repaired"] is False
+        assert result["reason"] == "no_draft"
+
+    def test_no_frontmatter_is_left_alone(self, tmp_path):
+        from seo_ops.services.legacy_workflow import repair_draft_frontmatter
+
+        slug = "no-fm"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        draft.write_text("# H1\n\nBody with no frontmatter\n", encoding="utf-8")
+        result = repair_draft_frontmatter(ws, slug)
+        assert result["repaired"] is False
+        assert result["reason"] == "no_frontmatter"
+
+
+class TestPrecheckGateDisplay:
+    """Verify the display data and template gate the W2 button by the
+    precheck_state field. The W2 button must NOT appear in the rendered
+    HTML when precheck_passed is False or the draft SHA has changed."""
+
+    def _make_action(self, tmp_path, *, action_id=1):
+        from seo_ops.db import init_db, connection
+        from seo_ops.config import Settings
+        from pathlib import Path as _P
+
+        data_dir = tmp_path / "data"
+        s = Settings(
+            project_root=tmp_path,
+            data_dir=data_dir,
+            database_path=data_dir / "seo_ops.db",
+            snapshots_dir=data_dir / "snapshots",
+            host="127.0.0.1",
+            port=8787,
+            timezone="UTC",
+            ai_provider="openai-compatible",
+            ai_base_url=None,
+            ai_api_key=None,
+            ai_model=None,
+        )
+        init_db(s)
+        with connection(s) as conn:
+            conn.execute(
+                "INSERT INTO sites(slug, name, domain, created_at, updated_at) "
+                "VALUES('s1', 'S1', 'example.com', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+            )
+            site_id = conn.execute("SELECT id FROM sites").fetchone()["id"]
+            conn.execute(
+                "INSERT INTO analysis_runs(site_id, method_version, "
+                "source_import_ids_json, status, started_at) "
+                "VALUES(?, '1.0', '[]', 'success', '2026-01-01T00:00:00+00:00')",
+                (site_id,),
+            )
+            analysis_run_id = conn.execute(
+                "SELECT last_insert_rowid() AS id"
+            ).fetchone()["id"]
+            conn.execute(
+                "INSERT INTO opportunities(analysis_run_id, site_id, rule_key, "
+                "opportunity_type, target_kind, target_ref, title, recommended_action, "
+                "gate_status, gate_reasons_json, evidence_json, strength, confidence, "
+                "confidence_weight, effort, priority, method_version, status, "
+                "created_at) "
+                "VALUES(?, ?, 'topic_gap', 'new_article', 'topic', ?, 'Test', 'create', "
+                "'passed', '[]', '{}', 0.0, 'low', 0.0, 0.0, 0.0, '1.0', 'accepted', "
+                "'2026-01-01T00:00:00+00:00')",
+                (analysis_run_id, site_id, "Precheck Gate Test Topic"),
+            )
+            opp_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+            conn.execute(
+                "INSERT INTO actions(site_id, opportunity_id, action_type, target_ref, "
+                "decision, baseline_json, decided_at, updated_at, legacy_stage) "
+                "VALUES(?, ?, 'create', ?, 'accepted', '{}', "
+                "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', "
+                "'w1b_pre_check')",
+                (site_id, opp_id, "Precheck Gate Test Topic"),
+            )
+            new_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+            conn.commit()
+        return s, new_id
+
+    def _write_draft(self, settings, action_id, slug, body="Body\n"):
+        from seo_ops.services.legacy_workflow import action_workspace
+        ws = action_workspace(
+            settings.data_dir / "legacy_workflow" / "laserpointerhub",
+            action_id,
+        )
+        draft_dir = ws / "drafts"
+        draft_dir.mkdir(parents=True, exist_ok=True)
+        draft = draft_dir / f"{slug}-2026-01-15.md"
+        draft.write_text(
+            "---\n"
+            "Title: T\n"
+            "SEO Title: A reasonable SEO title at fifty five chars long now\n"
+            "SEO Description: " + ("x" * 160) + "\n"
+            "---\n\n# H1\n\n" + body,
+            encoding="utf-8",
+        )
+        return draft
+
+    def _set_state(self, settings, action_id, slug, *, precheck_passed, sha, rounds=0):
+        from seo_ops.services.legacy_workflow import save_w2_state, action_workspace
+        ws = action_workspace(
+            settings.data_dir / "legacy_workflow" / "laserpointerhub",
+            action_id,
+        )
+        save_w2_state(ws, slug, {
+            "rounds": rounds,
+            "gate_passed": False,
+            "applied": False,
+            "precheck_passed": precheck_passed,
+            "precheck_draft_sha256": sha,
+        })
+
+    def _get_display(self, settings, action_id, topic):
+        from seo_ops.services.legacy_workflow import get_legacy_display_data
+        ws = (
+            settings.data_dir
+            / "legacy_workflow"
+            / "laserpointerhub"
+            / "runs"
+            / f"action-{action_id}"
+            / "current"
+            / "laserpointerhub"
+        )
+        return get_legacy_display_data(topic, ws, db_stage="w1b_pre_check")
+
+    def test_display_state_failed_when_precheck_not_passed(self, tmp_path):
+        from seo_ops.web.app import create_app
+        from fastapi.testclient import TestClient
+        from seo_ops.services.legacy_workflow import _sha256_file
+
+        s, action_id = self._make_action(tmp_path)
+        slug = "precheck-gate-test-topic"
+        draft = self._write_draft(s, action_id, slug)
+        # Set state to "precheck ran but failed" (mismatched: real sha
+        # vs a fake sha recorded in state).
+        self._set_state(s, action_id, slug, precheck_passed=False, sha="0" * 64)
+
+        display = self._get_display(s, action_id, "Precheck Gate Test Topic")
+        assert display["precheck_state"] == "failed"
+        assert display["precheck_passed"] is False
+        assert display["precheck_blocker_message"]
+        assert "draft_full" in display
+        # W2 must not be enabled when precheck didn't pass.
+        assert display["precheck_passed"] is False
+
+    def test_display_state_stale_sha_when_draft_changed(self, tmp_path):
+        from seo_ops.services.legacy_workflow import _sha256_file
+        s, action_id = self._make_action(tmp_path)
+        slug = "precheck-gate-test-topic"
+        draft = self._write_draft(s, action_id, slug, body="Original body\n")
+        original_sha = _sha256_file(draft)
+        # Then mutate the draft.
+        draft.write_text(draft.read_text(encoding="utf-8") + "EXTRA\n", encoding="utf-8")
+
+        self._set_state(s, action_id, slug, precheck_passed=True, sha=original_sha)
+        display = self._get_display(s, action_id, "Precheck Gate Test Topic")
+        assert display["precheck_state"] == "stale_sha"
+        assert "草稿已被修改" in display["precheck_blocker_message"]
+
+    def test_display_state_passed_when_all_good(self, tmp_path):
+        from seo_ops.services.legacy_workflow import _sha256_file
+        s, action_id = self._make_action(tmp_path)
+        slug = "precheck-gate-test-topic"
+        draft = self._write_draft(s, action_id, slug)
+        sha = _sha256_file(draft)
+        self._set_state(s, action_id, slug, precheck_passed=True, sha=sha)
+        display = self._get_display(s, action_id, "Precheck Gate Test Topic")
+        assert display["precheck_state"] == "passed"
+        assert display["precheck_passed"] is True
+        assert display["precheck_blocker_message"] == ""
+
+    def test_template_hides_w2_button_when_precheck_failed(self, tmp_path):
+        from seo_ops.web.app import create_app
+        from fastapi.testclient import TestClient
+        import re
+
+        s, action_id = self._make_action(tmp_path)
+        slug = "precheck-gate-test-topic"
+        draft = self._write_draft(s, action_id, slug)
+        self._set_state(s, action_id, slug, precheck_passed=False, sha="0" * 64)
+
+        app = create_app(s)
+        client = TestClient(app)
+        resp = client.get("/actions")
+        assert resp.status_code == 200
+        body = resp.text
+        forms = re.findall(
+            r'action="(/actions/\d+/legacy/stage/[\w-]+)"', body
+        )
+        # W2 must NOT be present in any legacy form action.
+        assert not any(f.endswith("/legacy/stage/w2") for f in forms), (
+            f"W2 button leaked into the page even though precheck failed: {forms}"
+        )
+        # Re-run W1b SHOULD be present.
+        assert any(f.endswith("/legacy/stage/w1b") for f in forms), (
+            f"Re-run W1b button missing: {forms}"
+        )
+        # AI-revise + rerun SHOULD be present.
+        assert any(f.endswith("/legacy/stage/w1b-revise") for f in forms), (
+            f"AI-revise + rerun W1b button missing: {forms}"
+        )
+        # Warning banner is shown.
+        assert "legacy-warning" in body, "Warning banner missing"
+
+    def test_template_shows_w2_button_when_precheck_passed(self, tmp_path):
+        from seo_ops.web.app import create_app
+        from fastapi.testclient import TestClient
+        from seo_ops.services.legacy_workflow import _sha256_file, get_legacy_display_data
+        from seo_ops.services.legacy_workflow import action_workspace
+        import re
+
+        s, action_id = self._make_action(tmp_path)
+        slug = "precheck-gate-test-topic"
+        draft = self._write_draft(s, action_id, slug)
+        sha = _sha256_file(draft)
+        self._set_state(s, action_id, slug, precheck_passed=True, sha=sha)
+
+        # Debug: check what the display data shows.
+        ws = action_workspace(
+            s.data_dir / "legacy_workflow" / "laserpointerhub",
+            action_id,
+        )
+        disp = get_legacy_display_data(
+            "Precheck Gate Test Topic", ws, db_stage="w1b_pre_check"
+        )
+        assert disp["precheck_state"] == "passed", (
+            f"Test setup wrong: {disp.get('precheck_state')}, "
+            f"precheck_passed={disp.get('precheck_passed')}, "
+            f"draft_match={disp.get('precheck_draft_match')}"
+        )
+
+        app = create_app(s)
+        client = TestClient(app)
+        resp = client.get("/actions")
+        assert resp.status_code == 200
+        body = resp.text
+        forms = re.findall(
+            r'action="(/actions/\d+/legacy/stage/[\w-]+)"', body
+        )
+        # W2 button is visible.
+        assert any(f.endswith("/legacy/stage/w2") for f in forms), (
+            f"W2 button missing even though precheck passed: {forms}"
+        )
+        # Re-run W1b button must NOT be present (no need to fix).
+        assert not any(f.endswith("/legacy/stage/w1b\"") for f in forms), (
+            f"Rerun W1b button should be hidden when precheck passed: {forms}"
+        )
+        # No warning banner.
+        assert "legacy-warning" not in body, (
+            "Warning banner should be hidden when precheck passed"
+        )
+

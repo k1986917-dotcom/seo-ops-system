@@ -40,6 +40,11 @@
   word-break: break-word; margin: 0.5rem 0;
 }
 .legacy-result { padding: 0.5rem 0; }
+.legacy-warning {
+  background: #fff4e5; border: 1px solid #f4b400; border-radius: 4px;
+  padding: 0.6rem 0.9rem; margin: 0.6rem 0;
+}
+.legacy-warning p { margin: 0.15rem 0; color: #5f3700; }
 .legacy-actions { margin-top: 0.75rem; }
 .legacy-card .button { margin-top: 0.5rem; }
 .legacy-card .button-secondary { background: #5f6368; }

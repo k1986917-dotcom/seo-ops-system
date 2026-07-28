@@ -82,6 +82,7 @@ from seo_ops.services.legacy_workflow import (
     stage_r3_ai_analyze,
     stage_w0_validate_and_draft,
     stage_w1b_pre_check,
+    stage_w1b_revise,
     stage_w2_post_process,
     stage_w2_revise,
     stage_w3_register,
@@ -694,8 +695,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _update_legacy_stage(action_id, result.get("stage"))
         fail_count = result.get("fail_count", 0)
         if fail_count > 0:
-            return _redirect("/actions", f"预检完成：{fail_count} 项需要修复", "warning")
+            return _redirect(
+                "/actions",
+                f"预检完成：{fail_count} 项需要修复（请在卡片中查看并修复草稿后重跑 W1b）",
+                "warning",
+            )
         return _redirect("/actions", "预检通过")
+
+    @app.post("/actions/{action_id}/legacy/stage/w1b-revise")
+    async def legacy_w1b_revise(action_id: int, request: Request):
+        """AI revises the draft to fix W1b pre-check failures, then
+        re-runs W1b. Use this when the operator wants automated help
+        addressing pre-check failures without first running W2."""
+        _require_local_form(request)
+        form = await request.form()
+        tier = str(form.get("tier", "") or "")
+        action = _get_action_or_404(action_id)
+        topic = _get_action_topic(action)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        result = await stage_w1b_revise(
+            topic, tier, run_workspace, active_settings
+        )
+        _update_legacy_stage(action_id, result.get("stage") or "w1b_pre_check")
+        if not result.get("success"):
+            return _redirect(
+                "/actions",
+                result.get("error") or "AI 修订失败",
+                "error",
+            )
+        repaired = "（已自动修补 frontmatter）" if result.get("frontmatter_repaired") else ""
+        return _redirect(
+            "/actions",
+            f"AI 已修订草稿{repaired}，预检通过，可继续 W2",
+        )
 
     @app.post("/actions/{action_id}/legacy/stage/w2")
     async def legacy_w2(action_id: int, request: Request):

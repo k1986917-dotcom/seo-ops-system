@@ -1283,6 +1283,59 @@ def _strip_code_fence(text: str) -> str:
     return "\n".join(body).strip()
 
 
+# ── Draft frontmatter repair ────────────────────────────────────────────
+#
+# Some AI drafts from W0 omit the closing `---` of the frontmatter. The
+# pre-check parser then sees the whole file as frontmatter and reports
+# 0-char SEO Title/Description, masking real content failures. Detect
+# this case (starts with `---` but no second `---`) and insert the
+# missing closer before the first Markdown heading.
+
+def _has_closing_frontmatter(text: str) -> bool:
+    """True if the first `---` is followed by a second `---` before any
+    other content. We split on `---` and require at least 3 parts."""
+    if not text.startswith("---"):
+        return False
+    parts = text.split("---", 2)
+    return len(parts) >= 3
+
+
+def repair_draft_frontmatter(workspace: Path, slug: str) -> dict:
+    """If the latest draft has unterminated frontmatter, insert the
+    missing closing `---` before the first Markdown heading. Returns:
+
+        {"repaired": bool, "draft": str | None, "reason": str}
+
+    Idempotent: if frontmatter is well-formed, returns repaired=False
+    without writing the file.
+    """
+    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    if not draft:
+        return {"repaired": False, "draft": None, "reason": "no_draft"}
+    text = draft.read_text(encoding="utf-8")
+    if _has_closing_frontmatter(text):
+        return {"repaired": False, "draft": str(draft), "reason": "already_well_formed"}
+    if not text.startswith("---"):
+        return {"repaired": False, "draft": str(draft), "reason": "no_frontmatter"}
+    # Find the first Markdown heading line (after the opening ---).
+    lines = text.splitlines(keepends=True)
+    insert_at = None
+    for i, line in enumerate(lines):
+        if i == 0 and line.strip() == "---":
+            continue
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            insert_at = i
+            break
+    if insert_at is None:
+        return {"repaired": False, "draft": str(draft), "reason": "no_heading_found"}
+    # Insert `\n---\n` immediately before the heading line, preserving it.
+    new_lines = lines[:insert_at] + ["\n", "---\n"] + lines[insert_at:]
+    new_text = "".join(new_lines)
+    draft.write_text(new_text, encoding="utf-8")
+    return {"repaired": True, "draft": str(draft), "reason": "inserted_closing"}
+
+
 # ── W1b: Pre-Check ──────────────────────────────────────────────────────
 
 async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
@@ -1291,6 +1344,12 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
+
+    # Self-heal: if W0 produced a draft with unterminated frontmatter,
+    # insert the missing closing `---` so the pre-check parser sees the
+    # SEO Title / Description fields. This does NOT alter the post-W1b
+    # gate; the pre-check still runs against the now-well-formed draft.
+    repair = repair_draft_frontmatter(workspace, slug)
 
     # Re-running pre-check invalidates everything from W2 onward so a stale
     # gate_passed/applied verdict cannot survive a re-run on the same draft.
@@ -1381,6 +1440,115 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
 def _primary_keywords(draft: Path) -> str:
     m = re.search(r"^SEO Keywords:\s*(.+)$", _read_text(draft), re.MULTILINE)
     return m.group(1).strip() if m else ""
+
+
+async def stage_w1b_revise(
+    topic: str, tier: str, workspace: Path, settings=None
+) -> dict:
+    """AI revises a draft that failed W1b, then re-runs W1b.
+
+    Unlike ``stage_w2_revise`` (which requires a post-process report and
+    uses W2's failure list), this helper uses the W1b pre-check report
+    as the failure list, so the operator can use AI to fix pre-check
+    failures without first running W2. Capped at MAX_REVISION_ROUNDS.
+
+    Frontmatter self-heal runs before AI so the AI sees a well-formed
+    draft and the re-run W1b sees the SEO Title/Description fields.
+    """
+    runner = LegacyRunner(workspace)
+    slug = _slugify(topic)
+    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    if not draft:
+        return {"success": False, "error": "草稿不存在"}
+
+    state = load_w2_state(workspace, slug)
+    rounds = int(state.get("rounds", 0))
+    if rounds >= MAX_REVISION_ROUNDS:
+        return {
+            "success": False,
+            "error": (
+                f"已用满 {MAX_REVISION_ROUNDS} 轮修订。按 skill 规则不再自动修改，"
+                "请人工审阅草稿。"
+            ),
+            "rounds_used": rounds,
+            "rounds_left": 0,
+        }
+
+    repair = repair_draft_frontmatter(workspace, slug)
+    precheck_report = load_report(workspace, "pre-check", slug)
+    if not precheck_report:
+        return {"success": False, "error": "没有预检报告，请先运行 W1b"}
+
+    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
+    resolved_tier = resolve_tier(topic, workspace, tier)
+
+    user_prompt = f"""Revise the article for: "{topic}"
+
+The article failed the W1b pre-check. Fix the items listed below using
+ONLY information from the material pack and the current draft. Do not
+invent facts, numbers, quotes, or URLs.
+
+## Pre-check report (what failed)
+{precheck_report[:_REPORT_CHAR_LIMIT]}
+
+## Current draft (frontmatter may have been auto-repaired)
+{_read_text(draft)}
+
+## Material pack (only source of truth)
+{_read_text(mp, _PACK_CHAR_LIMIT) if mp else '(not available)'}
+
+## Valid internal link targets
+{_read_text(workspace / 'context' / 'internal-links-map.md', _CONTEXT_CHAR_LIMIT)}
+
+Output the complete revised article Markdown with frontmatter."""
+
+    try:
+        revised = await _run_ai_text(
+            "legacy_write_revise", _REVISE_AI_SYSTEM, user_prompt,
+            settings=settings, max_tokens=16000,
+        )
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+    backup = draft.with_suffix(f".precheck-rev{rounds + 1}.md")
+    backup.write_text(_read_text(draft), encoding="utf-8")
+    draft.write_text(_strip_code_fence(revised), encoding="utf-8")
+
+    state["rounds"] = rounds + 1
+    save_w2_state(workspace, slug, state)
+
+    precheck = await stage_w1b_pre_check(
+        topic, resolved_tier, workspace
+    )
+    if not precheck.get("success") or precheck.get("fail_count", 0):
+        return {
+            "success": False,
+            "stage": "w1b_pre_check",
+            "gate_passed": False,
+            "revised": True,
+            "revision_round": rounds + 1,
+            "rounds_used": rounds + 1,
+            "rounds_left": MAX_REVISION_ROUNDS - (rounds + 1),
+            "backup": str(backup),
+            "frontmatter_repaired": repair.get("repaired", False),
+            "precheck_report": precheck.get("report", ""),
+            "error": precheck.get("error")
+            or (
+                f"第 {rounds + 1} 轮 AI 修订后预检仍有 "
+                f"{precheck.get('fail_count', 0)} 项未通过"
+            ),
+        }
+    return {
+        "success": True,
+        "stage": "w1b_pre_check",
+        "gate_passed": True,
+        "revised": True,
+        "revision_round": rounds + 1,
+        "rounds_used": rounds + 1,
+        "rounds_left": MAX_REVISION_ROUNDS - (rounds + 1),
+        "backup": str(backup),
+        "frontmatter_repaired": repair.get("repaired", False),
+    }
 
 
 # ── W2: Post-Process (+ revision loop) ──────────────────────────────────
@@ -1851,11 +2019,58 @@ def get_legacy_display_data(topic: str, workspace: Path,
         data["pre_check_report"] = pre_check
         data["fail_count"] = pre_check.count("❌")
 
+    # Precheck state for the UI gate. W2 is only allowed to run when
+    # precheck_passed=True AND the draft on disk still has the same SHA
+    # the pre-check recorded. Otherwise we surface a clear blocker so the
+    # template can hide the W2 button and show "fix draft + rerun W1b".
+    state = load_w2_state(workspace, slug)
+    precheck_passed = bool(state.get("precheck_passed"))
+    precheck_sha = str(state.get("precheck_draft_sha256", ""))
+    draft_path_str = files.get("draft")
+    current_sha = ""
+    draft_text = ""
+    if draft_path_str:
+        draft_path_obj = Path(draft_path_str)
+        if draft_path_obj.is_file():
+            current_sha = _sha256_file(draft_path_obj)
+            draft_text = draft_path_obj.read_text(encoding="utf-8")
+    draft_matches = (precheck_sha == current_sha) if precheck_sha else True
+    if not draft_path_str:
+        precheck_state = "no_draft"
+    elif not precheck_passed and not precheck_sha:
+        precheck_state = "no_precheck"
+    elif not precheck_passed:
+        precheck_state = "failed"
+    elif not draft_matches:
+        precheck_state = "stale_sha"
+    else:
+        precheck_state = "passed"
+
+    blocker_messages = {
+        "no_draft": "草稿不存在，请先运行 W0 生成草稿。",
+        "no_precheck": "尚未运行预检，请点击下方按钮运行 W1b。",
+        "failed": (
+            f"W1b 预检未通过（{data.get('fail_count', 0)} 项）。"
+            "请先修复草稿后重新运行 W1b，不要直接进入 W2。"
+        ),
+        "stale_sha": "W1b 通过后草稿已被修改，请重新运行 W1b 预检。",
+        "passed": "",
+    }
+    data["precheck_state"] = precheck_state
+    data["precheck_passed"] = precheck_passed
+    data["precheck_draft_match"] = draft_matches
+    data["precheck_blocker_message"] = blocker_messages[precheck_state]
+    data["draft_path"] = draft_path_str
+    if draft_text:
+        # Larger than draft_preview (which is 2 KB) so the user can see
+        # the whole draft when fixing pre-check failures.
+        data["draft_full"] = draft_text
+
     post_process = load_report(workspace, "post-process", slug)
     if post_process:
         data["post_process_report"] = post_process
         metrics = _parse_post_process(post_process)
-        state = load_w2_state(workspace, slug)
+        # state was already loaded above for the precheck gate check.
         rounds_used = int(state.get("rounds", 0))
         data["w2"] = {
             **metrics,
