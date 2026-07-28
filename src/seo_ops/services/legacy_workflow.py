@@ -153,14 +153,12 @@ STAGE_FILES: dict[str, tuple[str, ...]] = {
     "w0": ("drafts/{slug}-*.md",
            "reports/w2-state-{slug}.json",
            "reports/pre-check-{slug}-*.md",
-           "reports/post-process-{slug}-*.md",
-           "reports/register-{slug}-*.md"),
+           "reports/post-process-{slug}-*.md"),
     "w1b": ("reports/pre-check-{slug}-*.md",
-            "reports/post-process-{slug}-*.md",
-            "reports/register-{slug}-*.md"),
-    "w2": ("reports/post-process-{slug}-*.md",
-           "reports/register-{slug}-*.md"),
-    "w3": ("reports/register-{slug}-*.md",),
+            "reports/post-process-{slug}-*.md"),
+    "w2": ("reports/post-process-{slug}-*.md",),
+    "w3": ("reports/register-{slug}-*.md",
+           "research/backlink-suggestions-{slug}-*.md"),
 }
 
 # Stage order for invalidation lookups.
@@ -1204,17 +1202,21 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
 
     Re-running W0 invalidates everything from W1b onward (pre-check,
     post-process verdict, register, backlink suggestions) and the
-    w2-state verdict file.
+    w2-state verdict file. The invalidation runs even if W0 itself fails,
+    so a re-run that errors out still cleans up the previous attempt.
     """
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
     today = _today_str()
 
+    # Always invalidate downstream on re-entry, before any early-return.
+    # Use "w0" as the marker so the function also clears W0's own outputs
+    # (drafts, w2-state); the explicit old-draft loop below re-creates the draft.
+    clear_stage_artifacts(workspace, slug, "w0")
+
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not mp:
         return {"success": False, "error": "素材包不存在，请先完成 Research"}
-
-    clear_stage_artifacts(workspace, slug, "w1b")
 
     stdout, stderr, rc = await runner.run(
         "write_collector.py",

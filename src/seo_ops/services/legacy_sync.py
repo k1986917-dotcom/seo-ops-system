@@ -18,9 +18,12 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from seo_ops.db import connection as _db_connection
+
+if TYPE_CHECKING:
+    from seo_ops.config import Settings
 
 WORKSPACE_ROOT = Path("data/legacy_workflow/laserpointerhub")
 SNAPSHOT_SQL = """(
@@ -42,15 +45,15 @@ def _to_fm(value: Any) -> str:
 
 # ── published/published-index.json ──────────────────────────────────────
 
-def _gen_published_index(conn: sqlite3.Connection, workspace: Path) -> dict:
+def _gen_published_index(conn: sqlite3.Connection, workspace: Path, *, site_id: int = 1) -> dict:
     cursor = conn.execute(f"""
         SELECT ci.slug, ci.title, ci.canonical_url, ci.source_updated_at,
                cs.metadata_json
         FROM content_items ci
         LEFT JOIN content_snapshots cs ON cs.id = {SNAPSHOT_SQL}
-        WHERE ci.site_id = 1 AND ci.content_type = 'blog' AND ci.status = 'active'
+        WHERE ci.site_id = ? AND ci.content_type = 'blog' AND ci.status = 'active'
         ORDER BY ci.slug
-    """)
+    """, (site_id,))
     articles: list[dict[str, Any]] = []
     for slug, title, url, updated, meta_json in cursor.fetchall():
         tags: list[str] = []
@@ -73,15 +76,15 @@ def _gen_published_index(conn: sqlite3.Connection, workspace: Path) -> dict:
 
 # ── published/{slug}.md ─────────────────────────────────────────────────
 
-def _gen_published_articles(conn: sqlite3.Connection, workspace: Path) -> dict:
+def _gen_published_articles(conn: sqlite3.Connection, workspace: Path, *, site_id: int = 1) -> dict:
     cursor = conn.execute(f"""
         SELECT ci.slug, ci.title, ci.canonical_url,
                cs.body, cs.seo_title, cs.seo_description, cs.metadata_json, cs.summary
         FROM content_items ci
         LEFT JOIN content_snapshots cs ON cs.id = {SNAPSHOT_SQL}
-        WHERE ci.site_id = 1 AND ci.content_type = 'blog' AND ci.status = 'active'
+        WHERE ci.site_id = ? AND ci.content_type = 'blog' AND ci.status = 'active'
         ORDER BY ci.slug
-    """)
+    """, (site_id,))
     d = workspace / "published"
     d.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -129,15 +132,15 @@ def _gen_published_articles(conn: sqlite3.Connection, workspace: Path) -> dict:
 
 # ── products/live_products_report.md ─────────────────────────────────────
 
-def _gen_live_products(conn: sqlite3.Connection, workspace: Path) -> dict:
+def _gen_live_products(conn: sqlite3.Connection, workspace: Path, *, site_id: int = 1) -> dict:
     cursor = conn.execute(f"""
         SELECT ci.slug, ci.title, ci.canonical_url,
                cs.metadata_json, cs.summary
         FROM content_items ci
         LEFT JOIN content_snapshots cs ON cs.id = {SNAPSHOT_SQL}
-        WHERE ci.site_id = 1 AND ci.content_type = 'product' AND ci.status = 'active'
+        WHERE ci.site_id = ? AND ci.content_type = 'product' AND ci.status = 'active'
         ORDER BY ci.slug
-    """)
+    """, (site_id,))
     rows = cursor.fetchall()
     lines: list[str] = [
         "# Live Products Report — LaserPointerHub",
@@ -203,20 +206,20 @@ def _gen_live_products(conn: sqlite3.Connection, workspace: Path) -> dict:
 
 # ── context/internal-links-map.md ────────────────────────────────────────
 
-def _gen_internal_links_map(conn: sqlite3.Connection, workspace: Path) -> dict:
+def _gen_internal_links_map(conn: sqlite3.Connection, workspace: Path, *, site_id: int = 1) -> dict:
     blog_rows = conn.execute("""
         SELECT ci.slug, ci.title, ci.canonical_url
         FROM content_items ci
-        WHERE ci.site_id = 1 AND ci.content_type = 'blog' AND ci.status = 'active'
+        WHERE ci.site_id = ? AND ci.content_type = 'blog' AND ci.status = 'active'
         ORDER BY ci.slug
-    """).fetchall()
+    """, (site_id,)).fetchall()
     prod_rows = conn.execute(f"""
         SELECT ci.slug, ci.title, ci.canonical_url, cs.metadata_json
         FROM content_items ci
         LEFT JOIN content_snapshots cs ON cs.id = {SNAPSHOT_SQL}
-        WHERE ci.site_id = 1 AND ci.content_type = 'product' AND ci.status = 'active'
+        WHERE ci.site_id = ? AND ci.content_type = 'product' AND ci.status = 'active'
         ORDER BY ci.slug
-    """).fetchall()
+    """, (site_id,)).fetchall()
 
     lines: list[str] = [
         "# Internal Links Map — LaserPointerHub",
@@ -256,13 +259,13 @@ def _gen_internal_links_map(conn: sqlite3.Connection, workspace: Path) -> dict:
 
 # ── context/seo-data-manual.md ───────────────────────────────────────────
 
-def _gen_seo_data_manual(conn: sqlite3.Connection, workspace: Path) -> dict:
+def _gen_seo_data_manual(conn: sqlite3.Connection, workspace: Path, *, site_id: int = 1) -> dict:
     imp_row = conn.execute("""
         SELECT id, imported_at FROM imports
-        WHERE site_id = 1 AND source_type = 'gsc'
+        WHERE site_id = ? AND source_type = 'gsc'
           AND analysis_active = 1 AND quality_eligible = 1
         ORDER BY imported_at DESC LIMIT 1
-    """).fetchone()
+    """, (site_id,)).fetchone()
 
     out = workspace / "context" / "seo-data-manual.md"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -314,17 +317,53 @@ def _gen_seo_data_manual(conn: sqlite3.Connection, workspace: Path) -> dict:
 
 # ── Top-level sync ───────────────────────────────────────────────────────
 
-def sync_all(workspace: Path | str | None = None) -> dict[str, Any]:
+def sync_all(
+    workspace: Path | str | None = None,
+    *,
+    settings: Settings | None = None,
+    site_id: int | None = None,
+) -> dict[str, Any]:
+    """Sync DB → legacy workspace files.
+
+    When called from the web app, pass both `settings` (so we use the
+    current Settings' DB connection and data_dir) and `site_id` (so we
+    don't hardcode site_id = 1 in the SQL). Without these, the function
+    falls back to the legacy defaults, which only work for the
+    in-repo single-tenant setup.
+    """
     if workspace is None:
-        workspace = WORKSPACE_ROOT
+        if settings is not None:
+            workspace = settings.data_dir / "legacy_workflow" / "laserpointerhub"
+        else:
+            workspace = WORKSPACE_ROOT
     elif isinstance(workspace, str):
         workspace = Path(workspace)
 
-    with _db_connection() as conn:
+    if settings is None:
+        # Backwards-compat: use the default DB connection + site_id=1.
+        conn_ctx = _db_connection()
+        effective_site_id = site_id if site_id is not None else 1
+    else:
+        from seo_ops.db import connection as _db_connection_with_settings
+
+        conn_ctx = _db_connection_with_settings(settings)
+        effective_site_id = site_id if site_id is not None else 1
+
+    with conn_ctx as conn:
         return {
-            "published_index": _gen_published_index(conn, workspace),
-            "published_articles": _gen_published_articles(conn, workspace),
-            "products": _gen_live_products(conn, workspace),
-            "internal_links_map": _gen_internal_links_map(conn, workspace),
-            "seo_data_manual": _gen_seo_data_manual(conn, workspace),
+            "published_index": _gen_published_index(
+                conn, workspace, site_id=effective_site_id
+            ),
+            "published_articles": _gen_published_articles(
+                conn, workspace, site_id=effective_site_id
+            ),
+            "products": _gen_live_products(
+                conn, workspace, site_id=effective_site_id
+            ),
+            "internal_links_map": _gen_internal_links_map(
+                conn, workspace, site_id=effective_site_id
+            ),
+            "seo_data_manual": _gen_seo_data_manual(
+                conn, workspace, site_id=effective_site_id
+            ),
         }

@@ -1138,3 +1138,28 @@
 
 - register 对 internal-links-map、素材库归档、素材包清理和草稿追加仍不是单一事务；下一批需加入故障注入、回滚和并发保护。
 - 历史 attempt 当前完整保留，没有自动清理策略。
+
+## 2026-07-28 — LEGACY_WS 动态化 + sync_all 多站点修复 + 回归测试
+
+### 完成内容
+
+- `legacy_sync.py`：所有 `_gen_*` 函数的 SQL 查询原写死 `site_id = 1`，现改为 `WHERE site_id = ?` 并绑定 `(site_id,)` 参数；每个函数新增 `site_id` 关键字参数。
+- `legacy_sync.sync_all()`：新增 `settings` 和 `site_id` 参数。传入 settings 时使用 settings 指定的 DB 连接和 data_dir；不传时保持向后兼容（默认 `_db_connection()` + `site_id=1`）。
+- `app.py`：`LEGACY_WS` 从硬编码 `<PROJECT_ROOT>/data/legacy_workflow/laserpointerhub` 改为 `active_settings.data_dir / "legacy_workflow" / "laserpointerhub"`，按当前运行时 settings 自动推导。
+- `legacy_r0` 路由：`legacy_sync_all(LEGACY_WS)` 改为 `legacy_sync_all(settings=active_settings, site_id=action["site_id"])`，传递正确设置和站点 ID。
+- 移除 `app.py` 中已不再需要的 `LEGACY_PROJECT_ROOT` 导入。
+- `_gen_published_index` 在 `sync_all()` 中遗漏 `site_id=effective_site_id` 已补上。
+- `_gen_internal_links_map` 两个查询和 `_gen_seo_data_manual` 查询遗漏 `(site_id,)` 绑定参数已补上。
+
+### 测试修复
+
+- `test_hermes_orchestrator_smoke.py`：移除对已删除 `LEGACY_PROJECT_ROOT` 的 monkeypatch；LEGACY_WS 现在自动从 settings fixture 的 data_dir 推导。
+- `test_legacy_workflow.py`：mock `Connection.execute` 改为 `execute(self, _sql, _params=None)` 以兼容双参数调用。
+- 新增 3 个回归测试（`TestLegacySync`）：`test_sync_all_with_settings_and_site_id`、`test_sync_all_with_settings_different_site_id`、`test_sync_all_workspace_respects_settings_data_dir`。
+
+### 验证
+
+- `pytest -q`：185 passed（之前 185，无回归）；仅 1 条既有 Starlette/httpx 弃用警告。
+- `ruff check src/seo_ops/services/legacy_sync.py src/seo_ops/web/app.py`：All checks passed。
+- 生产工作区 `data/legacy_workflow/laserpointerhub/` 在测试后未受污染（git diff 为 clean）。
+- 更新 `docs/KNOWN_ISSUES.md`：新增 9 条已修复记录到"已修复"表。

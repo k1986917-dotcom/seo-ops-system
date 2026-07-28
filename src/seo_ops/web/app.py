@@ -74,9 +74,6 @@ from seo_ops.services.gsc_oauth import (
 )
 from seo_ops.services.legacy_sync import sync_all as legacy_sync_all
 from seo_ops.services.legacy_workflow import (
-    PROJECT_ROOT as LEGACY_PROJECT_ROOT,
-)
-from seo_ops.services.legacy_workflow import (
     action_workspace,
     generate_topic_context_from_research,
     get_legacy_display_data,
@@ -614,7 +611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Absolute: the Legacy scripts derive SEO_SITES_DIR from this path, and the
     # server is not guaranteed to be started from the repo root.
-    LEGACY_WS = LEGACY_PROJECT_ROOT / "data" / "legacy_workflow" / "laserpointerhub"
+    LEGACY_WS = active_settings.data_dir / "legacy_workflow" / "laserpointerhub"
 
     # ── Legacy stage routes ─────────────────────────────────────────
 
@@ -625,7 +622,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         topic = _get_action_topic(action)
         if not topic:
             return _redirect("/actions", "无法获取文章主题", "error")
-        legacy_sync_all(LEGACY_WS)
+        legacy_sync_all(settings=active_settings, site_id=action["site_id"])
         run_workspace = _current_legacy_workspace(action_id, topic)
         # Stage R0 wipes all prior artifacts for this slug first, so the
         # topic-context is rewritten AFTER the wipe and survives.

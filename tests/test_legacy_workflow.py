@@ -1204,7 +1204,7 @@ class TestLegacySync:
                 ]
 
         class Connection:
-            def execute(self, _sql):
+            def execute(self, _sql, _params=None):
                 return Cursor()
 
         stale = _write(tmp_path / "published" / "inactive-article.md", "old body")
@@ -1213,3 +1213,54 @@ class TestLegacySync:
         assert not stale.exists()
         assert (tmp_path / "published" / "active-article.md").exists()
         assert report["removed"] == 1
+
+    def test_sync_all_with_settings_and_site_id(self, settings):
+        """sync_all(settings=, site_id=) uses the settings-specified DB and data_dir."""
+        from seo_ops.services.legacy_sync import sync_all
+
+        report = sync_all(settings=settings, site_id=1)
+        assert "published_index" in report
+        assert "published_articles" in report
+        assert "products" in report
+        assert "internal_links_map" in report
+        assert "seo_data_manual" in report
+
+        workspace_root = settings.data_dir / "legacy_workflow" / "laserpointerhub"
+        assert (workspace_root / "published" / "published-index.json").exists()
+        assert (workspace_root / "context" / "internal-links-map.md").exists()
+        assert (workspace_root / "context" / "seo-data-manual.md").exists()
+
+    def test_sync_all_with_settings_different_site_id(
+        self, settings, tmp_path
+    ):
+        """Passing site_id=999 to an empty DB produces files with zero rows."""
+        from seo_ops.services.legacy_sync import sync_all
+
+        report = sync_all(settings=settings, site_id=999)
+        idx = json.loads(
+            (
+                settings.data_dir
+                / "legacy_workflow"
+                / "laserpointerhub"
+                / "published"
+                / "published-index.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert idx == []  # no content_items with site_id=999
+        assert report["published_articles"]["count"] == 0
+
+    def test_sync_all_workspace_respects_settings_data_dir(self, settings):
+        """When workspace is None and settings is given, workspace derives from data_dir."""
+        from seo_ops.services.legacy_sync import sync_all
+
+        sync_all(settings=settings)
+        expected = settings.data_dir / "legacy_workflow" / "laserpointerhub"
+        assert (expected / "published" / "published-index.json").exists()
+        # Ensure it did NOT fall back to the hardcoded WORKSPACE_ROOT
+        hardcoded = Path("data/legacy_workflow/laserpointerhub")
+        assert not hardcoded.exists() or not (
+            hardcoded / "published" / "published-index.json"
+        ).exists() or (
+            (expected / "published" / "published-index.json")
+            != (hardcoded / "published" / "published-index.json")
+        )

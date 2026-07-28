@@ -2,6 +2,23 @@
 
 所有用户可见变化记录在此。版本遵循语义化版本。
 
+## [0.11.1] - 2026-07-28
+
+### Fixed
+
+- **LEGACY_WS 不再硬编码**：改为从 `active_settings.data_dir` 动态推导，使多站点配置或临时目录测试时工作区路径自动适配。
+- **legacy_sync.sync_all() 支持多站点**：所有 SQL 查询从 `site_id = 1` 改为绑定参数 `site_id = ?`；新增 `settings` 和 `site_id` 参数，可从网页路由传递正确的站点 ID（commit TBD）。
+- **注册 Legacy 工作流不再污染生产路径**：`legacy_r0` 路由改为 `legacy_sync_all(settings=active_settings, site_id=...)`，使用运行时 settings 而非硬编码路径。
+
+### 测试覆盖新增
+
+- 新增 3 个 `sync_all(settings=, site_id=)` 回归测试，覆盖 settings/临时 DB/data_dir 派生和不同 site_id。
+- 集成测试 `test_hermes_orchestrator_smoke.py` 已适配新的动态 LEGACY_WS 推导。
+
+### 验证
+
+- 完整测试：185 passed；无业务逻辑回归。
+
 ## [0.11.0] - 2026-07-21
 
 ### 新增：Legacy Research + Write 工作流（新文章制作通道）

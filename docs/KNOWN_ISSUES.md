@@ -1,6 +1,6 @@
 # Known Issues — SEO Ops System
 
-> 最近更新：2026-07-28（基于 commit `4811b9d`）
+> 最近更新：2026-07-28（基于 commit `386ee05` + working tree）
 > 分支：`codex/legacy-skill-integration`
 
 ## 整合目标（已确认）
@@ -114,12 +114,15 @@ jsonschema 校验。
 
 **优先级**：中。
 
-### 7. legacy_sync 测试仍依赖真实数据库 fixture（同上一份 commit 409fd10 的 P1-5）
+### 7. legacy_sync 旧测试仍依赖真实数据库 fixture（同上一份 commit 409fd10 的 P1-5）
 
-**症状**：`tests/test_legacy_workflow.py::TestLegacySync` 5 个测试部分依赖
-`data/seo_ops.db` 的内容。
+**症状**：`tests/test_legacy_workflow.py::TestLegacySync` 5 个旧测试部分依赖
+`data/seo_ops.db` 的内容（通过默认 `_db_connection()`）。
 
-**修复方向**：用 `tmp_path` + 自建 DB fixture。
+**修复方向**：已新增 `test_sync_all_with_settings_and_site_id`、
+`test_sync_all_with_settings_different_site_id`、
+`test_sync_all_workspace_respects_settings_data_dir` 三个测试，使用 settings fixture
+（临时 DB + 临时 data_dir），不再依赖生产数据库。旧测试保留向后兼容。
 
 **优先级**：低。
 
@@ -145,11 +148,7 @@ jsonschema 校验。
 
 **当前策略**：接受。
 
-### 11. 没有自动化测试覆盖 legacy_sync 的真实数据库场景
-
-`test_legacy_sync.py` 用 mock 游标。
-
-**当前策略**：手动跑一次 sync 验证。CI 没有覆盖。
+### 11. （已修复 — 见上方「已修复」表）
 
 ### 12. Hermes skill 包装缺少
 
@@ -175,7 +174,17 @@ jsonschema 校验。
 | 脚本崩溃算通过 | 结构化 JSON 计数（324ec79） |
 | 同主题重试读错文件 | 每个 action 一个持久工作区 + R0 全清（409fd10） |
 | 缺 plan SKILL 集成 | 决策：第一阶段不接入（4811b9d） |
-| Hermes 文档不准（说 tirith 实际是 hermes） | 改用 hermes，RUNTIME_REPORT 实测（commit TBD） |
+| Hermes 文档不准（说 tirith 实际是 hermes） | 改用 hermes，RUNTIME_REPORT 实测（`386ee05`） |
+| 一致的 7 阶段端到端 smoke test 覆盖（创建/状态/R0-W3/中断/重跑/隔离/失败） | 8 个集成测试 + 端到端 shell 脚本验证（`386ee05`） |
+| seo-ops-orchestrator Hermes Skill 接入 | 8 个 stage 脚本 + install.sh + hermes skills list 已能发现（`386ee05`） |
+| `LEGACY_WS` 硬编码为 `<PROJECT_ROOT>/data/legacy_workflow/laserpointerhub` | 改为从 `active_settings.data_dir` 动态推导（working tree） |
+| `sync_all()` SQL 写死 `site_id = 1` + 缺少 settings 参数 | 所有 `_gen_*` 函数接受 `site_id` 参数并传给 `conn.execute()`；`sync_all()` 新增 `settings` + `site_id` 参数（working tree） |
+| `legacy_r0` 路由调用 `sync_all` 不传 settings + site_id | 改为 `legacy_sync_all(settings=active_settings, site_id=action["site_id"])`（working tree） |
+| `_gen_published_index` 在 `sync_all()` 中遗漏 `site_id` 参数传递 | 补上 `site_id=effective_site_id`（working tree） |
+| `_gen_internal_links_map` 两个查询遗漏 `(site_id,)` 绑定参数 | 补上 `(site_id,)` 参数（working tree） |
+| `_gen_seo_data_manual` 查询遗漏 `(site_id,)` 绑定参数 | 补上 `(site_id,)` 参数（working tree） |
+| `test_hermes_orchestrator_smoke.py` 测试 patching 引用了已删除的 `LEGACY_PROJECT_ROOT` | 移除该 monkeypatch，改用 settings fixture 的 data_dir（working tree） |
+| `test_legacy_workflow.py` mock Connection.execute 不支持第二参数 | 改为 `execute(self, _sql, _params=None)`（working tree） |
 
 ---
 

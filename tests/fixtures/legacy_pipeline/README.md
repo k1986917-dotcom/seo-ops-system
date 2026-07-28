@@ -23,11 +23,11 @@
 ## Directory layout
 
 ```
-tests/fixtures/legacy_pipeline/
-├── README.md                           # this file
-├── action_sample/                      # what the SEO Ops DB looks like
-│   └── actions.sqlite3.sql             # INSERT statements for actions + topics
-├── context/                             # 7 context files (synced by legacy_sync)
+tests/fixtures/legacy_pipeline/                  ← 38 files
+├── README.md                                    (1)
+├── action_sample/                               (1)
+│   └── actions.sqlite3.sql
+├── context/                                     (7)
 │   ├── brand-voice.md
 │   ├── writing-examples.md
 │   ├── style-guide.md
@@ -35,26 +35,45 @@ tests/fixtures/legacy_pipeline/
 │   ├── target-keywords.md
 │   ├── internal-links-map.md
 │   └── seo-data-manual.md
-├── published/
-│   ├── published-index.json             # JSON index of every published article
-│   └── example-published-article.md    # one desensitized published article
-├── products/
-│   └── live_products_report.md          # product spec table
-└── workflow_run/                       # one successful end-to-end run
-    ├── 01_search-prompt.md              # R0 output
-    ├── 02_search-results.md             # R1 input (operator-pasted)
-    ├── 03_research-data.md              # R1 output (human-readable)
-    ├── 03_research-data.json            # R1 output (machine-readable)
-    ├── 04_research-score.md             # R3 deterministic score
-    ├── 05_material-pack.md              # R3 AI output (Part 1/2/3)
-    ├── 06_research-brief.md             # R3 AI output (audit)
-    ├── 07_draft.md                      # W0 output
-    ├── 08_pre-check_report.md           # W1b output
-    ├── 09_post-process_report.md        # W2 output
-    ├── 10_register_report.md            # W3 output
-    ├── 10_backlink-suggestions.md       # W3 AI output
-    └── w2-state.json                    # gate verdict cache
+├── published/                                   (2)
+│   ├── published-index.json
+│   └── example-article-1.md
+├── products/                                    (1)
+│   └── live_products_report.md
+├── workflow_run/                                (12)
+│   ├── 01_search-prompt.md
+│   ├── 02_search-results.md
+│   ├── 03_research-data.md
+│   ├── 03_research-data.json
+│   ├── 04_research-score.md
+│   ├── 05_material-pack.md
+│   ├── 06_research-brief.md
+│   ├── 07_draft.md
+│   ├── 08_pre-check_report.md
+│   ├── 09_post-process_report.md
+│   ├── 10_register_report.md
+│   ├── 10_backlink-suggestions.md
+│   └── w2-state.json
+└── skill_source/                               (14, added 2026-07-28)
+    └── seo-ops-orchestrator/
+        ├── SKILL.md
+        ├── README.md
+        ├── install.sh
+        └── scripts/  (10 files: detect_stage, lib, r0, r1, r3, w0, w1b, w2, w2-revise, w3)
 ```
+
+Count summary:
+
+| Subdirectory | Files | Purpose |
+|---|---|---|
+| `context/` | 7 | 7 synced context files (real Legacy format) |
+| `published/` | 2 | JSON index + 1 desensitized article |
+| `products/` | 1 | Product spec table |
+| `workflow_run/` | 12 | R0..W3 stage outputs (one per stage) |
+| `action_sample/` | 1 | DB INSERT statements for testing |
+| `skill_source/` | 14 | Installable Hermes skill (8 stage scripts + lib + detect_stage + 3 docs) |
+| Root README | 1 | This file |
+| **Total** | **38** | |
 
 ## I/O relationships
 

@@ -4,7 +4,15 @@
 
 ## 一句话状态
 
-源码 `0.11.0`、SQLite v13。Legacy Research + Write 的规则硬门和产物隔离已完成：确定性评分先于 AI；每个 action/attempt 使用独立运行目录；旧结果不能冒充本次成功；预检、后处理、人工 force 和注册均由后端硬门控。旧文章制作通道不变。
+源码 `0.11.1`（uncommitted）、SQLite v13。LEGACY_WS 从硬编码改为动态推导，sync_all 支持多站点 settings + site_id 参数；所有 SQL 查询不再写死 `site_id = 1`。旧文章制作通道不变。
+
+## 2026-07-28 — LEGACY_WS 动态化 + sync_all 多站点修复
+
+- `app.py`：`LEGACY_WS` 从 `<PROJECT_ROOT>/data/legacy_workflow/laserpointerhub` 改为 `active_settings.data_dir / "legacy_workflow" / "laserpointerhub"`，按运行时 settings 自动推导。
+- `legacy_sync.py`：所有 `_gen_*` 函数 SQL 从 `site_id = 1` 改为参数化 `site_id = ?`；`sync_all()` 新增 `settings` 和 `site_id` 参数。
+- `legacy_r0` 路由：改为 `legacy_sync_all(settings=active_settings, site_id=action["site_id"])`。
+- 新增 3 个 `sync_all(settings=, site_id=)` 回归测试；集成测试适配动态 LEGACY_WS。
+- 当前验证：完整 `pytest -q` 185 passed，`ruff check` 通过，生产工作区测试后 clean。
 
 ## 2026-07-28 — Legacy action/attempt 产物隔离
 
