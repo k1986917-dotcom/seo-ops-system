@@ -570,6 +570,80 @@ async def _run_ai_text(purpose: str, system: str, user: str, *,
     )
 
 
+# ── Evidence + Claim ledger helpers ────────────────────────────────────
+
+# Stable ID namespace: evidence-{slug}-{uuid_prefix}.
+# uuid4 is imported at the top of the file.
+
+# Re-import the parser functions from write_pre_check at call time so that
+# even if data_sources is not on sys.path at module load time, the helpers
+# can still be called at runtime from the proper environment.
+
+def _parse_material_pack(mp_path: Path) -> list[dict]:
+    """Shortcut: parse a material pack markdown file into entry dicts
+    using the shared parser from write_pre_check.py."""
+    from data_sources.modules.write_pre_check import parse_pack_entities
+    return parse_pack_entities(mp_path)
+
+
+def _write_evidence_ledger(
+    workspace: Path, slug: str, mp_path: Path,
+) -> dict:
+    """Parse the material pack and write a structured evidence-ledger JSON.
+
+    Each evidence entry gets a stable ID and includes the original source
+    URL, a canonical concept tag, and whether this evidence is required.
+    The file lives at ``workspace / research / evidence-ledger-{slug}.json``.
+    """
+    entries = _parse_material_pack(mp_path)
+    ledger: list[dict[str, object]] = []
+    for i, ent in enumerate(entries):
+        evidence_id = f"evidence-{slug}-{i:03d}-{uuid4().hex[:6]}"
+        tag = ent.get("source_tag", "search")
+        is_required = (tag == "required")
+        entry: dict[str, object] = {
+            "evidence_id": evidence_id,
+            "source_url": ent.get("evidence", ""),
+            "canonical_concept": ent.get("entity", ""),
+            "claim_type": ent.get("source_section", "search"),
+            "quote": ent.get("source_quote", ""),
+            "key_finding": ent.get("source_key_finding", ""),
+            "summary": ent.get("source_summary", ""),
+            "required": is_required,
+        }
+        ledger.append(entry)
+
+    out_path = workspace / "research" / f"evidence-ledger-{slug}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"count": len(ledger), "path": str(out_path)}
+
+
+def _write_claim_ledger(
+    workspace: Path, slug: str, claim_ledger_text: str,
+) -> dict:
+    """Write the structured claim-ledger JSON from the AI-chunk that W0
+    appended after ``===CLAIM_LEDGER===``.
+
+    The claim_ledger_text should already be valid JSON (the AI is
+    instructed to output a JSON array). Returns how many claims were
+    persisted.
+    """
+    import json as _json
+    out_path = workspace / "research" / f"claim-ledger-{slug}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = _json.loads(claim_ledger_text)
+        if not isinstance(data, list):
+            data = []
+    except (_json.JSONDecodeError, Exception):
+        data = []
+    out_path.write_text(
+        _json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"count": len(data), "path": str(out_path)}
+
+
 # ── R0: Generate Search Prompt ──────────────────────────────────────────
 
 def _build_search_prompt(topic: str, workspace: Path) -> str:
@@ -1075,10 +1149,14 @@ Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, 
         (workspace / "research" / f"brief-{slug}-{today}.md").write_text(
             brief_text, encoding="utf-8")
 
+    # Write structured evidence ledger parsed from the material pack.
+    ev_result = _write_evidence_ledger(workspace, slug, mp_path)
+
     return {
         "success": True,
         "stage": "r5_write_ready",
         "score_warning": None,
+        "evidence_count": ev_result.get("count", 0),
     }
 
 
@@ -1174,7 +1252,14 @@ SEO Keywords: [comma-separated, primary first]
 6. No generic link anchors
 7. No fabricated numbers
 
-Output ONLY the article Markdown — no preamble, no commentary, no code fence around the whole document."""
+8. After the article, output ``===CLAIM_LEDGER===`` and a JSON array of
+   factual claims from the article (technical_specification,
+   numerical_claim, comparison, causal_statement, safety_regulation).
+   Every claim must be supported by the Material Pack — do not fabricate.
+   If nothing factual, output ``===CLAIM_LEDGER===\n[]``.
+
+Output the article Markdown, then ``===CLAIM_LEDGER===``, then the JSON.
+No preamble, no commentary, no code fence around the whole document."""
 
 
 def _write_context_block(workspace: Path) -> str:
@@ -1254,6 +1339,15 @@ Follow the system instructions. Output the full article Markdown with frontmatte
     except Exception as exc:
         return {"success": False, "error": str(exc), "report": report}
 
+    # Strip code fences and split on claim-ledger separator.
+    clean = _strip_code_fence(content)
+    draft_md, cl_text = clean, ""
+    sep = "===CLAIM_LEDGER==="
+    if sep in clean:
+        parts = clean.split(sep, 1)
+        draft_md = parts[0].strip()
+        cl_text = parts[1].strip()
+
     draft_path = workspace / "drafts" / f"{slug}-{today}.md"
     draft_path.parent.mkdir(parents=True, exist_ok=True)
     # Overwrite any prior draft for this slug so re-running W0 cannot leave
@@ -1261,7 +1355,11 @@ Follow the system instructions. Output the full article Markdown with frontmatte
     for old in (workspace / "drafts").glob(f"{slug}-*.md"):
         if old.is_file():
             old.unlink()
-    draft_path.write_text(_strip_code_fence(content), encoding="utf-8")
+    draft_path.write_text(draft_md, encoding="utf-8")
+
+    # Write claim ledger if the AI produced one.
+    if cl_text:
+        _write_claim_ledger(workspace, slug, cl_text)
 
     # A fresh draft invalidates any previous post-process verdict.
     save_w2_state(workspace, slug, {"rounds": 0, "gate_passed": False, "applied": False})
@@ -1369,6 +1467,14 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if mp:
         args += ["--pack", str(mp)]
+
+    # Pass evidence-ledger and claim-ledger for fact checking (check 14).
+    ev_ledger = workspace / "research" / f"evidence-ledger-{slug}.json"
+    cl_ledger = workspace / "research" / f"claim-ledger-{slug}.json"
+    if ev_ledger.exists():
+        args += ["--evidence-ledger", str(ev_ledger)]
+    if cl_ledger.exists():
+        args += ["--claim-ledger", str(cl_ledger)]
 
     args.append("--json")
 

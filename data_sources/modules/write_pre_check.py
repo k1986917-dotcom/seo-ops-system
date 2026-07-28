@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -354,7 +355,112 @@ def check_pack_entity_coverage(
     }
 
 
-def run(draft: str, tier: str = '', keywords: str = '', pack: str = '') -> dict:
+# ── Fact-check helpers (check 14) ──────────────────────────────────────
+
+def _load_json(path: str) -> list | dict:
+    """Safely load a JSON file, returning [] for missing/unparseable."""
+    if not path:
+        return []
+    p = Path(path)
+    if not p.exists():
+        return []
+    try:
+        raw = p.read_text(encoding='utf-8')
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception:
+        return []
+
+
+def _run_fact_check(results: list, grade, evidence_path: str, claim_path: str) -> None:
+    """Check 14: Verify that every factual claim in the claim-ledger has
+    a valid evidence_id with source_url + quote/key_finding in the evidence-ledger.
+
+    Blocking rules:
+      - claim has evidence_id that is missing from evidence-ledger → blocking
+      - claim has evidence_id whose entry has no source_url → blocking
+      - claim has evidence_id whose entry has no quote AND no key_finding → blocking
+      - claim has no evidence_ids → warning (unverifiable claim)
+
+    The results list is mutated in-place.
+    """
+    claims = _load_json(claim_path)
+    evidences = _load_json(evidence_path)
+
+    if not claim_path:
+        grade('warn', '事实校验（无 claim-ledger）',
+              '未提供 claim-ledger JSON，跳过事实校验（不需要强制，但建议 W0 启用）')
+        return
+    if not claims:
+        grade('ok', '事实校验',
+              'claim-ledger 为空（没有需要校验的 claims）')
+        return
+
+    ev_map: dict[str, dict] = {}
+    for ev in evidences:
+        eid = ev.get('evidence_id', '')
+        if eid:
+            ev_map[eid] = ev
+
+    issue_count = 0
+    blocking_items: list[str] = []
+    for claim in claims:
+        claim_text = claim.get('claim', '')
+        eids = claim.get('evidence_ids', []) if isinstance(claim.get('evidence_ids'), list) else []
+        if not eids:
+            issue_count += 1
+            detail = f"  • [warning] claim 无 evidence_id: {claim_text[:80]}"
+            blocking_items.append(detail)
+            continue
+        valid = True
+        for eid in eids:
+            ev = ev_map.get(eid)
+            if ev is None:
+                valid = False
+                detail = (
+                    f"  • [blocking] claim 引用了不存在的 evidence_id={eid}"
+                    f" — claim: {claim_text[:60]}"
+                )
+                blocking_items.append(detail)
+                continue
+            if not ev.get('source_url'):
+                valid = False
+                detail = (
+                    f"  • [blocking] evidence_id={eid} 缺 source_url"
+                    f" — claim: {claim_text[:60]}"
+                )
+                blocking_items.append(detail)
+                continue
+            has_quote = bool(ev.get('quote'))
+            has_kf = bool(ev.get('key_finding'))
+            if not has_quote and not has_kf:
+                valid = False
+                detail = (
+                    f"  • [blocking] evidence_id={eid} 无 quote 也无 key_finding"
+                    f" — claim: {claim_text[:60]}"
+                )
+                blocking_items.append(detail)
+                continue
+        if not valid:
+            issue_count += 1
+
+    if not blocking_items:
+        grade('ok', '事实校验',
+              f'全部 {len(claims)} 个 claim 都有有效 evidence 支持')
+    else:
+        has_blocking = any('blocking' in item for item in blocking_items)
+        level = 'fail' if has_blocking else 'warn'
+        detail_text = '\n'.join(blocking_items[:10])
+        if len(blocking_items) > 10:
+            detail_text += f'\n  • (+{len(blocking_items)-10} more)'
+        grade(level, '事实校验（claim → evidence 映射）',
+              f'{issue_count} 个 claim 存在证据问题：\n' + detail_text)
+
+
+def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
+        evidence_ledger: str = '', claim_ledger: str = '') -> dict:
     meta, body, clean, prose, raw = parse_draft(draft)
     results = []
     tier = tier or meta.get('page type', meta.get('tier', ''))
@@ -556,6 +662,9 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '') -> dict:
             for m in miss
         ]
 
+    # 14. Claim-ledger fact check (evidence-driven)
+    _run_fact_check(results, grade, evidence_ledger, claim_ledger)
+
     return {'draft': draft, 'tier': tier, 'word_count': wc, 'checks': results,
             'pass_count': sum(1 for r in results if r['pass']),
             'warn_count': sum(1 for r in results if r.get('level') == 'warn'),
@@ -638,9 +747,12 @@ def main():
     ap.add_argument('--tier', help='Page tier (Pillar Page / Cluster Content / Product Roundup)')
     ap.add_argument('--keywords', help='Comma-separated primary keywords')
     ap.add_argument('--pack', default='', help='Path to material pack .md (used for entity-coverage check)')
+    ap.add_argument('--evidence-ledger', default='', help='Path to evidence-ledger JSON')
+    ap.add_argument('--claim-ledger', default='', help='Path to claim-ledger JSON')
     ap.add_argument('--json', action='store_true')
     args = ap.parse_args()
-    report = run(args.draft, args.tier or '', args.keywords or '', args.pack or '')
+    report = run(args.draft, args.tier or '', args.keywords or '',
+                 args.pack or '', args.evidence_ledger or '', args.claim_ledger or '')
     if args.json:
         import json
         print(json.dumps(report, ensure_ascii=False, indent=2))

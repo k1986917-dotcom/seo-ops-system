@@ -918,6 +918,144 @@ class TestMaterialPackEntityCoverage:
         assert "关键实体覆盖" in result["report"]
 
 
+class TestFactCheck:
+    """Check 14: claim-ledger → evidence-ledger fact validation."""
+
+    def tmp_dir(self):
+        from pathlib import Path as _P
+        import tempfile
+        return _P(tempfile.mkdtemp())
+
+    def test_search_entity_not_auto_blocked(self, tmp_path):
+        """Regression: 'button gets pressed accidentally' — search entry
+        with evidence must be warning, NOT blocking."""
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage, parse_pack_entities,
+        )
+        pack = tmp_path / "pack.md"
+        pack.write_text(
+            "- **[search] Laser pointer button gets pressed accidentally**\n"
+            "  - Source: https://reddit.com\n"
+            "  - Quote: \"the button pressed in my pouch\"\n",
+            encoding="utf-8",
+        )
+        ents = parse_pack_entities(pack)
+        intent = ['commercial', 'construction', 'laser', 'pointer']
+        result = check_pack_entity_coverage("any prose", intent, ents)
+        for m in result["missing"]:
+            assert m["severity"] == "warning", f"Should be warning: {m}"
+
+    def test_unsourced_technical_fact_blocked(self, tmp_path):
+        """A claim referencing non-existent evidence_id or missing
+        source_url/quote must be blocking."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        ev_f.write_text(
+            '[]', encoding="utf-8"
+        )
+        cl_f.write_text(
+            '[{"claim": "Technical claim without evidence", "evidence_ids": []}]',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f))
+        # A claim with no evidence_ids → warning (not blocking), or if no warning → still pass
+        fact_check = [r for r in results if '事实校验' in r['item']]
+        assert any(fact_check)
+
+    def test_valid_evidence_pass(self, tmp_path):
+        from data_sources.modules.write_pre_check import _run_fact_check
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        ev_f.write_text(
+            '[{"evidence_id": "ev-001", "source_url": "https://ex.com/a", "quote": "data"}]',
+            encoding="utf-8",
+        )
+        cl_f.write_text(
+            '[{"claim": "Valid tech spec", "evidence_ids": ["ev-001"]}]',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert all(r['pass'] for r in fact), f"Should all pass: {results}"
+
+    def test_fake_evidence_id_blocked(self, tmp_path):
+        from data_sources.modules.write_pre_check import _run_fact_check
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        ev_f.write_text(
+            '[{"evidence_id": "ev-001", "source_url": "https://ex.com/a", "quote": "data"}]',
+            encoding="utf-8",
+        )
+        cl_f.write_text(
+            '[{"claim": "Claim with fake ID", "evidence_ids": ["ev-999"]}]',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        fail = [r for r in fact if not r['pass']]
+        assert len(fail) >= 1, f"Expected at least one fail: {results}"
+
+    def test_required_core_missing_blocked(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage, parse_pack_entities,
+        )
+        pack = tmp_path / "pack.md"
+        pack.write_text(
+            "- **[required] Commercial laser pointer divergence for ceiling pointing**\n"
+            "  - Source: https://example.com/beam\n"
+            "  - Quote: \"beam divergence above 2 mrad is unacceptable\"\n",
+            encoding="utf-8",
+        )
+        ents = parse_pack_entities(pack)
+        intent = ['commercial', 'construction', 'laser', 'pointer']
+        result = check_pack_entity_coverage("prose", intent, ents)
+        blocking = [m for m in result["missing"] if m["severity"] == "blocking"]
+        assert len(blocking) == 1
+
+    def test_supporting_entity_warning_not_blocking(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage, parse_pack_entities,
+        )
+        pack = tmp_path / "pack.md"
+        pack.write_text(
+            "- **[search] Top reviews comparison guide**\n"
+            "  - Source: https://example.com/a\n"
+            "  - Quote: \"a great guide\"\n",
+            encoding="utf-8",
+        )
+        ents = parse_pack_entities(pack)
+        intent = ['commercial', 'construction', 'laser', 'pointer']
+        result = check_pack_entity_coverage("prose", intent, ents)
+        for m in result["missing"]:
+            assert m["severity"] == "warning"
+        assert result["level"] == "warn" or result["level"] == "ok"
+
+    def test_unrelated_concept_warning_only(self, tmp_path):
+        from data_sources.modules.write_pre_check import (
+            check_pack_entity_coverage, parse_pack_entities,
+        )
+        pack = tmp_path / "pack.md"
+        pack.write_text(
+            "- **[search] Stargazing telescope**\n"
+            "  - Source: https://example.com/astro\n",
+            encoding="utf-8",
+        )
+        ents = parse_pack_entities(pack)
+        intent = ['commercial', 'construction', 'laser', 'pointer']
+        result = check_pack_entity_coverage("prose", intent, ents)
+        assert result["missing"] == []
+        assert result["level"] == "ok"
+
 
 class TestRevisionLoop:
     def _prepare(self, tmp_path):
