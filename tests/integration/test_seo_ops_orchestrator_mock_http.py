@@ -28,8 +28,9 @@ from urllib.parse import parse_qs
 
 import pytest
 
-SCRIPTS_DIR = Path(
-    "/home/laoma/seo-ops-system/integrations/hermes/seo-ops-orchestrator/scripts"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = (
+    REPO_ROOT / "integrations" / "hermes" / "seo-ops-orchestrator" / "scripts"
 )
 
 
