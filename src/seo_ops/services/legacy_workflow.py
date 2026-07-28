@@ -88,91 +88,115 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _action_runs_dir(workspace: Path, action_id: int) -> Path:
+def _action_dir(workspace: Path, action_id: int) -> Path:
+    """Per-action directory under workspace/runs/.
+
+    Each action has exactly one persistent workspace; reopening or
+    restarting the service returns the same path. State (search-prompt,
+    material pack, draft, w2 state, reports) lives here and persists
+    on disk across restarts; the database stage (actions.legacy_stage)
+    provides the floor of progress.
+    """
     if action_id <= 0:
         raise ValueError("action_id must be positive")
     return Path(workspace) / "runs" / f"action-{action_id}"
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    temporary.replace(path)
+def _ensure_action_workspace(workspace: Path, action_id: int) -> Path:
+    """Return the persistent workspace for an action, creating it if needed.
 
-
-def start_legacy_run(workspace: Path, action_id: int, topic: str) -> Path:
-    """Create a clean, action/attempt-scoped workspace for one Legacy run."""
-
+    Layout under <workspace>/runs/action-<id>/current/laserpointerhub/:
+      - research/, material-packs/, drafts/, reports/  (private, action-only)
+      - context/, published/, products/                 (symlinks to shared)
+    """
     workspace = Path(workspace)
-    action_dir = _action_runs_dir(workspace, action_id)
-    current_path = action_dir / "current.json"
-    attempt = 1
-    raw = _read_text(current_path)
-    if raw:
-        try:
-            current = json.loads(raw)
-            attempt = max(1, int(current.get("attempt", 0)) + 1)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
+    action_dir = _action_dir(workspace, action_id)
+    run_workspace = action_dir / "current" / WEBSITE
 
-    run_id = f"a{action_id}-n{attempt}-{uuid4().hex[:12]}"
-    run_workspace = action_dir / f"attempt-{attempt:04d}-{run_id}" / WEBSITE
+    # Private directories: create if missing, leave existing files in place.
     for name in ("research", "material-packs", "drafts", "reports"):
-        (run_workspace / name).mkdir(parents=True, exist_ok=False)
+        (run_workspace / name).mkdir(parents=True, exist_ok=True)
 
-    # Context and published snapshots remain the shared, synchronized facts.
-    # Every generated Research/Write artifact stays inside this attempt.
+    # Shared snapshots stay under the parent workspace and are symlinked in.
     for name in ("context", "published", "products"):
         shared = (workspace / name).resolve()
         shared.mkdir(parents=True, exist_ok=True)
-        (run_workspace / name).symlink_to(shared, target_is_directory=True)
-
-    manifest = {
-        "action_id": action_id,
-        "attempt": attempt,
-        "run_id": run_id,
-        "topic": topic,
-        "slug": _slugify(topic),
-        "workspace": str(run_workspace.relative_to(action_dir)),
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-    _write_json_atomic(run_workspace.parent / "manifest.json", manifest)
-    _write_json_atomic(current_path, manifest)
+        link_path = run_workspace / name
+        if link_path.is_symlink() or link_path.exists():
+            # Replace stale link so a target rename is reflected.
+            if link_path.is_symlink() or link_path.is_dir():
+                try:
+                    link_path.unlink()
+                except IsADirectoryError:
+                    pass
+        link_path.symlink_to(shared, target_is_directory=True)
     return run_workspace
 
 
-def current_legacy_run(
-    workspace: Path, action_id: int, topic: str | None = None
-) -> Path | None:
-    """Resolve the current attempt only when its manifest matches the action."""
+def action_workspace(workspace: Path, action_id: int) -> Path:
+    """Resolve the persistent workspace for an action (creates it lazily)."""
+    return _ensure_action_workspace(workspace, action_id)
 
-    action_dir = _action_runs_dir(Path(workspace), action_id)
-    raw = _read_text(action_dir / "current.json")
-    if not raw:
-        return None
-    try:
-        manifest = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(manifest, dict) or manifest.get("action_id") != action_id:
-        return None
-    if topic is not None and (
-        manifest.get("topic") != topic or manifest.get("slug") != _slugify(topic)
-    ):
-        return None
-    relative = manifest.get("workspace")
-    if not isinstance(relative, str) or not relative:
-        return None
-    candidate = action_dir / relative
-    try:
-        if not candidate.resolve().is_relative_to(action_dir.resolve()):
-            return None
-    except (OSError, RuntimeError):
-        return None
-    return candidate if candidate.is_dir() else None
+
+# Stage order used for invalidation. Earlier stages invalidate all later ones.
+# Each entry is a glob relative to the action workspace.
+STAGE_FILES: dict[str, tuple[str, ...]] = {
+    "r0": ("research/search-prompt-{slug}-*.md",
+           "research/topic-context-{slug}.json"),
+    "r1": ("research/search-results-{slug}-*.md",
+           "research/research-data-{slug}-*.md",
+           "research/research-data-{slug}-*.json"),
+    "r3": ("research/research-score-{slug}-*.md",
+           "research/brief-{slug}-*.md",
+           "research/backlink-suggestions-{slug}-*.md",
+           "material-packs/{slug}-*.md"),
+    "w0": ("drafts/{slug}-*.md",
+           "reports/w2-state-{slug}.json",
+           "reports/pre-check-{slug}-*.md",
+           "reports/post-process-{slug}-*.md",
+           "reports/register-{slug}-*.md"),
+    "w1b": ("reports/pre-check-{slug}-*.md",
+            "reports/post-process-{slug}-*.md",
+            "reports/register-{slug}-*.md"),
+    "w2": ("reports/post-process-{slug}-*.md",
+           "reports/register-{slug}-*.md"),
+    "w3": ("reports/register-{slug}-*.md",),
+}
+
+# Stage order for invalidation lookups.
+STAGE_ORDER_FOR_CLEAR = ["r0", "r1", "r3", "w0", "w1b", "w2", "w3"]
+
+
+def _stage_globs_from(stage_key: str) -> list[str]:
+    """Return all glob patterns for stages at or after stage_key."""
+    if stage_key not in STAGE_ORDER_FOR_CLEAR:
+        return []
+    idx = STAGE_ORDER_FOR_CLEAR.index(stage_key)
+    out: list[str] = []
+    for s in STAGE_ORDER_FOR_CLEAR[idx:]:
+        out.extend(STAGE_FILES[s])
+    return out
+
+
+def clear_stage_artifacts(workspace: Path, slug: str, after_stage: str) -> int:
+    """Remove all artifacts produced at or after `after_stage` for this slug.
+
+    Returns the number of files removed. Used when re-running a stage so a
+    downstream success cannot masquerade as the new run's result.
+    """
+    removed = 0
+    for pattern in _stage_globs_from(after_stage):
+        concrete = pattern.format(slug=slug)
+        for path in workspace.glob(concrete):
+            if path.is_file():
+                path.unlink()
+                removed += 1
+    return removed
+
+
+def clear_all_action_artifacts(workspace: Path, slug: str) -> int:
+    """Wipe every stage artifact for this slug (full reset before R0)."""
+    return clear_stage_artifacts(workspace, slug, "r0")
 
 
 # ── Report persistence ─────────────────────────────────────────────────
@@ -789,9 +813,13 @@ Deduplicate identical questions across queries."""
 
 
 def stage_r0_generate_prompt(topic: str, workspace: Path) -> dict:
-    """Generate and save the search prompt."""
+    """Generate and save the search prompt. R0 is a full restart: any prior
+    Research, Material-Pack, Draft, Pre-check, Post-process or Register
+    artifact for this slug is wiped before the new prompt is written.
+    """
     slug = _slugify(topic)
     today = _today_str()
+    clear_all_action_artifacts(workspace, slug)
     prompt = _build_search_prompt(topic, workspace)
     out = workspace / "research" / f"search-prompt-{slug}-{today}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -806,7 +834,12 @@ def stage_r0_generate_prompt(topic: str, workspace: Path) -> dict:
 
 async def stage_r1_save_and_collect(topic: str, search_text: str,
                                      workspace: Path) -> dict:
-    """Save operator-pasted search results and run the old collect script."""
+    """Save operator-pasted search results and run the old collect script.
+
+    Re-running R1 invalidates everything from R3 onward (score, brief,
+    material pack, draft, post-process verdict) so a stale downstream success
+    cannot appear to belong to the new run.
+    """
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
     today = _today_str()
@@ -815,9 +848,8 @@ async def stage_r1_save_and_collect(topic: str, search_text: str,
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(search_text, encoding="utf-8")
 
-    # A retry in the same attempt must prove that this subprocess produced its
-    # own data. Remove only the deterministic derived outputs for this invocation;
-    # previous attempts live in separate run directories and remain untouched.
+    clear_stage_artifacts(workspace, slug, "r3")
+
     rd_file = workspace / "research" / f"research-data-{slug}-{today}.md"
     rd_json = rd_file.with_suffix(".json")
     rd_file.unlink(missing_ok=True)
@@ -950,7 +982,12 @@ Output the Material Pack (Part 1 + Part 2 + Part 3), then `===BRIEF===`, then th
 
 
 async def stage_r3_ai_analyze(topic: str, workspace: Path, settings=None) -> dict:
-    """AI analysis following old Research Skill Step 0-6."""
+    """AI analysis following old Research Skill Step 0-6.
+
+    Re-running R3 invalidates everything from W0 onward (draft, pre-check,
+    post-process verdict, register) so a downstream success cannot appear to
+    belong to the new R3 run.
+    """
     slug = _slugify(topic)
     today = _today_str()
 
@@ -970,6 +1007,8 @@ async def stage_r3_ai_analyze(topic: str, workspace: Path, settings=None) -> dic
             "stage": "r2_collect",
             "error": "research-data JSON 不存在，无法执行确定性评分",
         }
+
+    clear_stage_artifacts(workspace, slug, "w0")
 
     score_path = workspace / "research" / f"research-score-{slug}-{today}.md"
     score_run_path = (
@@ -1161,7 +1200,12 @@ def _write_system_prompt(author: str) -> str:
 
 async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
                                        settings=None) -> dict:
-    """Validate material pack (段0), then generate the draft (段1)."""
+    """Validate material pack (段0), then generate the draft (段1).
+
+    Re-running W0 invalidates everything from W1b onward (pre-check,
+    post-process verdict, register, backlink suggestions) and the
+    w2-state verdict file.
+    """
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
     today = _today_str()
@@ -1169,6 +1213,8 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not mp:
         return {"success": False, "error": "素材包不存在，请先完成 Research"}
+
+    clear_stage_artifacts(workspace, slug, "w1b")
 
     stdout, stderr, rc = await runner.run(
         "write_collector.py",
@@ -1208,6 +1254,11 @@ Follow the system instructions. Output the full article Markdown with frontmatte
 
     draft_path = workspace / "drafts" / f"{slug}-{today}.md"
     draft_path.parent.mkdir(parents=True, exist_ok=True)
+    # Overwrite any prior draft for this slug so re-running W0 cannot leave
+    # an old draft sitting alongside the new one.
+    for old in (workspace / "drafts").glob(f"{slug}-*.md"):
+        if old.is_file():
+            old.unlink()
     draft_path.write_text(_strip_code_fence(content), encoding="utf-8")
 
     # A fresh draft invalidates any previous post-process verdict.
@@ -1238,6 +1289,10 @@ async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
+
+    # Re-running pre-check invalidates everything from W2 onward so a stale
+    # gate_passed/applied verdict cannot survive a re-run on the same draft.
+    clear_stage_artifacts(workspace, slug, "w2")
 
     resolved_tier = resolve_tier(topic, workspace, tier)
     args = ["--draft", str(draft), "--tier", resolved_tier]

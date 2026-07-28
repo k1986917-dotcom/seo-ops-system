@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -49,41 +51,170 @@ class TestStageDetection:
 
         assert _slugify("中文主题") == "topic-eb4d7be8dc5d"
 
-    def test_action_attempt_workspaces_are_isolated(self, tmp_path):
-        from seo_ops.services.legacy_workflow import (
-            current_legacy_run,
-            start_legacy_run,
-        )
+    def test_action_workspace_is_persistent_across_calls(self, tmp_path):
+        from seo_ops.services.legacy_workflow import action_workspace
 
         _write(tmp_path / "context" / "brand-voice.md", "shared context")
         _write(tmp_path / "published" / "published-index.json", "[]")
         _write(tmp_path / "products" / "live_products_report.md", "# products")
 
-        first = start_legacy_run(tmp_path, action_id=7, topic="same topic")
-        other = start_legacy_run(tmp_path, action_id=8, topic="same topic")
-        _write(first / "research" / "research-data-same-topic-2026-01-01.md", "first")
+        first = action_workspace(tmp_path, action_id=7)
+        second = action_workspace(tmp_path, action_id=7)
 
-        assert first != other
+        assert first == second
         assert (first / "context" / "brand-voice.md").read_text() == "shared context"
-        assert not list((other / "research").glob("research-data-*.md"))
-        assert current_legacy_run(tmp_path, 7, "same topic") == first
-        assert current_legacy_run(tmp_path, 8, "same topic") == other
+        assert (first / "research").is_dir()
+        assert (first / "material-packs").is_dir()
+        assert (first / "drafts").is_dir()
+        assert (first / "reports").is_dir()
+        assert (first / "context").is_symlink()
+        assert (first / "published").is_symlink()
+        assert (first / "products").is_symlink()
 
-        retry = start_legacy_run(tmp_path, action_id=7, topic="same topic")
-        assert retry != first
-        assert current_legacy_run(tmp_path, 7, "same topic") == retry
-        assert (first / "research" / "research-data-same-topic-2026-01-01.md").exists()
-        assert not list((retry / "research").glob("research-data-*.md"))
+    def test_different_actions_have_separate_workspaces(self, tmp_path):
+        from seo_ops.services.legacy_workflow import action_workspace
 
-    def test_current_run_rejects_a_different_topic(self, tmp_path):
-        from seo_ops.services.legacy_workflow import (
-            current_legacy_run,
-            start_legacy_run,
+        a = action_workspace(tmp_path, action_id=7)
+        b = action_workspace(tmp_path, action_id=8)
+        _write(a / "drafts" / "only-on-a.md", "x")
+        assert a != b
+        assert (a / "drafts" / "only-on-a.md").exists()
+        assert not (b / "drafts" / "only-on-a.md").exists()
+
+    def test_r0_clears_all_stage_artifacts(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "test-topic"
+        ws = lw.action_workspace(tmp_path, 1)
+        # Lay down artifacts from every stage.
+        _write(ws / "research" / f"search-prompt-{slug}-2026-01-01.md", "p")
+        _write(ws / "research" / f"topic-context-{slug}.json", "{}")
+        _write(ws / "research" / f"search-results-{slug}-2026-01-01.md", "r")
+        _write(ws / "research" / f"research-data-{slug}-2026-01-01.md", "d")
+        _write(ws / "research" / f"research-data-{slug}-2026-01-01.json", "{}")
+        _write(ws / "research" / f"research-score-{slug}-2026-01-01.md", "s")
+        _write(ws / "research" / f"brief-{slug}-2026-01-01.md", "b")
+        _write(ws / "material-packs" / f"{slug}-2026-01-01.md", "mp")
+        _write(ws / "drafts" / f"{slug}-2026-01-01.md", "dft")
+        _write(ws / "reports" / f"pre-check-{slug}-2026-01-01.md", "pre")
+        _write(ws / "reports" / f"post-process-{slug}-2026-01-01.md", "post")
+        _write(ws / "reports" / f"register-{slug}-2026-01-01.md", "reg")
+        _write(ws / "reports" / f"w2-state-{slug}.json", "{}")
+
+        result = lw.stage_r0_generate_prompt("test topic", ws)
+
+        assert result["success"] is True
+        # Every stage artifact was wiped; only a fresh prompt for the slug remains.
+        assert not (ws / "research" / f"search-results-{slug}-2026-01-01.md").exists()
+        assert not (ws / "research" / f"research-data-{slug}-2026-01-01.md").exists()
+        assert not (ws / "research" / f"research-score-{slug}-2026-01-01.md").exists()
+        assert not (ws / "material-packs" / f"{slug}-2026-01-01.md").exists()
+        assert not (ws / "drafts" / f"{slug}-2026-01-01.md").exists()
+        assert not list((ws / "reports").glob(f"*-{slug}-*.md"))
+        assert not (ws / "reports" / f"w2-state-{slug}.json").exists()
+        prompts = list((ws / "research").glob(f"search-prompt-{slug}-*.md"))
+        assert len(prompts) == 1
+
+    def test_rerun_r1_invalidates_downstream_artifacts(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "test-topic"
+        ws = lw.action_workspace(tmp_path, 1)
+        # Stale downstream from a previous successful R3+W0+W1b run.
+        _write(ws / "material-packs" / f"{slug}-2026-01-01.md", "old pack")
+        _write(ws / "research" / f"research-score-{slug}-2026-01-01.md", "old score")
+        _write(ws / "research" / f"brief-{slug}-2026-01-01.md", "old brief")
+        _write(ws / "drafts" / f"{slug}-2026-01-01.md", "old draft")
+        _write(ws / "reports" / f"w2-state-{slug}.json", '{"rounds":1}')
+
+        asyncio.run(
+            lw.stage_r1_save_and_collect("test topic", "new search", ws)
         )
 
-        start_legacy_run(tmp_path, action_id=7, topic="first topic")
+        assert not (ws / "material-packs" / f"{slug}-2026-01-01.md").exists()
+        assert not (ws / "research" / f"research-score-{slug}-2026-01-01.md").exists()
+        assert not (ws / "research" / f"brief-{slug}-2026-01-01.md").exists()
+        assert not (ws / "drafts" / f"{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"w2-state-{slug}.json").exists()
 
-        assert current_legacy_run(tmp_path, 7, "different topic") is None
+    def test_rerun_w0_invalidates_post_process_verdict(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "test-topic"
+        ws = lw.action_workspace(tmp_path, 1)
+        _write(ws / "material-packs" / f"{slug}-2026-01-01.md", "pack")
+        _write(ws / "drafts" / f"{slug}-2026-01-01.md", "old draft")
+        _write(ws / "reports" / f"pre-check-{slug}-2026-01-01.md", "pre")
+        _write(ws / "reports" / f"post-process-{slug}-2026-01-01.md", "post")
+        _write(ws / "reports" / f"register-{slug}-2026-01-01.md", "reg")
+        _write(
+            ws / "reports" / f"w2-state-{slug}.json",
+            '{"rounds":1,"gate_passed":true,"applied":true}',
+        )
+
+        # Re-running W0 must invalidate W0 and everything after it, including
+        # the post-process verdict and the w2-state file.
+        removed = lw.clear_stage_artifacts(ws, slug, "w0")
+
+        assert removed >= 5
+        assert not (ws / "drafts" / f"{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"pre-check-{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"post-process-{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"register-{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"w2-state-{slug}.json").exists()
+
+    def test_rerun_w1b_invalidates_w2_and_w3(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "test-topic"
+        ws = lw.action_workspace(tmp_path, 1)
+        _write(ws / "drafts" / f"{slug}-2026-01-01.md", "draft")
+        _write(ws / "reports" / f"pre-check-{slug}-2026-01-01.md", "pre")
+        _write(ws / "reports" / f"post-process-{slug}-2026-01-01.md", "post")
+        _write(ws / "reports" / f"register-{slug}-2026-01-01.md", "reg")
+
+        removed = lw.clear_stage_artifacts(ws, slug, "w2")
+
+        assert removed >= 2
+        assert (ws / "reports" / f"pre-check-{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"post-process-{slug}-2026-01-01.md").exists()
+        assert not (ws / "reports" / f"register-{slug}-2026-01-01.md").exists()
+
+    def test_state_persists_across_process_restart(self, tmp_path):
+        """The workspace path is stable; files survive a fresh Python process."""
+        from seo_ops.services import legacy_workflow as lw
+
+        ws1 = lw.action_workspace(tmp_path, 42)
+        _write(ws1 / "research" / "search-prompt-x-2026-01-01.md", "prompt")
+        _write(ws1 / "reports" / "w2-state-x.json", '{"rounds":1,"gate_passed":true}')
+
+        # Simulate a fresh import of the module in a new process by re-importing
+        # in a child interpreter.
+        code = (
+            "import sys, json;"
+            "sys.path.insert(0, " + repr(str(tmp_path)) + ");"
+            "sys.path.insert(0, '/home/laoma/seo-ops-system');"
+            "from seo_ops.services.legacy_workflow import action_workspace, "
+            "load_w2_state, _collect_files;"
+            "ws = action_workspace(__import__('pathlib').Path("
+            + repr(str(tmp_path))
+            + "), 42);"
+            "print(json.dumps({'path': str(ws), "
+            "'has_prompt': (ws / 'research' / 'search-prompt-x-2026-01-01.md').exists(), "
+            "'rounds': load_w2_state(ws, 'x')['rounds']}))"
+        )
+        out = subprocess.run(  # noqa: S603 — controlled local subprocess for test
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd="/home/laoma/seo-ops-system",
+        )
+        assert out.returncode == 0, out.stderr
+        payload = json.loads(out.stdout.strip())
+        assert payload["path"] == str(ws1)
+        assert payload["has_prompt"] is True
+        assert payload["rounds"] == 1
 
     def test_stage_labels_and_steps(self):
         from seo_ops.services.legacy_workflow import STAGE_ORDER, stage_label, stage_step
