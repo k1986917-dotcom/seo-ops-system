@@ -7,12 +7,8 @@ Used by:
 
 from __future__ import annotations
 
-import asyncio
-import json
 import shutil
-import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
 from seo_ops.config import Settings

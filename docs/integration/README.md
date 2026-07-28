@@ -154,7 +154,9 @@ R0/R1/R3/W0/W1b/W2/W3 的所有产物管理和 HTTP 路由。
 2. **再改**：
    - 在 `~/.hermes/skills/software-development/seo-ops-orchestrator/` 下创建
      skill 目录
-   - 写 SKILL.md + scripts/ 下的 6 个 stage 脚本
+   - 写 SKILL.md + scripts/ 下的 7 个用户触发 stage 脚本
+     （`r0/r1/r3/w0/w1b/w2/w3`；不存在独立的 R2 端点，R1 收完数据后
+     服务内部把 stage 推进到 `r2_collect` 再到 R3）
    - 脚本**只**用 `curl` HTTP 调用，**不**直接读写文件
    - SKILL.md 中要明确：所有状态变更通过 HTTP API
 

@@ -1,6 +1,6 @@
 # Known Issues — SEO Ops System
 
-> 最近更新：2026-07-28（基于 commit `386ee05` + working tree）
+> 最近更新：2026-07-28（基于 commit `a7323f0`）
 > 分支：`codex/legacy-skill-integration`
 
 ## 整合目标（已确认）
@@ -23,24 +23,15 @@ Hermes           → 统一调用、恢复任务状态、向运营者汇报（**
 
 ## P0 — 必须修复
 
-### 1. Hermes 没有 SEO Ops 的 orchestrator skill
+### 1. （已修复 — 见下方「已修复」表）
 
-**症状**：Hermes Agent v0.19.0 已安装并运行，但没有 skill 知道怎么调用 SEO Ops
-的 6 个 stage 端点。
-
-**根因**：
-- `docs/hermes/README.md` 写了 Hermes 的接入位置和模式
-- `docs/hermes/RUNTIME_REPORT.md` 记录了实际安装环境
-- 但没有 `~/.hermes/skills/software-development/seo-ops-orchestrator/SKILL.md`
-- 没有 scripts/ 下的 6 个 stage 脚本（`stage_r0.sh`、`stage_r1.sh` …）
-
-**修复方向**：
-1. 在 `~/.hermes/skills/software-development/seo-ops-orchestrator/` 下创建
-2. 写 SKILL.md（frontmatter + 工作流步骤）
-3. 写 6 个 scripts/ 调用 `POST /actions/{id}/legacy/stage/{r0,r1,r3,w0,w1b,w2,w3}`
-4. SKILL.md 中明确：**所有状态变更通过 HTTP API，不直接写文件**
-
-**优先级**：高 — 这是当前唯一阻塞整合目标的缺口。
+> 自 commit `a7323f0` 起，Hermes skill `seo-ops-orchestrator` 已通过
+> `tests/fixtures/legacy_pipeline/skill_source/` 提供：SKILL.md + 9 个
+> stage 脚本（`r0/r1/r3/w0/w1b/w2/w2-revise/w3` + `detect_stage` + `lib`）
+> + `install.sh` 把它们装到 `~/.hermes/skills/`。skill 内部调
+> `POST /actions/{id}/legacy/stage/{r0,r1,r3,w0,w1b,w2,w3}` 共 7 个
+> 用户触发 stage；不存在独立的 R2 端点（R1 收完数据后服务内部
+> 把 stage 推进到 `r2_collect`，再到 R3）。
 
 ### 2. 旧 SKILL 文件不是 Hermes 原生格式
 
@@ -177,14 +168,15 @@ jsonschema 校验。
 | Hermes 文档不准（说 tirith 实际是 hermes） | 改用 hermes，RUNTIME_REPORT 实测（`386ee05`） |
 | 一致的 7 阶段端到端 smoke test 覆盖（创建/状态/R0-W3/中断/重跑/隔离/失败） | 8 个集成测试 + 端到端 shell 脚本验证（`386ee05`） |
 | seo-ops-orchestrator Hermes Skill 接入 | 8 个 stage 脚本 + install.sh + hermes skills list 已能发现（`386ee05`） |
-| `LEGACY_WS` 硬编码为 `<PROJECT_ROOT>/data/legacy_workflow/laserpointerhub` | 改为从 `active_settings.data_dir` 动态推导（working tree） |
-| `sync_all()` SQL 写死 `site_id = 1` + 缺少 settings 参数 | 所有 `_gen_*` 函数接受 `site_id` 参数并传给 `conn.execute()`；`sync_all()` 新增 `settings` + `site_id` 参数（working tree） |
-| `legacy_r0` 路由调用 `sync_all` 不传 settings + site_id | 改为 `legacy_sync_all(settings=active_settings, site_id=action["site_id"])`（working tree） |
-| `_gen_published_index` 在 `sync_all()` 中遗漏 `site_id` 参数传递 | 补上 `site_id=effective_site_id`（working tree） |
-| `_gen_internal_links_map` 两个查询遗漏 `(site_id,)` 绑定参数 | 补上 `(site_id,)` 参数（working tree） |
-| `_gen_seo_data_manual` 查询遗漏 `(site_id,)` 绑定参数 | 补上 `(site_id,)` 参数（working tree） |
-| `test_hermes_orchestrator_smoke.py` 测试 patching 引用了已删除的 `LEGACY_PROJECT_ROOT` | 移除该 monkeypatch，改用 settings fixture 的 data_dir（working tree） |
-| `test_legacy_workflow.py` mock Connection.execute 不支持第二参数 | 改为 `execute(self, _sql, _params=None)`（working tree） |
+| `LEGACY_WS` 硬编码为 `<PROJECT_ROOT>/data/legacy_workflow/laserpointerhub` | 改为从 `active_settings.data_dir` 动态推导（`a7323f0`） |
+| `sync_all()` SQL 写死 `site_id = 1` + 缺少 settings 参数 | 所有 `_gen_*` 函数接受 `site_id` 参数并传给 `conn.execute()`；`sync_all()` 新增 `settings` + `site_id` 参数（`a7323f0`） |
+| `legacy_r0` 路由调用 `sync_all` 不传 settings + site_id | 改为 `legacy_sync_all(settings=active_settings, site_id=action["site_id"])`（`a7323f0`） |
+| `_gen_published_index` 在 `sync_all()` 中遗漏 `site_id` 参数传递 | 补上 `site_id=effective_site_id`（`a7323f0`） |
+| `_gen_internal_links_map` 两个查询遗漏 `(site_id,)` 绑定参数 | 补上 `(site_id,)` 参数（`a7323f0`） |
+| `_gen_seo_data_manual` 查询遗漏 `(site_id,)` 绑定参数 | 补上 `(site_id,)` 参数（`a7323f0`） |
+| `test_hermes_orchestrator_smoke.py` 测试 patching 引用了已删除的 `LEGACY_PROJECT_ROOT` | 移除该 monkeypatch，改用 settings fixture 的 data_dir（`a7323f0`） |
+| `test_legacy_workflow.py` mock Connection.execute 不支持第二参数 | 改为 `execute(self, _sql, _params=None)`（`a7323f0`） |
+| Hermes 没有 SEO Ops 的 orchestrator skill | 新增 `tests/fixtures/legacy_pipeline/skill_source/seo-ops-orchestrator/`：SKILL.md + 9 个 stage 脚本 + install.sh，调用 7 个 stage 端点（`a7323f0`） |
 
 ---
 

@@ -20,26 +20,20 @@ Requires: pytest, fastapi.testclient (already in dev deps).
 
 from __future__ import annotations
 
-import hashlib
 import json
-import sqlite3
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from seo_ops.config import Settings
 from seo_ops.db import connection as db_connection
 from seo_ops.db import init_db
 from seo_ops.web.app import create_app
-
 from tests.legacy_workflow_helpers import (
     ai_text,
     install_synthetic_workspace,
     read_legacy_stage_from_db,
-    shell_skill_script,
 )
-
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "legacy_pipeline"
 SKILL_DIR = FIXTURE_DIR / "skill_source" / "seo-ops-orchestrator"
@@ -461,7 +455,7 @@ def test_two_actions_do_not_share_files(tmp_path, monkeypatch):
 
     # Create two actions for the same topic.
     with db_connection(settings) as conn:
-        for i in range(2):
+        for _i in range(2):
             conn.execute(
                 """INSERT INTO actions(
                     site_id, action_type, target_ref, decision,
