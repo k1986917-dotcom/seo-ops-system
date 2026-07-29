@@ -615,6 +615,42 @@ def _run_fact_check(
                 f"  • [blocking] evidence-ledger 含重复 evidence_id={eid}"
             )
             continue
+        # Pre-validate source_url/quote/key_finding types so an unreferenced
+        # evidence with bad fields still blocks (fail-closed for the whole
+        # ledger, not just for evidence referenced by some claim).
+        url_raw = ev.get("source_url")
+        if url_raw is not None and not isinstance(url_raw, str):
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) source_url 类型错误："
+                f"期望 str，实际 {type(url_raw).__name__}"
+            )
+            continue
+        if isinstance(url_raw, str) and not url_raw.strip():
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) source_url 是空字符串"
+            )
+            continue
+        quote_raw = ev.get("quote")
+        kf_raw = ev.get("key_finding")
+        if quote_raw is not None and not isinstance(quote_raw, str):
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) quote 类型错误："
+                f"期望 str，实际 {type(quote_raw).__name__}"
+            )
+            continue
+        if kf_raw is not None and not isinstance(kf_raw, str):
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) key_finding 类型错误："
+                f"期望 str，实际 {type(kf_raw).__name__}"
+            )
+            continue
+        quote_ok = isinstance(quote_raw, str) and bool(quote_raw.strip())
+        kf_ok = isinstance(kf_raw, str) and bool(kf_raw.strip())
+        if not quote_ok and not kf_ok:
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) 无 quote 也无 key_finding"
+            )
+            continue
         seen_ids.add(eid)
         ev_map[eid] = ev
 

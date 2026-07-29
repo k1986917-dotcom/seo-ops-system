@@ -2756,6 +2756,94 @@ class TestFactCheckSchemaValidation:
         joined = "\n".join(r['detail'] for r in fact)
         assert "evidence_ids" in joined and "类型错误" in joined, joined
 
+    # ── Unreferenced evidence fail-closed (Fix4 round 3) ──
+    # evidence-ledger fields must be pre-validated even when no claim
+    # references them, otherwise W1b silently passes on bad ledgers.
+
+    def test_unreferenced_evidence_bad_source_url_blocked(self, tmp_path):
+        """ev_001: clean & referenced; ev_002: NOT referenced, source_url=123.
+        W1b MUST block even though ev_002 is never used by any claim."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"evidence_id":"ev_002","source_url":123,'
+                '"quote":"bad url data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                ']}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with int source_url: {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "source_url" in joined and "类型错误" in joined, joined
+
+    def test_unreferenced_evidence_bad_quote_blocked(self, tmp_path):
+        """ev_001: clean & referenced; ev_002: NOT referenced, quote=123."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"evidence_id":"ev_002","source_url":"https://ex.com/2",'
+                '"quote":123,"key_finding":"real kf",'
+                '"canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                ']}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with int quote: {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "quote" in joined and "类型错误" in joined, joined
+
+    def test_unreferenced_evidence_bad_key_finding_blocked(self, tmp_path):
+        """ev_001: clean & referenced; ev_002: NOT referenced, key_finding=123."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"evidence_id":"ev_002","source_url":"https://ex.com/2",'
+                '"quote":"real quote","key_finding":123,'
+                '"canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                ']}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with int key_finding: {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "key_finding" in joined and "类型错误" in joined, joined
+
 
 class TestW2PostPassRejection:
     """Fix5: After gate_passed or applied, W2 revise must be rejected."""
