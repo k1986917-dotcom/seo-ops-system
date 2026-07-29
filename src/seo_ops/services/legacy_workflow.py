@@ -903,6 +903,158 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
     return data
 
 
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+
+
+def _extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
+    """Authoritatively split the draft body into stable, audit-able sentences.
+
+    Reuses the exact same paragraph + sentence tokenizer that
+    ``_validate_claim_ledger_json`` uses to build ``normalized_draft``,
+    so a ``sentence_id`` issued here is always acceptable to the strict
+    fact-check gate.  Returns a list of dicts ordered by appearance:
+
+    ``{"sentence_id": "S001", "text": <original sentence text>, "norm": <normalized>}``
+
+    Sentences whose normalized form is empty are skipped.  Markdown
+    headings, code fences, frontmatter, and very short fragments are
+    naturally excluded because the paragraph splitter keeps only blocks
+    separated by blank lines and the tokenizer splits on ``[.!?]\\s``.
+    The frontmatter strip (``---``) is applied first for parity with
+    ``_validate_claim_ledger_json``.
+    """
+    body_for_sentences = draft_md
+    if draft_md.startswith("---"):
+        parts = draft_md.split("---", 2)
+        if len(parts) >= 3:
+            body_for_sentences = parts[2]
+    sentences: list[dict[str, str]] = []
+    for para in re.split(r"\n\n+", body_for_sentences):
+        for sent in _SENTENCE_SPLIT_RE.split(para):
+            norm = _normalize_claim(sent)
+            if not norm:
+                continue
+            sentences.append({
+                "sentence_id": f"S{len(sentences) + 1:03d}",
+                "text": sent.strip(),
+                "norm": norm,
+            })
+    return sentences
+
+
+def _validate_claim_ledger_with_sentence_ids(
+    data: dict, sentences: list[dict[str, str]],
+) -> dict:
+    """Validate a model response where claims select sentences by ID.
+
+    The model must never be trusted to copy ``claim_text`` verbatim.  Here
+    we:
+
+    1.  Check the JSON schema (version, claims list) the same way
+        ``_validate_claim_ledger_json`` does.
+    2.  For each claim:
+        *   Require a non-empty str ``sentence_id``.
+        *   Resolve ``sentence_id`` against ``sentences``; unknown IDs fail.
+        *   **Ignore** any ``claim_text`` returned by the model and replace
+            it with the server-side original sentence text (``text``).
+        *   Validate ``claim_type`` and ``evidence_ids`` with the same strict
+            type/emptiness rules as ``_validate_claim_ledger_json``.
+    3.  Run a final belt-and-suspenders check that the server-filled
+        ``claim_text`` normalizes (using ``_normalize_claim``) to the same
+        value as the matching ``norm`` — this should always be true, and
+        guards against any future drift in the tokenizer.
+
+    Returns the canonical ledger dict with server-filled ``claim_text``
+    and a persisted ``sentence_id`` on each claim.  Raises ``ValueError``
+    with a concrete, non-sensitive reason on any failure.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("CLAIM_LEDGER must be a JSON object")
+    if data.get("version") != 1:
+        raise ValueError(
+            f"CLAIM_LEDGER version must be 1, got {data.get('version')}"
+        )
+    claims = data.get("claims")
+    if not isinstance(claims, list):
+        raise ValueError("CLAIM_LEDGER.claims must be a list")
+
+    by_id = {s["sentence_id"]: s for s in sentences}
+    if not sentences and claims:
+        raise ValueError(
+            "claim ledger has claims but the draft produced no selectable "
+            "sentences; cannot bind any sentence_id"
+        )
+
+    for idx, c in enumerate(claims):
+        if not isinstance(c, dict):
+            raise ValueError(f"claims[{idx}] is not a dict")
+        sid = c.get("sentence_id")
+        if not isinstance(sid, str) or not sid.strip():
+            raise ValueError(
+                f"claims[{idx}].sentence_id is missing, empty, or not a str"
+            )
+        sentence = by_id.get(sid.strip())
+        if sentence is None:
+            raise ValueError(
+                f"claims[{idx}].sentence_id '{sid}' is not in the draft "
+                f"sentence list"
+            )
+        # claim_type: must be str before .strip() (never AttributeError).
+        ctype_raw = c.get("claim_type")
+        if not isinstance(ctype_raw, str):
+            raise ValueError(
+                f"claims[{idx}].claim_type 类型错误："
+                f"期望 str，实际 {type(ctype_raw).__name__}"
+            )
+        ctype = ctype_raw.strip()
+        if not ctype:
+            raise ValueError(f"claims[{idx}].claim_type is empty")
+        eids = c.get("evidence_ids")
+        if not isinstance(eids, list) or not eids:
+            raise ValueError(f"claims[{idx}] evidence_ids is empty or not a list")
+        for eid in eids:
+            if not isinstance(eid, str) or not eid.strip():
+                raise ValueError(f"claims[{idx}] contains empty evidence_id")
+
+    # Build the canonical claims list: server-filled claim_text, kept
+    # sentence_id, kept claim_type / evidence_ids.  Allow the same
+    # sentence_id to appear in more than one claim (the same sentence can
+    # legitimately support multiple evidence-led claims of different types).
+    canonical_claims: list[dict[str, Any]] = []
+    for c in claims:
+        sentence = by_id[c["sentence_id"].strip()]
+        claim = {
+            "sentence_id": sentence["sentence_id"],
+            "claim_text": sentence["text"],
+            "claim_type": c["claim_type"].strip(),
+            "evidence_ids": list(c["evidence_ids"]),
+        }
+        # Belt-and-suspenders: the server-filled text must normalize exactly
+        # to the value the sentence-id system computed at extraction time.
+        if _normalize_claim(claim["claim_text"]) != sentence["norm"]:
+            raise ValueError(
+                f"claims[?] sentence_id {sentence['sentence_id']} "
+                f"server-fill normalize mismatch (internal consistency)"
+            )
+        canonical_claims.append(claim)
+
+    # Re-run the authoritative full-sentence matcher on server-filled text.
+    # This can never reject when the tokenizer is consistent, but it protects
+    # the invariant that anything written to disk passes the gate.
+    normalized_draft = {s["norm"] for s in sentences}
+    for idx, c in enumerate(canonical_claims):
+        if c.get("claim_text") is None or not isinstance(c["claim_text"], str):
+            raise ValueError(f"canonical claims[{idx}].claim_text missing")
+        if _normalize_claim(c["claim_text"]) not in normalized_draft:
+            raise ValueError(
+                f"canonical claims[{idx}] sentence_id {c['sentence_id']} "
+                f"did not normalize-match the draft (internal consistency)"
+            )
+
+    canonical = {"version": 1, "claims": canonical_claims}
+    return canonical
+
+
 def _write_ahead_draft_and_ledger(
     workspace: Path, slug: str,
     draft_text: str, cl_data: dict,
@@ -1993,15 +2145,34 @@ analysis, preamble, or code fence."""
 
 _CLAIM_LEDGER_AI_SYSTEM = """You are an evidence auditor for an SEO article.
 
-Return exactly one valid JSON object with this shape:
-{"version":1,"claims":[{"claim_text":"a complete factual sentence copied verbatim from the article","claim_type":"general","evidence_ids":["ev_exact"]}]}
+You will receive a numbered list of sentences taken from the article.  For
+each factually verifiable sentence that is supported by at least one evidence
+card, emit one claim object.  You MUST NOT copy or paraphrase sentence text:
+refer to sentences ONLY by their stable ``S###`` sentence_id.
 
-List every externally verifiable factual sentence in the supplied article.
-Each claim_text must be one complete sentence copied verbatim; every
-evidence_id must be an exact ID from the supplied evidence cards and must
-actually support that sentence. Do not infer, invent, omit the supporting ID,
-or use Markdown fences. If there are genuinely no factual claims, return
-{"version":1,"claims":[]}. Return no separator, explanation, or trailing text."""
+Required JSON shape (values are placeholders only; never copy them):
+
+{"version":1,"claims":[
+  {"sentence_id":"S003","claim_type":"technical_specification","evidence_ids":["ev_001"]}
+]}
+
+Rules:
+* ``sentence_id`` MUST be one of the IDs in the supplied sentence list.
+  Never invent, modify, or abbreviate an ID.
+* ``claim_type`` must be a short, non-empty label (e.g. general,
+  technical_specification, regulatory, safety, comparison).
+* ``evidence_ids`` must be a non-empty list of exact evidence-IDs from the
+  supplied evidence cards.  Every listed evidence_id must actually support
+  the sentence identified by ``sentence_id``.
+* The same ``sentence_id`` MAY appear in multiple claims if distinct
+  evidence supports different aspects of the sentence.
+* Do not include a ``claim_text`` field in your response.  The server
+  fills ``claim_text`` from the authoritative draft sentence, so any
+  value you put there is silently ignored.
+* Do not include unknown fields.  Do not use Markdown fences, separator
+  lines, explanation, or trailing text.
+* If no sentence is supported by evidence, return exactly
+  ``{"version":1,"claims":[]}``."""
 
 
 async def _generate_claim_ledger_for_draft(
@@ -2009,12 +2180,21 @@ async def _generate_claim_ledger_for_draft(
 ) -> dict[str, Any]:
     """Generate then validate a claim ledger as an independent AI task.
 
-    This helper intentionally never repairs or invents a ledger.  The same
-    strict parser and downstream fact-check gate remain authoritative.
+    The model never authors ``claim_text``.  The server first extracts the
+    authoritative draft sentences (using the exact same tokenizer as
+    ``_validate_claim_ledger_json``), assigns stable ``sentence_id``s, and
+    asks the model only to pick IDs.  The server then fills ``claim_text``
+    from the original draft sentence.  The same strict downstream gate
+    (``_run_fact_check``, evidence_id validation, atomic write) remains
+    authoritative; this helper never repairs or invents a ledger.
     """
+    sentences = _extract_draft_sentences(draft_md)
+    sentence_lines = "\n".join(
+        f"{s['sentence_id']}  {s['text']}" for s in sentences
+    ) or "(no selectable sentences were extracted from this draft)"
     evidence_cards = _format_evidence_cards(cards) or "(No usable evidence cards were supplied.)"
-    user_prompt = f"""## Article
-{draft_md}
+    user_prompt = f"""## Article sentences (use these S-IDs verbatim)
+{sentence_lines}
 
 ## Evidence cards (the only allowed evidence IDs)
 {evidence_cards}
@@ -2026,8 +2206,16 @@ Return the JSON object only."""
     )
     clean = _strip_code_fence(raw)
     if "===CLAIM_LEDGER===" in clean:
-        raise ValueError("claim-ledger task must return JSON only, without ===CLAIM_LEDGER===")
-    return _validate_claim_ledger_json(clean, draft_md)
+        raise ValueError(
+            "claim-ledger task must return JSON only, without ===CLAIM_LEDGER==="
+        )
+    if not clean or not clean.strip():
+        raise ValueError("claim-ledger AI response is empty")
+    try:
+        data = json.loads(clean)
+    except Exception as exc:
+        raise ValueError(f"CLAIM_LEDGER JSON parse failed: {exc}") from None
+    return _validate_claim_ledger_with_sentence_ids(data, sentences)
 
 
 def _write_context_block(workspace: Path) -> str:

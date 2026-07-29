@@ -1285,7 +1285,7 @@ class TestRevisionLoop:
                 return "---\nTitle: T\n---\nrevised body line.\n"
             assert purpose == "legacy_write_claim_ledger"
             return (
-                '{"version":1,"claims":[{"claim_text":"revised body line.","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
+                '{"version":1,"claims":[{"sentence_id":"S001","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
             )
 
         async def fake_run(self, script, args):
@@ -1342,7 +1342,7 @@ class TestRevisionLoop:
                 return "---\nTitle: T\n---\nrevised body line.\n"
             assert purpose == "legacy_write_claim_ledger"
             return (
-                '{"version":1,"claims":[{"claim_text":"revised body line.","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
+                '{"version":1,"claims":[{"sentence_id":"S001","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
             )
 
         async def fake_run(self, script, args):
@@ -2467,8 +2467,8 @@ class TestW2ReviseEvidence闭环:
             if purpose == "legacy_write_claim_ledger":
                 return (
                     '{"version":1,"claims":[\n'
-                    '{"claim_text":"The 5mW green laser pointer has a wavelength of 532nm.","claim_type":"technical_specification","evidence_ids":["ev_001"]},\n'
-                    '{"claim_text":"It is used for presentations and stars.","claim_type":"general","evidence_ids":["ev_001"]}\n'
+                    '{"sentence_id":"S001","claim_type":"technical_specification","evidence_ids":["ev_001"]},\n'
+                    '{"sentence_id":"S002","claim_type":"general","evidence_ids":["ev_001"]}\n'
                     ']}\n'
                 )
             raise AssertionError(f"unexpected purpose: {purpose}")
@@ -2699,7 +2699,7 @@ class TestW0AtomicWriteFailure:
                 )
             if purpose == "legacy_write_claim_ledger":
                 return (
-                    '{"version":1,"claims":[{"claim_text":"new body sentence.",'
+                    '{"version":1,"claims":[{"sentence_id":"S001",'
                     '"claim_type":"spec","evidence_ids":["ev_001"]}]}\n'
                 )
             raise AssertionError(f"unexpected purpose: {purpose}")
@@ -2765,9 +2765,9 @@ class TestW0AtomicWriteFailure:
         assert "Compact Write Brief" in body_user
         assert "Coverage Contract" in body_user
         assert "Material Pack" not in body_user
-        assert "Return exactly one valid JSON object" in ledger_system
-        assert "Return no separator" in ledger_system
-        assert "## Article" in ledger_user
+        assert "You are an evidence auditor for an SEO article." in ledger_system
+        assert "sentence_id" in ledger_system
+        assert "Article sentences (use these S-IDs verbatim)" in ledger_user
 
 
 class TestSentenceNormalizationUnified:
@@ -3595,7 +3595,7 @@ class TestEntryPointNumericClaimRejection:
                 )
             if purpose == "legacy_write_claim_ledger":
                 return (
-                    '{"version":1,"claims":[{"claim_text":"revised body sentence.",'
+                    '{"version":1,"claims":[{"sentence_id":"S001",'
                     '"claim_type":456,"evidence_ids":["ev_001"]}]}\n'
                 )
             raise AssertionError(f"unexpected purpose: {purpose}")
@@ -3735,3 +3735,602 @@ class TestW2PostPassRejection:
         result = asyncio.run(lw.stage_w2_revise("applied topic", ws))
         assert result["success"] is False
         assert "已发布" in result["error"]
+
+
+class TestSentenceIdBinding:
+    """sentence_id-based claim_text binding: server authors claim_text from
+    a stable ID selected by the model, never trusting model-supplied text."""
+
+    @staticmethod
+    def _draft_md() -> str:
+        return (
+            "---\nTitle: T\nSlug: s\nAuthor: A\n---\n\n"
+            "# Title\n\n"
+            "The 5mW green laser has a wavelength of 532nm. "
+            "It is widely used for presentations.\n\n"
+            "OSHA requires a Class 3B laser hazard analysis.\n"
+        )
+
+    def test_extract_draft_sentences_stable_ids(self):
+        from seo_ops.services.legacy_workflow import _extract_draft_sentences
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        # "#" without trailing punctuation is kept because _normalize_claim
+        # strips only the suffix punctuation `.,;:!?`.  The title is excluded
+        # by the paragraph tokenizer because it's a single-line paragraph
+        # with no terminal punctuation, so # Title becomes S001.
+        assert [s["sentence_id"] for s in sentences] == ["S001", "S002", "S003", "S004"]
+        assert sentences[0]["text"] == "# Title"
+        assert sentences[1]["text"].startswith("The 5mW green laser")
+        assert sentences[2]["text"].startswith("It is widely used")
+        assert sentences[3]["text"].startswith("OSHA")
+        # norm is the _normalize_claim of text
+        from seo_ops.services.legacy_workflow import _normalize_claim
+
+        for s in sentences:
+            assert s["norm"] == _normalize_claim(s["text"])
+
+    def test_validate_with_sentence_id_server_fills_claim_text(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {
+            "version": 1,
+            "claims": [
+                {"sentence_id": "S002", "claim_type": "technical_specification",
+                 "evidence_ids": ["ev_001"]},
+                {"sentence_id": "S004", "claim_type": "regulatory",
+                 "evidence_ids": ["ev_007"]},
+            ],
+        }
+        canonical = _validate_claim_ledger_with_sentence_ids(data, sentences)
+        assert canonical["version"] == 1
+        assert canonical["claims"][0]["sentence_id"] == "S002"
+        assert canonical["claims"][0]["claim_text"] == sentences[1]["text"]
+        assert canonical["claims"][1]["sentence_id"] == "S004"
+        assert canonical["claims"][1]["claim_text"] == sentences[3]["text"]
+
+    def test_model_claim_text_is_ignored_when_sentence_id_present(self):
+        """Even if the model writes a wrong claim_text, server uses the
+        sentence referenced by the sentence_id."""
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {
+            "version": 1,
+            "claims": [
+                {"sentence_id": "S002", "claim_text": "WRONG PARAPHRASE BY MODEL",
+                 "claim_type": "spec", "evidence_ids": ["ev_001"]},
+            ],
+        }
+        canonical = _validate_claim_ledger_with_sentence_ids(data, sentences)
+        assert canonical["claims"][0]["claim_text"] == sentences[1]["text"]
+        # The wrong model-authored claim_text must not appear anywhere in
+        # the canonical output.
+        assert "WRONG PARAPHRASE BY MODEL" not in json.dumps(canonical)
+
+    def test_unknown_sentence_id_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": "S999", "claim_type": "spec",
+             "evidence_ids": ["ev_001"]}]}
+        with pytest.raises(ValueError, match="sentence_id"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_empty_sentence_id_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": "", "claim_type": "spec",
+             "evidence_ids": ["ev_001"]}]}
+        with pytest.raises(ValueError, match="sentence_id"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_int_sentence_id_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": 123, "claim_type": "spec",
+             "evidence_ids": ["ev_001"]}]}
+        with pytest.raises(ValueError, match="sentence_id"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_missing_claim_type_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": "S001", "evidence_ids": ["ev_001"]}]}
+        with pytest.raises(ValueError, match="claim_type"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_empty_evidence_ids_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": "S001", "claim_type": "spec", "evidence_ids": []}]}
+        with pytest.raises(ValueError, match="evidence_ids"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_same_sentence_id_in_multiple_claims_allowed(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": "S001", "claim_type": "spec",
+             "evidence_ids": ["ev_001"]},
+            {"sentence_id": "S001", "claim_type": "general",
+             "evidence_ids": ["ev_002"]},
+        ]}
+        canonical = _validate_claim_ledger_with_sentence_ids(data, sentences)
+        assert len(canonical["claims"]) == 2
+        assert canonical["claims"][0]["claim_text"] == sentences[0]["text"]
+        assert canonical["claims"][1]["claim_text"] == sentences[0]["text"]
+        assert canonical["claims"][0]["claim_type"] == "spec"
+        assert canonical["claims"][1]["claim_type"] == "general"
+
+    def test_claims_but_no_extractable_sentences_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        # Empty body produces no sentences.
+        sentences = _extract_draft_sentences("")
+        assert sentences == []
+        data = {"version": 1, "claims": [
+            {"sentence_id": "S001", "claim_type": "spec",
+             "evidence_ids": ["ev_001"]}]}
+        with pytest.raises(ValueError, match="no selectable sentences"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_empty_claims_allowed(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": []}
+        canonical = _validate_claim_ledger_with_sentence_ids(data, sentences)
+        assert canonical["claims"] == []
+
+    def test_legacy_ledger_without_sentence_id_still_validates(self):
+        """Historical claim-ledger JSON (no sentence_id) must still pass
+        _validate_claim_ledger_json so existing downstream stages (read by
+        write_pre_check.py:_run_fact_check) keep working."""
+        from seo_ops.services.legacy_workflow import _validate_claim_ledger_json
+
+        cl_json = json.dumps({
+            "version": 1,
+            "claims": [{
+                "claim_text": "The 5mW green laser has a wavelength of 532nm.",
+                "claim_type": "technical_specification",
+                "evidence_ids": ["ev_001"],
+            }],
+        })
+        result = _validate_claim_ledger_json(cl_json, self._draft_md())
+        assert result["version"] == 1
+        assert len(result["claims"]) == 1
+        assert result["claims"][0].get("sentence_id") is None
+
+
+class TestSentenceIdEntryPoints:
+    """W0, W1b revise, W2 revise all use the shared sentence_id pipeline."""
+
+    @staticmethod
+    def _prep_w0_workspace(tmp_path, slug="sid-w0"):
+        from datetime import UTC, datetime
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        mp_path = ws / "material-packs" / f"{slug}-{today}.md"
+        mp_path.write_text("mp body", encoding="utf-8")
+        # Evidence ledger so _write_context_contracts has cards to emit.
+        ev_path = ws / "research" / f"evidence-ledger-{slug}.json"
+        ev_path.write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(b"mp body").hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001",
+                "source_url": "https://ex.com/a",
+                "quote": "data",
+                "canonical_concepts": ["laser"],
+                "claim_types": ["spec"],
+                "required": False,
+            }],
+        }), encoding="utf-8")
+        # Brief so _write_context_contracts has something to project.
+        (ws / "research" / f"brief-{slug}-{today}.md").write_text(
+            "# Brief\n\nH2: Safety\nH2: Usage\n", encoding="utf-8")
+        return ws
+
+    def test_w0_threads_sentence_id_through_to_canonical_ledger(self, tmp_path, monkeypatch):
+        """W0 success → claim ledger on disk has server-filled claim_text
+        AND the sentence_id used by the model is persisted for audit."""
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = self._prep_w0_workspace(tmp_path, slug="sid-w0")
+        slug = "sid-w0"
+        draft_md_body = "The 5mW green laser has a wavelength of 532nm."
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_body":
+                return (
+                    "---\nTitle: T\nSlug: " + slug + "\nAuthor: T\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough\n"
+                    "SEO Description: " + "B" * 152 + "\n"
+                    "SEO Keywords: t\n"
+                    "---\n\n# T\n\n" + draft_md_body + "\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                # Model deliberately returns nonsense claim_text; server must
+                # ignore it and use S002 (the first factual sentence after
+                # the H1 "# T") to pull the real sentence.
+                return json.dumps({
+                    "version": 1,
+                    "claims": [{
+                        "sentence_id": "S002",
+                        "claim_text": "WRONG",
+                        "claim_type": "spec",
+                        "evidence_ids": ["ev_001"],
+                    }],
+                })
+            raise AssertionError(purpose)
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("sid w0", "Test", ws))
+        assert result.get("success") is True, f"W0 should succeed: {result}"
+
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        assert cl_path.exists()
+        cl = json.loads(cl_path.read_text(encoding="utf-8"))
+        assert cl["version"] == 1
+        assert len(cl["claims"]) == 1
+        # Persisted sentence_id for audit.
+        assert cl["claims"][0]["sentence_id"] == "S002"
+        # Server-filled claim_text is the real draft sentence.
+        assert cl["claims"][0]["claim_text"] == draft_md_body
+        # Model's WRONG text must not be in the persisted ledger.
+        assert "WRONG" not in json.dumps(cl)
+
+    def test_w0_rejects_unknown_sentence_id_without_writing(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = self._prep_w0_workspace(tmp_path, slug="sid-w0-bad")
+        slug = "sid-w0-bad"
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_body":
+                return (
+                    "---\nTitle: T\nSlug: " + slug + "\n---\n\n# T\n\nbody sentence.\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                return json.dumps({
+                    "version": 1,
+                    "claims": [{
+                        "sentence_id": "S999", "claim_type": "spec",
+                        "evidence_ids": ["ev_001"],
+                    }],
+                })
+            raise AssertionError(purpose)
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("sid w0 bad", "Test", ws))
+        assert result.get("success") is False
+        assert "sentence_id" in result.get("error", "")
+        # No draft, no ledger, no state must be written.
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        drafts = list(ws.glob("drafts/*.md"))
+        assert not cl_path.exists()
+        assert drafts == []
+
+    def test_w1b_revise_uses_sentence_id_pipeline(self, tmp_path, monkeypatch):
+        """When W1b revise is invoked, the AI is asked for sentence_ids;
+        server fills claim_text from the new draft body."""
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "sid-w1b-topic"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        today_draft = (
+            "---\nTitle: T\nSlug: " + slug + "\nAuthor: Test\n"
+            "Summary: S.\nTags: t\n"
+            "SEO Title: T SEO Title Long Enough\n"
+            "SEO Description: " + "A" * 152 + "\n"
+            "SEO Keywords: t\n---\n\n# T\n\nOld sentence.\n"
+        )
+        (ws / "drafts" / f"{slug}-2026-07-29.md").write_text(today_draft, encoding="utf-8")
+
+        # Pre-check report so stage_w1b_revise has a failure list to read.
+        lw.save_report(
+            ws, "pre-check", slug,
+            "# WRITE 预检报告 — " + slug + ".md\n| 字数 | ❌ | 20 (下限500) |\n",
+        )
+        # Material pack + evidence ledger so _write_context_contracts can build cards.
+        (ws / "material-packs" / f"{slug}-2026-07-29.md").write_text("mp", encoding="utf-8")
+        (ws / "research" / f"evidence-ledger-{slug}.json").write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(b"mp").hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001",
+                "source_url": "https://ex.com/a",
+                "quote": "data",
+                "canonical_concepts": ["x"], "claim_types": ["y"],
+                "required": False,
+            }],
+        }), encoding="utf-8")
+        (ws / "research" / f"brief-{slug}-2026-07-29.md").write_text(
+            "# Brief\nH2: Revised H2\n", encoding="utf-8")
+
+        new_body = "Revised sentence with a fact."
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_revise_body":
+                return (
+                    "---\nTitle: T\nSlug: " + slug + "\nAuthor: Test\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough\n"
+                    "SEO Description: " + "A" * 152 + "\n"
+                    "SEO Keywords: t\n---\n\n# T\n\n" + new_body + "\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                return json.dumps({
+                    "version": 1,
+                    "claims": [{
+                        "sentence_id": "S002",
+                        "claim_text": "BREAKING THE NEW CONTRACT",
+                        "claim_type": "general",
+                        "evidence_ids": ["ev_001"],
+                    }],
+                })
+            raise AssertionError(purpose)
+
+        async def fake_run(self, script, args):
+            return (json.dumps({
+                "word_count": 500, "warn_count": 0,
+                "checks": [{"item": "字数", "pass": True, "level": "ok", "detail": "500"}],
+            }), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w1b_revise("sid w1b topic", "", ws))
+        assert result.get("gate_passed") is True, f"W1b revise should pass: {result}"
+
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        cl = json.loads(cl_path.read_text(encoding="utf-8"))
+        assert cl["claims"][0]["claim_text"] == new_body
+        assert "BREAKING THE NEW CONTRACT" not in json.dumps(cl)
+
+    def test_w2_revise_uses_sentence_id_pipeline(self, tmp_path, monkeypatch):
+        """W2 revise depends on draft + state + post-process report;
+        verify it goes through the shared sentence_id pipeline too."""
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "sid-w2-topic"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        draft_body = (
+            "---\nTitle: T\nSlug: " + slug + "\nAuthor: Test\n"
+            "Summary: S.\nTags: t\n"
+            "SEO Title: T SEO Title Long Enough For Validation\n"
+            "SEO Description: " + "A" * 152 + "\n"
+            "SEO Keywords: t\n---\n\n# T\n\nOld sentence.\n"
+        )
+        (ws / "drafts" / f"{slug}-2026-07-29.md").write_text(draft_body, encoding="utf-8")
+
+        (ws / "material-packs" / f"{slug}-2026-07-29.md").write_text("mp", encoding="utf-8")
+        (ws / "research" / f"evidence-ledger-{slug}.json").write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(b"mp").hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001",
+                "source_url": "https://ex.com/a",
+                "quote": "data",
+                "canonical_concepts": ["x"], "claim_types": ["y"],
+                "required": False,
+            }],
+        }), encoding="utf-8")
+        (ws / "research" / f"brief-{slug}-2026-07-29.md").write_text(
+            "# Brief\nH2: Revised H2\n", encoding="utf-8")
+
+        lw.save_w2_state(ws, slug, {
+            "rounds": 0, "gate_passed": False, "applied": False,
+            "precheck_passed": True, "precheck_tier": "Cluster Content",
+            "precheck_draft_sha256": hashlib.sha256(draft_body.encode()).hexdigest(),
+        })
+        lw.save_report(ws, "post-process", slug, _POST_PROCESS_REPORT_60)
+
+        new_body_sentence = "W2 revised content covers a fact."
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_revise_body":
+                return (
+                    "---\nTitle: T\nSlug: " + slug + "\nAuthor: Test\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough For Validation\n"
+                    "SEO Description: " + "A" * 152 + "\n"
+                    "SEO Keywords: t\n---\n\n# T\n\n" + new_body_sentence + "\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                return json.dumps({
+                    "version": 1,
+                    "claims": [{
+                        "sentence_id": "S002",
+                        "claim_text": "ABUSE",
+                        "claim_type": "general",
+                        "evidence_ids": ["ev_001"],
+                    }],
+                })
+            raise AssertionError(purpose)
+
+        async def fake_run(self, script, args):
+            if script == "write_pre_check.py":
+                return (json.dumps({
+                    "word_count": 500, "warn_count": 0,
+                    "checks": [{"item": "字数", "pass": True, "level": "ok", "detail": "500"}],
+                }), "", 0)
+            return ("## 质量评分\n- 总分: 88.0 → ✅ 通过\n\n"
+                    "## 🚦 总门控\n- ✅ 通过，可进入段3 register。", "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w2_revise("sid w2 topic", ws))
+        assert result.get("gate_passed") is True, f"W2 revise should pass: {result}"
+
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        cl = json.loads(cl_path.read_text(encoding="utf-8"))
+        assert cl["claims"][0]["claim_text"] == new_body_sentence
+        assert "ABUSE" not in json.dumps(cl)
+
+
+class TestSentenceIdAtomicWrite:
+    """When the atomic write fails after sentence_id validation, the old
+    draft/ledger must survive byte-for-byte."""
+
+    def test_w0_second_replace_failure_with_sentence_ids(
+        self, tmp_path, monkeypatch
+    ):
+        import os as _os
+
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "sid-atomic"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        old_draft = ws / "drafts" / f"{slug}-2026-01-01.md"
+        old_cl = ws / "research" / f"claim-ledger-{slug}.json"
+        old_draft.write_text("OLD DRAFT", encoding="utf-8")
+        old_cl.write_text('{"version":1,"claims":[]}', encoding="utf-8")
+
+        (ws / "material-packs" / f"{slug}-2026-01-01.md").write_text("mp", encoding="utf-8")
+        (ws / "research" / f"evidence-ledger-{slug}.json").write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(b"mp").hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001", "source_url": "https://ex.com/a",
+                "quote": "data", "canonical_concepts": ["x"],
+                "claim_types": ["y"], "required": False,
+            }],
+        }), encoding="utf-8")
+        (ws / "research" / f"brief-{slug}-2026-01-01.md").write_text(
+            "# Brief\nH2: Just One\n", encoding="utf-8")
+
+        snapshot_draft = old_draft.read_bytes()
+        snapshot_cl = old_cl.read_bytes()
+
+        new_draft_body = "New body with a fact to claim."
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_body":
+                return f"# Title\n\n{new_draft_body}\n"
+            if purpose == "legacy_write_claim_ledger":
+                return json.dumps({
+                    "version": 1,
+                    "claims": [{
+                        "sentence_id": "S001", "claim_type": "spec",
+                        "evidence_ids": ["ev_001"],
+                    }],
+                })
+            raise AssertionError(purpose)
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        original_replace = _os.replace
+        counter = [0]
+
+        def bad_replace(src, dst):
+            counter[0] += 1
+            if counter[0] == 2:
+                raise OSError("simulated second replace")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(_os, "replace", bad_replace)
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("sid atomic", "T", ws))
+        assert result.get("success") is False
+        assert "simulated second replace" in result.get("error", "")
+        # Old draft/ledger must be byte-for-byte the same.
+        assert old_draft.read_bytes() == snapshot_draft
+        assert old_cl.read_bytes() == snapshot_cl
+
+
+_POST_PROCESS_REPORT_60 = """# POST-PROCESS 报告
+
+## 质量评分
+- 总分: 60.00 → ❌ 未达标
+
+## 🚦 总门控
+- ❌ 需要修订
+
+## 失败项目
+- 字数不足
+"""

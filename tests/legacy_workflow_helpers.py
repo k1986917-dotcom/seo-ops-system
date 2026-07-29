@@ -94,6 +94,22 @@ def _synthetic_ai_response(purpose: str, user: str = "") -> str:
             "</script>\n"
         )
     if purpose == "legacy_write_claim_ledger":
+        if "Article sentences" in user and "S001" in user:
+            # New prompt: model selects sentence_id; both drafts produce
+            # S001 = the first sentence the deterministic extractor emits.
+            if "This is a revised synthetic draft." in user:
+                return (
+                    '{"version":1,"claims":['
+                    '{"sentence_id":"S001","claim_type":"general","evidence_ids":["ev_revised001"]}'
+                    ']}\n'
+                )
+            return (
+                '{"version":1,"claims":['
+                '{"sentence_id":"S001","claim_type":"technical_specification","evidence_ids":["ev_test001"]}'
+                ']}\n'
+            )
+        # Legacy (older) prompt path - keep for compatibility of any test
+        # that doesn't yet use the ID contract.
         if "This is a revised synthetic draft." in user:
             return (
                 '{"version":1,"claims":['
