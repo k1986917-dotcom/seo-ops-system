@@ -59,11 +59,16 @@ This repo provides reference copies of the configuration files:
 
 ### Mode A: Hermes orchestrates SEO Ops through HTTP API (RECOMMENDED)
 
-Hermes reads SKILL definitions written by SEO Ops, then drives the SEO Ops
+ Hermes reads SKILL definitions written by SEO Ops, then drives the SEO Ops
 state machine via HTTP:
 
 ```
-1. SEO Ops exposes:
+1. For a new task SEO Ops exposes:
+   POST /api/hermes/runs             → intake + R0 + automatic search + R1
+   GET  /api/hermes/runs/{id}        → stage/status report
+   GET  /api/hermes/runs/{id}/prompt → R0 prompt for manual-search fallback
+
+   The remaining stage endpoints are:
    GET  /actions/{id}/legacy/             → list R0..W3 buttons
    POST /actions/{id}/legacy/stage/r0     → generate search prompt
    POST /actions/{id}/legacy/stage/r1     → save search results + collect

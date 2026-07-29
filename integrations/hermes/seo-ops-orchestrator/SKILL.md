@@ -1,7 +1,7 @@
 ---
 name: seo-ops-orchestrator
-description: Drive the SEO Ops Legacy workflow through its 7 stage HTTP endpoints; never write to the workspace or DB directly.
-version: 1.0.0
+description: Intake and drive the SEO Ops Legacy workflow through HTTP; never write to the workspace or DB directly.
+version: 1.1.0
 license: MIT
 allowed-tools: bash, curl, jq
 ---
@@ -28,6 +28,19 @@ a thin orchestrator that converts operator intent into POST requests.
 
 ## When to use
 
+- For a new task, ask only the missing Socratic intake questions:
+  - Which site, only when the user has more than one?
+  - What is the exact article topic?
+  - What reader/use case or article purpose is intended, if the topic does not
+    make it clear?
+  - Any must-include, must-avoid, language, country or source constraints that
+    would change research; otherwise use site defaults.
+  - Do not ask for an author unless the user requests a different byline;
+    `LaserPointerHub` is the default.
+- Run `scripts/start.sh --site ... --topic ... [--requirements ...]`.
+- Report the provider results and current Legacy stage. If the response is
+  `needs_manual_search`, show the status and ask whether the operator wants to
+  paste external search results.
 - Operator accepts a research candidate and asks Hermes to start the article
 - Operator pastes search results and asks Hermes to advance to AI analysis
 - Operator wants to know the current stage of an article
@@ -36,9 +49,10 @@ a thin orchestrator that converts operator intent into POST requests.
 
 ## Inputs the operator (or upstream skill) must supply
 
-- `action_id` — integer ID of the action in `actions` table
-- `topic` — string, the article's topic (= `actions.target_ref`)
-- For R1 only: `search_results` — the verbatim text the operator pasted
+- `site` — numeric site ID or site slug
+- `topic` — string, the article's topic
+- `requirements` — optional constraints, audience or intended use
+- For manual R1 fallback only: `search_results` — verbatim pasted text
 - For W0 only: `author` — byline name (default `LaserPointerHub`)
 
 ## Configuration
@@ -56,6 +70,7 @@ Override per-call via `--base-url` flag.
 
 | Script | HTTP call | Purpose |
 |--------|-----------|---------|
+| `scripts/start.sh` | `POST /api/hermes/runs` | Intake + R0 + automatic search + R1 |
 | `scripts/detect_stage.sh` | `GET /actions` | Read current stage of an action |
 | `scripts/r0.sh` | `POST /actions/{id}/legacy/stage/r0` | Generate search prompt |
 | `scripts/r1.sh` | `POST /actions/{id}/legacy/stage/r1` | Save search results + run collect |
@@ -71,14 +86,14 @@ on success, and exit 0. On failure they exit non-zero with the response body.
 ## Recommended workflow
 
 ```
-1. scripts/detect_stage.sh <action_id>
-   → outputs current stage label and DB legacy_stage
+1. scripts/start.sh --site <site> --topic <topic> [--requirements <text>]
+   → creates/resumes one action, runs R0, searches configured providers, and
+     runs R1 automatically
 
-2. (if stage == r0_pending)
-   scripts/r0.sh <action_id>
-   → operator copies the generated prompt to search AI
+2. (only if start.sh returned needs_manual_search)
+   → report the generated prompt and ask whether the operator will paste results
 
-3. (operator pastes search results)
+3. (only when manual search was selected)
    scripts/r1.sh <action_id> < search_results.md
    → collect script runs; data + score produced
 

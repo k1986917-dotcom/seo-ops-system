@@ -1,5 +1,41 @@
 # 工作日志
 
+## 2026-07-29 — Hermes 第一段真实自动化：intake → R0 → 搜索 → R1
+
+### 背景
+
+现有 Hermes skill 只能逐阶段调用 HTTP，R1 仍要求人工粘贴搜索结果；新系统
+已有 SerpAPI/Tavily/Firecrawl 能力，却没有把搜索快照交给 Legacy Research。
+本工作单元只实现最小可运行桥，不扩展 evidence/claim ledger 规则，也不改
+W0/W1b/W2 gate。
+
+### 完成
+
+- 新增 `hermes_orchestrator.py`：创建/恢复单一持久 action，保存站点、选题和
+  可选要求；按 HTTP 服务拥有的工作区和状态推进 R0。
+- 新增自动搜索桥：复用新系统的 SerpAPI `collect_topic_query_evidence` 和
+  Tavily `execute_tavily_search`，保留 provider/evidence ID 和状态，把成功
+  payload 转换为 Legacy R1 搜索文本。没有可用供应商或全部失败时停在
+  `r0_prompt`，明确要求 Hermes 询问是否人工粘贴结果。
+- 新增 `/api/hermes/sites`、`/api/hermes/runs`、状态和 R0 prompt 读取接口；
+  新增 `scripts/start.sh` 和 skill 的苏格拉底式 intake 说明。
+- R0 prompt/topic-context 支持保存 operator requirements；没有改变旧调用的
+  默认行为。
+
+### 验证
+
+- `python -m compileall -q src tests integrations/hermes/seo-ops-orchestrator/scripts`：通过。
+- 新增 `tests/test_hermes_bootstrap.py`：2 passed。
+- `tests/test_legacy_workflow.py`、Hermes smoke/layout 集成回归：通过。
+- 全量 `pytest -q`：304 passed，保留 1 条既有 Starlette/httpx 弃用警告。
+- 变更涉及的 Python 文件执行 `ruff check`：All checks passed。原工作树的
+  5 个历史 F841 未新增；本次没有修改 ledger/gate 规则。
+
+### 遗留与下一步
+
+- 当前自动化只到 R1；下一工作单元再把 R3→W3 编排成 HTTP 状态循环，并调用
+  已有 W1b/W2 AI revise，不能绕过严格 gate。
+
 ## 2026-07-29 — 证据驱动事实校验最终验收追加修复 (W0 原子写异常路径)
 
 ### 背景

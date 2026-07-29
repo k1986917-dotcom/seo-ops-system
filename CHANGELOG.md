@@ -2,6 +2,22 @@
 
 所有用户可见变化记录在此。版本遵循语义化版本。
 
+## [Unreleased] — Hermes 第一段真实自动化
+
+### Added
+
+- 新增 `POST /api/hermes/runs`、`GET /api/hermes/sites`、
+  `GET /api/hermes/runs/{action_id}` 和 `/prompt`，支持 Hermes 以站点、
+  选题和可选要求启动/恢复持久文章任务。
+- 新增 Hermes `scripts/start.sh`：通过 HTTP 完成 R0、已配置 SerpAPI/Tavily
+  外部检索、搜索结果适配和 Legacy R1；无可用供应商时停在 `r0_prompt`，
+  不伪造外部资料。
+- R0 搜索提示词和 topic-context 可携带运营者要求；新增自动化桥接回归测试。
+
+### Unchanged
+
+- W0/W1b/W2 evidence/claim ledger 事实校验链路和严格 gate 未修改。
+
 ## [0.11.5] - 2026-07-29
 
 ### Fixed

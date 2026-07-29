@@ -19,6 +19,7 @@ SCRIPTS_DIR = SKILL_DIR / "scripts"
 
 REQUIRED_FILES = ["SKILL.md", "README.md", "install.sh"]
 REQUIRED_SCRIPTS = [
+    "start.sh",
     "r0.sh",
     "r1.sh",
     "r3.sh",

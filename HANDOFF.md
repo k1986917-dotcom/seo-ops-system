@@ -6,6 +6,27 @@
 
 源码 `0.11.5`（uncommitted）、SQLite v13。证据驱动事实校验最终验收通过：`_run_fact_check` 根 JSON 非 dict 时不再调用 `.get()`；`stage_w0_validate_and_draft` 在写入失败时保留旧 draft / claim-ledger / w2-state 并返回明确错误，不抛未处理异常。旧文章制作通道不变。
 
+## 2026-07-29 — Hermes 第一段真实自动化（当前工作单元）
+
+- 新增 `POST /api/hermes/runs`：Hermes 只需提交 `site`、`topic` 和可选
+  `requirements`；服务创建/恢复一个持久 action，按 R0 → 自动外部搜索 → R1
+  顺序运行。
+- 新增 `GET /api/hermes/sites`、`GET /api/hermes/runs/{action_id}` 与
+  `/prompt`，让 Hermes 能汇报站点、阶段、下一步和完整 R0 搜索提示词。
+- 新系统已配置的 SerpAPI/Tavily 结果会保存为不可变外部快照，并转换成
+  Legacy R1 可消费的搜索结果文本；没有可用供应商时停在 `r0_prompt`，
+  返回“是否人工粘贴外部结果”的明确决定点，不伪造资料。
+- Hermes skill 新增 `scripts/start.sh` 与最小苏格拉底式 intake 规则；
+  W0/W1b/W2 evidence/claim ledger 与 gate 未改动。
+- 新增 3 个回归测试；Legacy/HTTP 集成回归和全量测试 `304 passed, 1 warning`。
+
+### 下一步
+
+1. 在真实本地服务上配置并验证 SerpAPI/Tavily 后，Hermes 运行
+   `start.sh`，确认 `r2_collect` 后自动继续 R3→W3。
+2. 下一段实现“自动调用 R3→W0→W1b；W1b 失败自动调用已有
+   `w1b-revise`/`w2-revise` 并循环到 gate 通过”，继续只走 HTTP。
+
 ## 2026-07-29 — 证据驱动事实校验最终验收追加修复 (0.11.5)
 
 - **W0 原子写异常路径保护**：`stage_w0_validate_and_draft` 先调用 `_write_ahead_draft_and_ledger`（失败时内部 rollback），成功后再清理 `w1b` 预检/后处理报告并重置 w2-state；`_write_ahead_draft_and_ledger` 异常被捕获转为 `success=False` 与明确错误信息，绝不向页面抛未处理异常。

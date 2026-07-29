@@ -370,7 +370,8 @@ def stage_step(stage_key: str) -> int:
 
 def generate_topic_context_from_research(topic: str, workspace: Path,
                                           opportunity_evidence: dict | None = None,
-                                          action_id: int | None = None) -> dict:
+                                          action_id: int | None = None,
+                                          operator_requirements: str = "") -> dict:
     """Create an enriched topic-context.json from the new system's research data.
 
     This replaces the bare heuristic topic-context the old script would generate,
@@ -391,6 +392,7 @@ def generate_topic_context_from_research(topic: str, workspace: Path,
         "cannibal_risk": "",
         "signals": {},
         "guidance": "",
+        "operator_requirements": str(operator_requirements or "").strip()[:2000],
         "updated": today,
     }
 
@@ -951,7 +953,7 @@ def _ledger_refs(workspace: Path, slug: str) -> str:
 
 # ── R0: Generate Search Prompt ──────────────────────────────────────────
 
-def _build_search_prompt(topic: str, workspace: Path) -> str:
+def _build_search_prompt(topic: str, workspace: Path, operator_requirements: str = "") -> str:
     """Generate an 8-section search prompt using the old format, fed from workspace data.
 
     Section 3 replaces old "Market Data" with "Common Misconceptions and
@@ -1056,9 +1058,15 @@ def _build_search_prompt(topic: str, workspace: Path) -> str:
                      "authority sources.")
 
     # ── BUILD ──
+    requirements_block = (
+        f"\n## Operator requirements\n{operator_requirements.strip()[:2000]}\n"
+        if operator_requirements and operator_requirements.strip()
+        else ""
+    )
     return f"""You are helping me research for an SEO article about "{topic}" on laserpointerhub.com.
 I need comprehensive, real, verifiable data.
 Do NOT fabricate anything — say "not found" if you cannot find it.
+{requirements_block}
 
 ## What We Already Know
 {chr(10).join(know)}
@@ -1189,7 +1197,9 @@ Include SERP source URL when possible.
 Deduplicate identical questions across queries."""
 
 
-def stage_r0_generate_prompt(topic: str, workspace: Path) -> dict:
+def stage_r0_generate_prompt(
+    topic: str, workspace: Path, operator_requirements: str = ""
+) -> dict:
     """Generate and save the search prompt. R0 is a full restart: any prior
     Research, Material-Pack, Draft, Pre-check, Post-process or Register
     artifact for this slug is wiped before the new prompt is written.
@@ -1197,7 +1207,7 @@ def stage_r0_generate_prompt(topic: str, workspace: Path) -> dict:
     slug = _slugify(topic)
     today = _today_str()
     clear_all_action_artifacts(workspace, slug)
-    prompt = _build_search_prompt(topic, workspace)
+    prompt = _build_search_prompt(topic, workspace, operator_requirements)
     out = workspace / "research" / f"search-prompt-{slug}-{today}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(prompt, encoding="utf-8")

@@ -72,6 +72,13 @@ from seo_ops.services.gsc_oauth import (
     gsc_connection_status,
     sync_gsc,
 )
+from seo_ops.services.hermes_orchestrator import (
+    HermesOrchestrationError,
+    create_or_resume_hermes_action,
+    hermes_prompt,
+    hermes_status,
+    run_hermes_bootstrap,
+)
 from seo_ops.services.legacy_sync import sync_all as legacy_sync_all
 from seo_ops.services.legacy_workflow import (
     action_workspace,
@@ -596,6 +603,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _get_action_topic(action: dict) -> str:
         return (action.get("target_ref", "") or "").strip()
 
+    def _get_action_requirements(action: dict) -> str:
+        try:
+            baseline = json_loads(action.get("baseline_json"), {})
+        except Exception:
+            baseline = {}
+        if not isinstance(baseline, dict):
+            return ""
+        return str(baseline.get("requirements") or "").strip()
+
     def _update_legacy_stage(action_id: int, stage: str | None):
         with connection(active_settings) as conn:
             conn.execute(
@@ -625,13 +641,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _redirect("/actions", "无法获取文章主题", "error")
         legacy_sync_all(settings=active_settings, site_id=action["site_id"])
         run_workspace = _current_legacy_workspace(action_id, topic)
+        requirements = _get_action_requirements(action)
         # Stage R0 wipes all prior artifacts for this slug first, so the
         # topic-context is rewritten AFTER the wipe and survives.
-        result = stage_r0_generate_prompt(topic, run_workspace)
+        result = stage_r0_generate_prompt(topic, run_workspace, requirements)
         generate_topic_context_from_research(
             topic, run_workspace,
             opportunity_evidence=action.get("opportunity_evidence"),
             action_id=action_id,
+            operator_requirements=requirements,
         )
         _update_legacy_stage(action_id, result.get("stage"))
         return _redirect("/actions", "搜索提示词已生成")
@@ -788,6 +806,97 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _redirect("/actions", f"注册完成。{note}", "warning")
         count = result.get("backlink_candidates", 0)
         return _redirect("/actions", f"注册完成，已生成回溯链接清单（{count} 篇候选）")
+
+    # ── Hermes automatic intake / status ─────────────────────────────
+
+    @app.get("/api/hermes/sites", response_class=JSONResponse)
+    async def hermes_sites() -> dict[str, object]:
+        with connection(active_settings) as conn:
+            return {
+                "sites": [
+                    {
+                        "id": int(site["id"]),
+                        "slug": str(site["slug"]),
+                        "name": str(site["name"]),
+                        "domain": str(site["domain"]),
+                    }
+                    for site in list_sites(conn)
+                ]
+            }
+
+    @app.post("/api/hermes/runs", response_class=JSONResponse)
+    async def hermes_start_run(request: Request):
+        """Start the first real Hermes-managed slice.
+
+        The endpoint intentionally returns structured JSON rather than the
+        browser's 303 redirect. Hermes can therefore report stage, provider
+        results and the exact human decision needed when automatic search is
+        unavailable.
+        """
+
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+        try:
+            action = create_or_resume_hermes_action(
+                site=payload.get("site_id", payload.get("site")),
+                topic=payload.get("topic", ""),
+                requirements=payload.get("requirements", ""),
+                restart=bool(payload.get("restart", False)),
+                settings=active_settings,
+            )
+            outcome = await run_hermes_bootstrap(
+                action,
+                settings=active_settings,
+            )
+        except HermesOrchestrationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        status_code = 201 if outcome.status in {"success", "partial"} else 202
+        return JSONResponse(
+            {
+                "action_id": outcome.action_id,
+                "status": outcome.status,
+                "legacy_stage": outcome.stage,
+                "message": outcome.message,
+                "search": {
+                    "status": outcome.search.status,
+                    "query": outcome.search.query,
+                    "providers": list(outcome.search.providers),
+                    "message": outcome.search.message,
+                },
+                "r1": outcome.r1,
+                "prompt_endpoint": (
+                    f"/api/hermes/runs/{outcome.action_id}/prompt"
+                    if outcome.stage == "r0_prompt"
+                    else None
+                ),
+                "next": (
+                    "r3"
+                    if outcome.stage == "r2_collect"
+                    else "manual_search"
+                    if outcome.status == "needs_manual_search"
+                    else "retry"
+                ),
+            },
+            status_code=status_code,
+        )
+
+    @app.get("/api/hermes/runs/{action_id}", response_class=JSONResponse)
+    async def hermes_run_status(action_id: int) -> dict[str, object]:
+        try:
+            return hermes_status(action_id, active_settings)
+        except HermesOrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/hermes/runs/{action_id}/prompt", response_class=JSONResponse)
+    async def hermes_run_prompt(action_id: int) -> dict[str, str]:
+        try:
+            return hermes_prompt(action_id, active_settings)
+        except HermesOrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/research")
     async def research_page(request: Request):

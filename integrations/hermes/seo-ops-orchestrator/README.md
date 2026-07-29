@@ -20,8 +20,10 @@ rm -rf ~/.hermes/skills/software-development/seo-ops-orchestrator/
 
 ## What this skill does
 
-For each of the 7 Legacy stages (r0, r1, r3, w0, w1b, w2, w3), this skill
-provides a shell script that POSTs to the corresponding SEO Ops endpoint.
+For a new task, `start.sh` creates/resumes the action, runs R0, calls the
+configured SerpAPI/Tavily providers, and feeds the immutable search snapshot
+into Legacy R1. The remaining stage scripts POST to the corresponding SEO Ops
+endpoints for the existing deterministic pipeline.
 The skill never writes to the workspace or the SQLite database directly;
 all state changes go through HTTP.
 
@@ -38,6 +40,7 @@ Override per-call with `--base-url`.
 ## Scripts
 
 - `SKILL.md` — Hermes-format skill definition (frontmatter + workflow)
+- `scripts/start.sh` — intake + R0 + automatic search + R1
 - `scripts/detect_stage.sh` — read current stage
 - `scripts/r0.sh` — generate search prompt
 - `scripts/r1.sh` — save search results + run collect
