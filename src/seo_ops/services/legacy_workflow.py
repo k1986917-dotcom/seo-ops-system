@@ -244,6 +244,63 @@ def save_w2_state(workspace: Path, slug: str, state: dict[str, Any]) -> None:
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _revision_rounds(state: dict[str, Any], phase: str) -> int:
+    """Return the revision count for one quality phase.
+
+    Older workspaces have one shared ``rounds`` value.  It belonged to W2,
+    so retain it as the W2 fallback while giving W1b its own counter.
+    """
+    key = f"{phase}_rounds"
+    if key in state:
+        return max(0, int(state.get(key) or 0))
+    return max(0, int(state.get("rounds") or 0)) if phase == "w2" else 0
+
+
+def _set_revision_rounds(state: dict[str, Any], phase: str, value: int) -> None:
+    value = max(0, int(value))
+    state[f"{phase}_rounds"] = value
+    # Compatibility for existing state files, scripts, and historical UI.
+    if phase == "w2":
+        state["rounds"] = value
+
+
+def _record_revision_attempt(
+    workspace: Path, slug: str, phase: str, result: dict[str, Any]
+) -> None:
+    """Persist a concise failure memory for the next operator/AI attempt."""
+    state = load_w2_state(workspace, slug)
+    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    history = state.get("revision_history")
+    if not isinstance(history, list):
+        history = []
+    error = str(result.get("error") or "")[:1000]
+    history.append({
+        "at": datetime.now(UTC).isoformat(),
+        "phase": phase,
+        "draft_sha256": _sha256_file(draft) if draft else "",
+        "passed": bool(result.get("gate_passed") or result.get("success")),
+        "error": error,
+    })
+    # This is an operator aid, not an unbounded audit log.
+    state["revision_history"] = history[-12:]
+    save_w2_state(workspace, slug, state)
+
+
+def _recent_revision_memory(state: dict[str, Any], phase: str) -> str:
+    """Format prior failed attempts for the revising model without hiding them."""
+    history = state.get("revision_history")
+    if not isinstance(history, list):
+        return ""
+    notes = [
+        str(item.get("error") or "")[:500]
+        for item in history
+        if isinstance(item, dict) and item.get("phase") == phase and not item.get("passed")
+    ]
+    if not notes:
+        return ""
+    return "\n".join(f"- Earlier failed attempt: {note}" for note in notes[-3:] if note)
+
+
 # ── Stage Detection ────────────────────────────────────────────────────
 
 STAGE_ORDER = [
@@ -1925,18 +1982,7 @@ async def stage_w1b_revise(
         return {"success": False, "error": "草稿不存在"}
 
     state = load_w2_state(workspace, slug)
-    rounds = int(state.get("rounds", 0))
-    if rounds >= MAX_REVISION_ROUNDS:
-        return {
-            "success": False,
-            "error": (
-                f"已用满 {MAX_REVISION_ROUNDS} 轮修订。按 skill 规则不再自动修改，"
-                "请人工审阅草稿。"
-            ),
-            "rounds_used": rounds,
-            "rounds_left": 0,
-        }
-
+    rounds = _revision_rounds(state, "w1b")
     repair = repair_draft_frontmatter(workspace, slug)
     precheck_report = load_report(workspace, "pre-check", slug)
     if not precheck_report:
@@ -1947,6 +1993,11 @@ async def stage_w1b_revise(
 
     ev_refs = _ledger_refs(workspace, slug)
     ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
+    retry_memory = _recent_revision_memory(state, "w1b")
+    retry_section = (
+        f"\n## Earlier failed attempts (do not repeat these mistakes)\n{retry_memory}\n"
+        if retry_memory else "\n"
+    )
 
     user_prompt = f"""Revise the article for: "{topic}"
 
@@ -1956,6 +2007,7 @@ invent facts, numbers, quotes, or URLs.
 
 ## Pre-check report (what failed)
 {precheck_report[:_REPORT_CHAR_LIMIT]}
+{retry_section}
 
 ## Current draft (frontmatter may have been auto-repaired)
 {_read_text(draft)}
@@ -2001,7 +2053,7 @@ the updated claim ledger JSON matching the new draft."""
     # Write-ahead: temp files → rename.  On failure, old files survive.
     _write_ahead_draft_and_ledger(workspace, slug, new_draft_md, cl_data)
 
-    state["rounds"] = rounds + 1
+    _set_revision_rounds(state, "w1b", rounds + 1)
     save_w2_state(workspace, slug, state)
 
     precheck = await stage_w1b_pre_check(
@@ -2015,7 +2067,7 @@ the updated claim ledger JSON matching the new draft."""
             "revised": True,
             "revision_round": rounds + 1,
             "rounds_used": rounds + 1,
-            "rounds_left": MAX_REVISION_ROUNDS - (rounds + 1),
+            "rounds_left": 0,
             "backup": str(backup),
             "frontmatter_repaired": repair.get("repaired", False),
             "precheck_report": precheck.get("report", ""),
@@ -2032,10 +2084,35 @@ the updated claim ledger JSON matching the new draft."""
         "revised": True,
         "revision_round": rounds + 1,
         "rounds_used": rounds + 1,
-        "rounds_left": MAX_REVISION_ROUNDS - (rounds + 1),
+        "rounds_left": 0,
         "backup": str(backup),
         "frontmatter_repaired": repair.get("repaired", False),
     }
+
+
+async def stage_w1b_revise_batch(
+    topic: str, tier: str, workspace: Path, settings=None
+) -> dict:
+    """Run at most two W1b AI revisions from one explicit operator action.
+
+    A batch stops immediately on a passing pre-check or on a non-revision
+    failure (for example malformed AI output).  Each completed attempt is
+    saved so a later batch can use the actual previous failure, not guess.
+    """
+    slug = _slugify(topic)
+    attempts: list[dict[str, Any]] = []
+    for _ in range(MAX_REVISION_ROUNDS):
+        outcome = await stage_w1b_revise(topic, tier, workspace, settings)
+        _record_revision_attempt(workspace, slug, "w1b", outcome)
+        attempts.append(outcome)
+        if outcome.get("gate_passed"):
+            return {**outcome, "batch_attempts": len(attempts), "batch_completed": True}
+        # A failure before a draft revision cannot improve by simply repeating
+        # the identical request in the same click.
+        if not outcome.get("revised"):
+            break
+    final = attempts[-1] if attempts else {"success": False, "error": "未执行修订"}
+    return {**final, "batch_attempts": len(attempts), "batch_completed": True}
 
 
 # ── W2: Post-Process (+ revision loop) ──────────────────────────────────
@@ -2097,7 +2174,7 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
 
     state = load_w2_state(workspace, slug)
-    rounds = int(state.get("rounds", 0))
+    rounds = _revision_rounds(state, "w2")
     current_draft_sha256 = _sha256_file(draft)
     if (
         not state.get("precheck_passed")
@@ -2163,14 +2240,14 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
         state["applied_draft_sha256"] = _sha256_file(draft)
     save_w2_state(workspace, slug, state)
 
-    rounds_left = max(0, MAX_REVISION_ROUNDS - int(state.get("rounds", 0)))
+    rounds_left = max(0, MAX_REVISION_ROUNDS - _revision_rounds(state, "w2"))
 
     result: dict[str, Any] = {
         "success": gate_passed,
         "stage": "w2_post_process" if (gate_passed and apply) else "w1b_pre_check",
         "report": report,
         "gate_passed": gate_passed,
-        "rounds_used": int(state.get("rounds", 0)),
+        "rounds_used": _revision_rounds(state, "w2"),
         "rounds_left": rounds_left,
         **metrics,
     }
@@ -2224,7 +2301,7 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
         return {"success": False, "error": "草稿不存在"}
 
     state = load_w2_state(workspace, slug)
-    rounds = int(state.get("rounds", 0))
+    rounds = _revision_rounds(state, "w2")
     if rounds >= MAX_REVISION_ROUNDS:
         return {"success": False,
                 "error": f"已用满 {MAX_REVISION_ROUNDS} 轮修订。按 skill 规则不再自动修改，请人工审阅草稿。",
@@ -2244,11 +2321,17 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
 
     ev_refs = _ledger_refs(workspace, slug)
     ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
+    retry_memory = _recent_revision_memory(state, "w2")
+    retry_section = (
+        f"\n## Earlier failed attempts (do not repeat these mistakes)\n{retry_memory}\n"
+        if retry_memory else "\n"
+    )
 
     user_prompt = f"""Revise the article for: "{topic}"
 
 ## Post-Process Report (what failed)
 {report[:_REPORT_CHAR_LIMIT]}
+{retry_section}
 
 ## Current Draft
 {_read_text(draft)}
@@ -2299,7 +2382,7 @@ Follow the system instructions. Output the full revised article Markdown, then
         backup.unlink(missing_ok=True)
         return {"success": False, "error": f"原子写入失败: {exc}"}
 
-    state["rounds"] = rounds + 1
+    _set_revision_rounds(state, "w2", rounds + 1)
     save_w2_state(workspace, slug, state)
 
     precheck = await stage_w1b_pre_check(
@@ -2330,6 +2413,28 @@ Follow the system instructions. Output the full revised article Markdown, then
     outcome["backup"] = str(backup)
     outcome["previous_metrics"] = metrics
     return outcome
+
+
+async def stage_w2_revise_batch(topic: str, workspace: Path, settings=None) -> dict:
+    """Run the remaining W2 revisions in this two-round quality window.
+
+    Every W2 revision already re-runs W1b before re-running W2.  Stop if that
+    pre-check fails: continuing W2 would bypass the W1b gate.
+    """
+    slug = _slugify(topic)
+    attempts: list[dict[str, Any]] = []
+    while len(attempts) < MAX_REVISION_ROUNDS:
+        outcome = await stage_w2_revise(topic, workspace, settings)
+        _record_revision_attempt(workspace, slug, "w2", outcome)
+        attempts.append(outcome)
+        if outcome.get("gate_passed"):
+            return {**outcome, "batch_attempts": len(attempts), "batch_completed": True}
+        if not outcome.get("revised") or outcome.get("stage") == "w1b_pre_check":
+            break
+        if _revision_rounds(load_w2_state(workspace, slug), "w2") >= MAX_REVISION_ROUNDS:
+            break
+    final = attempts[-1] if attempts else {"success": False, "error": "未执行修订"}
+    return {**final, "batch_attempts": len(attempts), "batch_completed": True}
 
 
 # ── W3: Register + retroactive backlinks ────────────────────────────────
@@ -2586,6 +2691,8 @@ def get_legacy_display_data(topic: str, workspace: Path,
     data["precheck_draft_match"] = draft_matches
     data["precheck_blocker_message"] = blocker_messages[precheck_state]
     data["draft_path"] = draft_path_str
+    data["w1b_revision_attempts"] = _revision_rounds(state, "w1b")
+    data["revision_history"] = state.get("revision_history", [])
     if draft_text:
         # Larger than draft_preview (which is 2 KB) so the user can see
         # the whole draft when fixing pre-check failures.
@@ -2596,7 +2703,7 @@ def get_legacy_display_data(topic: str, workspace: Path,
         data["post_process_report"] = post_process
         metrics = _parse_post_process(post_process)
         # state was already loaded above for the precheck gate check.
-        rounds_used = int(state.get("rounds", 0))
+        rounds_used = _revision_rounds(state, "w2")
         data["w2"] = {
             **metrics,
             "gate_passed": bool(state.get("gate_passed")),

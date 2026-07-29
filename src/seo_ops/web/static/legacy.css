@@ -48,6 +48,8 @@
 .legacy-actions { margin-top: 0.75rem; }
 .legacy-card .button { margin-top: 0.5rem; }
 .legacy-card .button-secondary { background: #5f6368; }
+.legacy-card .button-danger { background: #b3261e; color: #fff; }
+.legacy-card .button-danger:hover { background: #8c1d18; }
 
 @media (max-width: 820px) {
   .legacy-progress { gap: 2px; }

@@ -1115,6 +1115,55 @@ class TestRevisionLoop:
         assert "2 轮" in result["error"]
         assert result["rounds_left"] == 0
 
+    def test_w1b_batch_retries_once_then_stops_on_pass(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        calls = []
+
+        async def fake_revise(*args, **kwargs):
+            calls.append(1)
+            return {
+                "success": len(calls) == 2,
+                "gate_passed": len(calls) == 2,
+                "revised": True,
+                "revision_round": len(calls),
+            }
+
+        monkeypatch.setattr(lw, "stage_w1b_revise", fake_revise)
+        result = asyncio.run(lw.stage_w1b_revise_batch("test topic", "", tmp_path))
+
+        assert result["gate_passed"] is True
+        assert result["batch_attempts"] == 2
+        assert len(calls) == 2
+        history = lw.load_w2_state(tmp_path, "test-topic")["revision_history"]
+        assert [entry["phase"] for entry in history] == ["w1b", "w1b"]
+
+    def test_w2_batch_retries_once_then_stops_on_pass(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        calls = []
+
+        async def fake_revise(*args, **kwargs):
+            calls.append(1)
+            return {
+                "success": len(calls) == 2,
+                "gate_passed": len(calls) == 2,
+                "revised": True,
+                "stage": "w1b_pre_check",
+                "revision_round": len(calls),
+            }
+
+        monkeypatch.setattr(lw, "stage_w2_revise", fake_revise)
+        result = asyncio.run(lw.stage_w2_revise_batch("test topic", tmp_path))
+
+        # A W2 revision that lands back at W1b must stop there; it may not
+        # bypass the pre-check just to use the second automatic attempt.
+        assert result["gate_passed"] is False
+        assert result["batch_attempts"] == 1
+        assert len(calls) == 1
+
     def test_revision_requires_a_report(self, tmp_path):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
@@ -3533,4 +3582,3 @@ class TestW2PostPassRejection:
         result = asyncio.run(lw.stage_w2_revise("applied topic", ws))
         assert result["success"] is False
         assert "已发布" in result["error"]
-

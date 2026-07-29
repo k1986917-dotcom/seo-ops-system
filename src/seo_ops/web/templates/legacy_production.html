@@ -199,12 +199,10 @@
         <form method="post" action="/actions/{{ action.id }}/legacy/stage/w1b" style="display:inline">
           <button type="submit" class="button">重新运行预检</button>
         </form>
-        {% if w2.get("rounds_left", 2) > 0 %}
         <form method="post" action="/actions/{{ action.id }}/legacy/stage/w1b-revise" style="display:inline; margin-left:0.5rem"
               onsubmit="return confirm('AI 将根据预检报告中的失败项修订草稿，并自动修补缺失的 frontmatter 收尾 ---。是否继续？')">
-          <button type="submit" class="button button-secondary">AI 修订草稿并重跑预检（剩余 {{ w2.get('rounds_left', 2) }} 轮）</button>
+          <button type="submit" class="button button-secondary">AI 修订并重跑预检（本次最多 2 轮）</button>
         </form>
-        {% endif %}
       {% endif %}
     </div>
 
@@ -218,7 +216,7 @@
               onsubmit="return confirm('确认本文与已发布文章角度确实不同，跳过蚕食门控？\n\n这会绕过 SEO 蚕食保护，请先读完后处理报告中列出的相似文章。')">
           <input type="hidden" name="apply" value="1">
           <input type="hidden" name="force" value="1">
-          <button type="submit" class="button button-secondary">我已确认角度不同，跳过蚕食门控</button>
+          <button type="submit" class="button button-danger">接受当前蚕食问题并继续</button>
         </form>
       {% endif %}
     {% endif %}

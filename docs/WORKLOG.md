@@ -1,5 +1,24 @@
 # 工作日志
 
+## 2026-07-29 — 网页受控 AI 修订批次与失败记忆
+
+### 完成
+
+- W1b 的网页修订入口改为一次明确点击内最多两轮「AI 修订 → W1b 复检」；任一轮通过立即停。再次点击才会启动下一批，避免单次无限循环。
+- W2 的网页修订入口改为受控批次；每一轮仍沿用现有的「AI 修订 → W1b → W2」链，W1b 未通过即停止，不能绕过预检。
+- W1b 与 W2 的修订计数拆分，兼容旧 state 文件的 `rounds`（按原语义作为 W2 值）。状态中保存最近失败的阶段、草稿 SHA、结果和错误摘要；下一次对应 AI 修订会读入近期失败摘要。
+- 保留并重新标示现有的蚕食人工确认：按钮为红色 `接受当前蚕食问题并继续`，但后端仍要求 W2 两轮已用尽、仅蚕食阻塞、评分合格且检查器正常；没有新增通用强制放行入口。
+
+### 验证
+
+- `tests/test_legacy_workflow.py`、`tests/test_hermes_bootstrap.py`、`tests/integration/test_hermes_orchestrator_smoke.py`：通过（含新增 W1b/W2 批次回归）。
+- `ruff check src/seo_ops/services/legacy_workflow.py src/seo_ops/web/app.py`：通过；`git diff --check`：通过。
+- 全量 `pytest -q` 在当前受限执行器中多次只输出部分进度后提前结束，未取得最终汇总；不得把它记录为通过，需在本地完整复跑。
+
+### 下一步
+
+- 通过 HTTP 将 R3→W3 和上述受控批次接入 Hermes 总控制器；不改 evidence/claim ledger 或 W0/W1b/W2 硬 gate。
+
 ## 2026-07-29 — Hermes 第一段真实自动化：intake → R0 → 搜索 → R1
 
 ### 背景

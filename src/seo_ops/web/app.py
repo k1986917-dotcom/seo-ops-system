@@ -89,9 +89,9 @@ from seo_ops.services.legacy_workflow import (
     stage_r3_ai_analyze,
     stage_w0_validate_and_draft,
     stage_w1b_pre_check,
-    stage_w1b_revise,
+    stage_w1b_revise_batch,
     stage_w2_post_process,
-    stage_w2_revise,
+    stage_w2_revise_batch,
     stage_w3_register,
 )
 from seo_ops.services.material_workflow import (
@@ -731,7 +731,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
         run_workspace = _current_legacy_workspace(action_id, topic)
-        result = await stage_w1b_revise(
+        result = await stage_w1b_revise_batch(
             topic, tier, run_workspace, active_settings
         )
         _update_legacy_stage(action_id, result.get("stage") or "w1b_pre_check")
@@ -781,7 +781,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         action = _get_action_or_404(action_id)
         topic = _get_action_topic(action)
         run_workspace = _current_legacy_workspace(action_id, topic)
-        result = await stage_w2_revise(topic, run_workspace, active_settings)
+        result = await stage_w2_revise_batch(topic, run_workspace, active_settings)
         if result.get("error"):
             return _redirect("/actions", result["error"], "error")
         _update_legacy_stage(action_id, result.get("stage"))
