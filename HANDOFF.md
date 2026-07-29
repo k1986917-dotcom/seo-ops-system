@@ -1,10 +1,16 @@
 # Handoff — 当前接手状态
 
-最后更新：2026-07-28（Asia/Shanghai）
+最后更新：2026-07-29（Asia/Shanghai）
 
 ## 一句话状态
 
-源码 `0.11.4`（uncommitted）、SQLite v13。证据驱动事实校验第三轮复测 1 项 fail-closed 修完：`_run_fact_check` 在 evidence index 构建时即校验 `source_url` / `quote` / `key_finding` 类型与内容，未被引用的 evidence 若字段非法也必须 blocking。旧文章制作通道不变。
+源码 `0.11.5`（uncommitted）、SQLite v13。证据驱动事实校验最终验收通过：`_run_fact_check` 根 JSON 非 dict 时不再调用 `.get()`，直接结构化 blocking；`stage_w0_validate_and_draft` 失败时不再删除旧 draft / claim-ledger / w2-state。旧文章制作通道不变。
+
+## 2026-07-29 — 证据驱动事实校验最终验收修复 (0.11.5)
+
+- **根 JSON 类型校验分离**：`evidence-ledger` / `claim-ledger` 在 `json.loads` 后先单独判断 `isinstance(..., dict)`；`list` / `null` / `str` / `int` 等根类型产生结构化 blocking 后 `return`，错误分支绝不调用 `.get()`。
+- **W0 失败不删旧产物**：`stage_w0_validate_and_draft` 先验证候选 draft + claim-ledger，通过后才清空旧产物并原子写入新版本；验证失败时旧 draft / claim-ledger / w2-state 字节级不变。
+- 完整 `pytest -q` 300 passed（新增 5 个测试），`ruff check` 5 个 pre-existing F841 无新增。
 
 ## 2026-07-28 — 证据驱动事实校验第三轮修订 (0.11.4)
 

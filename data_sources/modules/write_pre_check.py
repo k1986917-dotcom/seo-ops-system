@@ -503,7 +503,11 @@ def _run_fact_check(
         grade_detail("fail", "事实校验", f"evidence-ledger 解析失败: {e}")
         return
 
-    if not isinstance(ev_data, dict) or ev_data.get("version") != 1:
+    if not isinstance(ev_data, dict):
+        grade_detail("fail", "事实校验",
+                     f"evidence-ledger 根类型错误：期望 dict，实际 {type(ev_data).__name__}")
+        return
+    if ev_data.get("version") != 1:
         grade_detail("fail", "事实校验",
                      f"evidence-ledger version 不为 1: {ev_data.get('version')}")
         return
@@ -551,7 +555,11 @@ def _run_fact_check(
         grade_detail("fail", "事实校验", f"claim-ledger 解析失败: {e}")
         return
 
-    if not isinstance(cl_data, dict) or cl_data.get("version") != 1:
+    if not isinstance(cl_data, dict):
+        grade_detail("fail", "事实校验",
+                     f"claim-ledger 根类型错误：期望 dict，实际 {type(cl_data).__name__}")
+        return
+    if cl_data.get("version") != 1:
         grade_detail("fail", "事实校验",
                      f"claim-ledger version 不为 1: {cl_data.get('version')}")
         return

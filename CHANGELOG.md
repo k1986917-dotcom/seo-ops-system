@@ -2,6 +2,19 @@
 
 所有用户可见变化记录在此。版本遵循语义化版本。
 
+## [0.11.5] - 2026-07-29
+
+### Fixed
+
+- **ledger 根 JSON 类型错误 fail-closed**：`_run_fact_check` 在 `json.loads` 后先单独判断 `evidence-ledger` / `claim-ledger` 是否为 dict；`list`、`null`、`str`、`int` 等非法根类型会生成结构化 blocking 并立即返回，错误分支不再调用 `.get()`，彻底避免 AttributeError。
+- **W0 失败不删除已有产物**：`stage_w0_validate_and_draft` 改为先验证候选 draft 与 claim-ledger，只有验证成功后才清空旧产物并原子写入新版本；若 AI 返回非法 ledger，旧 draft、旧 claim-ledger、旧 W2 state 均保持字节级不变。
+
+### 测试覆盖新增
+
+- 4 个测试覆盖 evidence-ledger / claim-ledger 根 JSON 为 `[]` / `null` 场景，断言不抛异常且返回结构化 blocking。
+- 重写 W0 numeric `claim_text` 测试，新增 W0 numeric `claim_type` 测试，预置旧 draft / claim-ledger / W2 state 后断言失败时三者字节级不变。
+- 完整测试：300 passed；`ruff check` 5 个 pre-existing F841，无新增。
+
 ## [0.11.4] - 2026-07-28
 
 ### Fixed

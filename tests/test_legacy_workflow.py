@@ -2506,6 +2506,110 @@ class TestSentenceNormalizationUnified:
 class TestFactCheckSchemaValidation:
     """Fix4: _run_fact_check must handle non-dict evidence/claim items gracefully."""
 
+    def test_evidence_ledger_root_list_blocked(self, tmp_path):
+        """Evidence ledger root JSON is a list → fail closed, no .get() call."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+
+        ev_f.write_text("[]", encoding="utf-8")
+        cl_f.write_text(
+            '{"version":1,"claims":[],"draft_sha256":"' + "0" * 64 + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block root list evidence: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "evidence-ledger" in joined or "不是" in joined or "object" in joined.lower(), joined
+
+    def test_evidence_ledger_root_null_blocked(self, tmp_path):
+        """Evidence ledger root JSON is null → fail closed, no .get() call."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+
+        ev_f.write_text("null", encoding="utf-8")
+        cl_f.write_text(
+            '{"version":1,"claims":[],"draft_sha256":"' + "0" * 64 + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block null evidence: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "evidence-ledger" in joined or "不是" in joined or "object" in joined.lower(), joined
+
+    def test_claim_ledger_root_list_blocked(self, tmp_path):
+        """Claim ledger root JSON is a list → fail closed, no .get() call."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[]}',
+            encoding="utf-8",
+        )
+        cl_f.write_text("[]", encoding="utf-8")
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block root list claim: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "claim-ledger" in joined or "不是" in joined or "object" in joined.lower(), joined
+
+    def test_claim_ledger_root_null_blocked(self, tmp_path):
+        """Claim ledger root JSON is null → fail closed, no .get() call."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("claim sentence here.", encoding="utf-8")
+
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[]}',
+            encoding="utf-8",
+        )
+        cl_f.write_text("null", encoding="utf-8")
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert not all(r['pass'] for r in fact), f"Should block null claim: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "claim-ledger" in joined or "不是" in joined or "object" in joined.lower(), joined
+
     def test_evidence_item_not_dict_blocked(self, tmp_path):
         from data_sources.modules.write_pre_check import _run_fact_check
 
@@ -3073,17 +3177,13 @@ class TestEntryPointNumericClaimRejection:
         return ws, slug, draft_path, cl_path
 
     def test_w0_with_numeric_claim_text_fails_no_file_change(self, tmp_path, monkeypatch):
-        from datetime import UTC, datetime
-
         from seo_ops.services import legacy_workflow as lw
 
         ws, slug, draft_path, cl_path = self._prep_workspace(tmp_path, slug="numeric-w0")
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
-
-        # W0 clears old artifacts then tries to write to {slug}-{today}.md.
-        # If it fails before _write_ahead_draft_and_ledger, that file is
-        # never created and the old claim ledger stays deleted.
-        draft_expected = ws / "drafts" / f"{slug}-{today}.md"
+        draft_snapshot = draft_path.read_bytes()
+        cl_snapshot = cl_path.read_bytes()
+        state_path = ws / "reports" / f"w2-state-{slug}.json"
+        state_bytes_snapshot = state_path.read_bytes()
 
         async def fake_ai(purpose, *a, **kw):
             if purpose == "legacy_write_draft":
@@ -3111,12 +3211,50 @@ class TestEntryPointNumericClaimRejection:
         result = asyncio.run(lw.stage_w0_validate_and_draft("numeric w0", "Test", ws))
         assert result.get("success") is not True
 
-        # W0 cleared old artifacts then failed before writing → draft not created.
-        assert not draft_expected.exists(), (
-            f"Draft leaked after failed W0: {draft_expected}"
-        )
-        # Claim ledger was cleared by W0 re-entry, not re-created → absent.
-        assert not cl_path.exists(), "Claim ledger leaked after failed W0"
+        # W0 must not delete or alter existing artifacts on failure.
+        assert draft_path.read_bytes() == draft_snapshot, "old draft was modified"
+        assert cl_path.read_bytes() == cl_snapshot, "old claim ledger was modified"
+        assert state_path.read_bytes() == state_bytes_snapshot, "old w2 state was modified"
+
+    def test_w0_with_numeric_claim_type_fails_no_file_change(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path = self._prep_workspace(tmp_path, slug="numeric-w0-ctype")
+        draft_snapshot = draft_path.read_bytes()
+        cl_snapshot = cl_path.read_bytes()
+        state_path = ws / "reports" / f"w2-state-{slug}.json"
+        state_bytes_snapshot = state_path.read_bytes()
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_draft":
+                return (
+                    "---\nTitle: T\nSlug: numeric-w0-ctype\nAuthor: T\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough\n"
+                    "SEO Description: " + "B" * 152 + "\n"
+                    "SEO Keywords: t\n"
+                    "---\n\n"
+                    "# T\n\n"
+                    "claim body sentence.\n\n"
+                    "===CLAIM_LEDGER===\n"
+                    '{"version":1,"claims":[{"claim_text":"claim body sentence.",'
+                    '"claim_type":999,"evidence_ids":["ev_001"]}]}\n'
+                )
+            return ""
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("numeric w0 ctype", "Test", ws))
+        assert result.get("success") is not True
+
+        # W0 must not delete or alter existing artifacts on failure.
+        assert draft_path.read_bytes() == draft_snapshot, "old draft was modified"
+        assert cl_path.read_bytes() == cl_snapshot, "old claim ledger was modified"
+        assert state_path.read_bytes() == state_bytes_snapshot, "old w2 state was modified"
 
     def test_w1b_revise_with_numeric_claim_type_fails_no_file_change(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw

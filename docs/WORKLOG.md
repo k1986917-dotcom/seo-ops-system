@@ -1,5 +1,24 @@
 # 工作日志
 
+## 2026-07-29 — 证据驱动事实校验最终验收修复 (2 项)
+
+### 背景
+最终验收发现 f5d46b1 仍有两项未通过：`_run_fact_check` 在 evidence-ledger / claim-ledger 根 JSON 类型非 dict 时会在错误分支调用 `.get()`，导致 AttributeError；`stage_w0_validate_and_draft` 在 AI 输出验证前即清空旧 draft / claim-ledger / w2-state，使 W0 失败时丢失已有产物。
+
+### 完成
+- **Fix1 根 JSON 类型校验分离**：`data_sources/modules/write_pre_check.py` 的 `_run_fact_check` 对 `ev_data` / `cl_data` 先单独 `isinstance(..., dict)` 判断；非 dict 时产生结构化 blocking 并立即 `return`，该分支不再调用 `.get()`。dict 但 `version != 1` 时再用 `.get("version")` 构造错误信息。
+- **Fix1 测试**（4 个）：`test_evidence_ledger_root_list_blocked` / `test_evidence_ledger_root_null_blocked` / `test_claim_ledger_root_list_blocked` / `test_claim_ledger_root_null_blocked`，分别注入 `[]` / `null` 根类型，断言返回 fail、不抛异常、detail 含 ledger 类型错误。
+- **Fix2 W0 失败不删旧产物**：`src/seo_ops/services/legacy_workflow.py` 的 `stage_w0_validate_and_draft` 把 `clear_stage_artifacts(..., "w0")` 与 `claim-ledger-{slug}.json` 的删除移到 claim-ledger 校验成功之后。验证失败时直接返回错误，draft / claim-ledger / w2-state 保持原样。
+- **Fix2 测试**（1 修改 + 1 新增）：重写 `test_w0_with_numeric_claim_text_fails_no_file_change` 为断言旧 draft / claim-ledger / w2-state 字节级不变；新增 `test_w0_with_numeric_claim_type_fails_no_file_change` 覆盖 `claim_type` 数字类型场景。
+
+### 验证
+- `pytest tests/ -q`：300 passed（较前次 +5：4 个根类型 + 1 个 W0 claim_type）
+- `ruff check src/seo_ops/services/legacy_workflow.py data_sources/modules/write_pre_check.py tests/test_legacy_workflow.py`：5 个 pre-existing F841，无新增（较上次少 1 个 `today`）
+
+### 未完成 / 遗留
+- 未在 action-2 生产数据上验证（按要求）
+- W2 revise 备份路径使用原 draft 后缀；与 `_today_str()` 自动滚动后可能错位，需在 UI 提示
+
 ## 2026-07-28 — 证据驱动事实校验第三轮修订 (1 项 fail-closed)
 
 ### 背景

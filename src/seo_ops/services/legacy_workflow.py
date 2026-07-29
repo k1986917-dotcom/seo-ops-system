@@ -1607,21 +1607,12 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
 
     Re-running W0 invalidates everything from W1b onward (pre-check,
     post-process verdict, register, backlink suggestions) and the
-    w2-state verdict file. The invalidation runs even if W0 itself fails,
-    so a re-run that errors out still cleans up the previous attempt.
+    w2-state verdict file.  The invalidation happens AFTER the candidate
+    draft and claim-ledger have been validated, so a failed W0 run does
+    not delete or alter any existing artifacts.
     """
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
-    today = _today_str()
-
-    # Always invalidate downstream on re-entry, before any early-return.
-    # Use "w0" as the marker so the function also clears W0's own outputs
-    # (drafts, w2-state); the explicit old-draft loop below re-creates the draft.
-    clear_stage_artifacts(workspace, slug, "w0")
-    # Purge stale claim-ledger so an illegal W0 output cannot reuse old data.
-    cl_p = workspace / "research" / f"claim-ledger-{slug}.json"
-    if cl_p.exists():
-        cl_p.unlink()
 
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     if not mp:
@@ -1691,6 +1682,14 @@ Follow the system instructions. Output the full article Markdown, then
         return {"success": False, "error": str(exc), "report": report}
 
     cl_data["draft_sha256"] = hashlib.sha256(draft_md.encode("utf-8")).hexdigest()
+
+    # Candidate is valid: now invalidate old downstream artifacts and commit
+    # the new draft + claim-ledger atomically.  Until this point no existing
+    # draft, claim-ledger, or w2-state file has been touched.
+    clear_stage_artifacts(workspace, slug, "w0")
+    cl_p = workspace / "research" / f"claim-ledger-{slug}.json"
+    if cl_p.exists():
+        cl_p.unlink()
 
     # Write-ahead: write temp files then rename.
     _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
