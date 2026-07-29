@@ -74,7 +74,9 @@ from seo_ops.services.gsc_oauth import (
 )
 from seo_ops.services.hermes_orchestrator import (
     HermesOrchestrationError,
+    continue_hermes_run,
     create_or_resume_hermes_action,
+    existing_material_summary,
     hermes_prompt,
     hermes_status,
     run_hermes_bootstrap,
@@ -769,11 +771,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _w2_failure_message(result: dict) -> str:
         if result.get("needs_human_review"):
-            return "已用满 2 轮修订，评分仍未达标 → 需人工审阅，不进入注册"
+            return "本批 2 轮修订后评分仍未达标 → 已暂停；可再试一批 AI 修订或从 R0 重来，不能进入注册"
         if result.get("needs_force_confirmation"):
-            return "已用满 2 轮修订，蚕食仍超阈值 → 请确认角度确实不同后选择跳过蚕食门控"
-        left = result.get("rounds_left", 0)
-        return f"后处理未通过，可用 AI 修订（剩余 {left} 轮）或手动改稿后重跑"
+            return "本批 2 轮修订后蚕食仍超阈值 → 可再试一批，或在评分正常时确认角度不同并跳过蚕食门控"
+        return "后处理未通过，可启动一批最多 2 轮的 AI 修订，或从 R0 重新开始"
 
     @app.post("/actions/{action_id}/legacy/stage/w2-revise")
     async def legacy_w2_revise(action_id: int, request: Request):
@@ -854,13 +855,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except HermesOrchestrationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        status_code = 201 if outcome.status in {"success", "partial"} else 202
+        pipeline = None
+        # A normal Hermes request is managed end-to-end.  The single opt-out
+        # exists for API diagnostics and keeps the bootstrap endpoint useful
+        # when testing the R0/R1 bridge in isolation.
+        if (
+            outcome.stage == "r2_collect"
+            and bool(payload.get("auto_continue", True))
+        ):
+            pipeline = await continue_hermes_run(
+                outcome.action_id,
+                author=str(payload.get("author") or "LaserPointerHub"),
+                settings=active_settings,
+            )
+        material_summary = None
+        if outcome.stage == "r0_prompt" and outcome.status == "needs_manual_search":
+            material_summary = existing_material_summary(outcome.action_id, active_settings)
+        final_stage = pipeline.stage if pipeline else outcome.stage
+        final_status = pipeline.status if pipeline else outcome.status
+        status_code = 201 if final_status in {"success", "partial", "completed"} else 202
+        if pipeline:
+            next_action = "completed" if pipeline.status == "completed" else pipeline.waiting_for
+        elif outcome.status == "needs_manual_search":
+            next_action = "manual_search"
+        else:
+            next_action = "retry"
         return JSONResponse(
             {
                 "action_id": outcome.action_id,
-                "status": outcome.status,
-                "legacy_stage": outcome.stage,
-                "message": outcome.message,
+                "status": final_status,
+                "legacy_stage": final_stage,
+                "message": pipeline.message if pipeline else outcome.message,
                 "search": {
                     "status": outcome.search.status,
                     "query": outcome.search.query,
@@ -868,21 +893,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "message": outcome.search.message,
                 },
                 "r1": outcome.r1,
+                "material_summary": material_summary,
+                "pipeline": (
+                    {
+                        "status": pipeline.status,
+                        "stage": pipeline.stage,
+                        "message": pipeline.message,
+                        "waiting_for": pipeline.waiting_for,
+                        "steps": list(pipeline.steps),
+                    }
+                    if pipeline else None
+                ),
                 "prompt_endpoint": (
                     f"/api/hermes/runs/{outcome.action_id}/prompt"
                     if outcome.stage == "r0_prompt"
                     else None
                 ),
-                "next": (
-                    "r3"
-                    if outcome.stage == "r2_collect"
-                    else "manual_search"
-                    if outcome.status == "needs_manual_search"
-                    else "retry"
-                ),
+                "next": next_action,
             },
             status_code=status_code,
         )
+
+    @app.post("/api/hermes/runs/{action_id}/continue", response_class=JSONResponse)
+    async def hermes_continue_run(action_id: int, request: Request):
+        """Continue a paused Hermes run without requiring workspace access."""
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+        try:
+            outcome = await continue_hermes_run(
+                action_id,
+                search_decision=str(payload.get("search_decision") or "") or None,
+                search_results=str(payload.get("search_results") or ""),
+                author=str(payload.get("author") or "LaserPointerHub"),
+                settings=active_settings,
+            )
+        except HermesOrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "action_id": outcome.action_id,
+                "status": outcome.status,
+                "legacy_stage": outcome.stage,
+                "message": outcome.message,
+                "waiting_for": outcome.waiting_for,
+                "steps": list(outcome.steps),
+            },
+            status_code=200 if outcome.status == "completed" else 202,
+        )
+
+    @app.get("/api/hermes/runs/{action_id}/materials", response_class=JSONResponse)
+    async def hermes_existing_materials(action_id: int) -> dict[str, object]:
+        try:
+            return existing_material_summary(action_id, active_settings)
+        except HermesOrchestrationError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/hermes/runs/{action_id}", response_class=JSONResponse)
     async def hermes_run_status(action_id: int) -> dict[str, object]:

@@ -78,6 +78,14 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._record("POST")
+        if self.path.startswith("/api/hermes/runs/") and self.path.endswith("/continue"):
+            body = b'{"status":"paused","waiting_for":"review"}'
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self._send_redirect()
 
     def do_GET(self):
@@ -201,6 +209,18 @@ def test_r1_sends_search_results_form(mock_server):
     assert body["path"] == "/actions/1/legacy/stage/r1"
     assert "search_results" in body["form"]
     assert body["form"]["search_results"] == ["Sample search results line 1\nline 2\n"]
+
+
+def test_continue_uses_managed_endpoint(mock_server, tmp_path):
+    base_url, handler = mock_server
+    results = tmp_path / "results.md"
+    results.write_text("external results", encoding="utf-8")
+    proc = _run_script(
+        "continue.sh", ["--base-url", base_url, "--search-file", str(results), "1"]
+    )
+    assert proc.returncode == 0, f"stderr={proc.stderr!r}"
+    assert handler.received[0]["path"] == "/api/hermes/runs/1/continue"
+    assert b"manual_search" in handler.received[0]["body"]
 
 
 def test_w0_sends_author_form(mock_server):

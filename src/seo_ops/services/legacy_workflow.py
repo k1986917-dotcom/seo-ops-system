@@ -2240,7 +2240,10 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
         state["applied_draft_sha256"] = _sha256_file(draft)
     save_w2_state(workspace, slug, state)
 
-    rounds_left = max(0, MAX_REVISION_ROUNDS - _revision_rounds(state, "w2"))
+    # A click starts a fresh, bounded repair batch. The total revision count
+    # remains in state for audit and the narrowly-scoped cannibalisation
+    # confirmation, but it must not turn a later explicit click into a no-op.
+    rounds_left = MAX_REVISION_ROUNDS
 
     result: dict[str, Any] = {
         "success": gate_passed,
@@ -2252,7 +2255,7 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
         **metrics,
     }
 
-    if not gate_passed and rounds_left == 0:
+    if not gate_passed and _revision_rounds(state, "w2") >= MAX_REVISION_ROUNDS:
         # write/SKILL.md 段2: after 2 rounds — link problems do not block
         # publishing, but a score below the pass line stops the pipeline.
         result["needs_human_review"] = metrics["score_block"]
@@ -2294,7 +2297,12 @@ No preamble, no commentary, no code fence around the whole document."""
 
 
 async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
-    """One AI revision round, then re-run 段2. Capped at MAX_REVISION_ROUNDS."""
+    """Run one W2 AI revision, then re-run W1b and W2.
+
+    ``MAX_REVISION_ROUNDS`` limits a single explicit batch, not the lifetime
+    of an action. Earlier failures remain in the next prompt, so a new batch
+    is an informed retry rather than an invisible loop.
+    """
     slug = _slugify(topic)
     draft = _latest_file(f"drafts/{slug}-*.md", workspace)
     if not draft:
@@ -2302,15 +2310,10 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
 
     state = load_w2_state(workspace, slug)
     rounds = _revision_rounds(state, "w2")
-    if rounds >= MAX_REVISION_ROUNDS:
-        return {"success": False,
-                "error": f"已用满 {MAX_REVISION_ROUNDS} 轮修订。按 skill 规则不再自动修改，请人工审阅草稿。",
-                "rounds_used": rounds, "rounds_left": 0}
-
     if state.get("gate_passed") or state.get("applied"):
         return {"success": False,
                 "error": "草稿已通过预检或已发布，不得再修订",
-                "rounds_used": rounds, "rounds_left": MAX_REVISION_ROUNDS - rounds}
+                "rounds_used": rounds, "rounds_left": MAX_REVISION_ROUNDS}
 
     report = load_report(workspace, "post-process", slug)
     if not report:
@@ -2396,7 +2399,7 @@ Follow the system instructions. Output the full revised article Markdown, then
             "revised": True,
             "revision_round": rounds + 1,
             "rounds_used": rounds + 1,
-            "rounds_left": MAX_REVISION_ROUNDS - (rounds + 1),
+            "rounds_left": MAX_REVISION_ROUNDS,
             "backup": str(backup),
             "previous_metrics": metrics,
             "precheck_report": precheck.get("report", ""),
@@ -2416,7 +2419,7 @@ Follow the system instructions. Output the full revised article Markdown, then
 
 
 async def stage_w2_revise_batch(topic: str, workspace: Path, settings=None) -> dict:
-    """Run the remaining W2 revisions in this two-round quality window.
+    """Run one explicit W2 repair batch of at most two revisions.
 
     Every W2 revision already re-runs W1b before re-running W2.  Stop if that
     pre-check fails: continuing W2 would bypass the W1b gate.
@@ -2430,8 +2433,6 @@ async def stage_w2_revise_batch(topic: str, workspace: Path, settings=None) -> d
         if outcome.get("gate_passed"):
             return {**outcome, "batch_attempts": len(attempts), "batch_completed": True}
         if not outcome.get("revised") or outcome.get("stage") == "w1b_pre_check":
-            break
-        if _revision_rounds(load_w2_state(workspace, slug), "w2") >= MAX_REVISION_ROUNDS:
             break
     final = attempts[-1] if attempts else {"success": False, "error": "未执行修订"}
     return {**final, "batch_attempts": len(attempts), "batch_completed": True}
@@ -2709,7 +2710,14 @@ def get_legacy_display_data(topic: str, workspace: Path,
             "gate_passed": bool(state.get("gate_passed")),
             "applied": bool(state.get("applied")),
             "rounds_used": rounds_used,
-            "rounds_left": max(0, MAX_REVISION_ROUNDS - rounds_used),
+            "rounds_left": MAX_REVISION_ROUNDS,
+            "force_available": (
+                rounds_used >= MAX_REVISION_ROUNDS
+                and bool(metrics["cannibal_block"])
+                and not bool(metrics["score_block"])
+                and not bool(metrics["cannibal_error"])
+                and not bool(metrics["score_error"])
+            ),
         }
 
     register_report = load_report(workspace, "register", slug)

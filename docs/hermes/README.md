@@ -64,9 +64,11 @@ state machine via HTTP:
 
 ```
 1. For a new task SEO Ops exposes:
-   POST /api/hermes/runs             → intake + R0 + automatic search + R1
+   POST /api/hermes/runs             → intake + R0 + search + managed R1→W3
    GET  /api/hermes/runs/{id}        → stage/status report
    GET  /api/hermes/runs/{id}/prompt → R0 prompt for manual-search fallback
+   GET  /api/hermes/runs/{id}/materials → existing synced-material summary
+   POST /api/hermes/runs/{id}/continue → resume after an explicit search choice
 
    The remaining stage endpoints are:
    GET  /actions/{id}/legacy/             → list R0..W3 buttons
@@ -83,14 +85,20 @@ state machine via HTTP:
    data/seo_ops.db (SQLite). Hermes reads but never writes the DB
    directly.
 
-3. All workflow artifacts (search-prompt, material-pack, draft, reports)
+3. When automatic search is unavailable, Hermes must report the prompt and
+   existing-material summary, then wait for the operator to choose either
+   "use existing materials" or "paste external results". It must not invent
+   a search response. Once chosen, the continuation endpoint performs the
+   remaining safe stages and pauses after one two-round W1b/W2 repair batch.
+
+4. All workflow artifacts (search-prompt, material-pack, draft, reports)
    live under:
    data/legacy_workflow/laserpointerhub/runs/action-{id}/current/laserpointerhub/
 
-   Hermes can READ these for situational awareness but must invoke
-   stage HTTP endpoints to mutate them.
+   Hermes must invoke HTTP endpoints to mutate them; it does not need direct
+   filesystem access for normal operation.
 
-4. Hermes reports progress via its configured channel (Feishu by
+5. Hermes reports progress via its configured channel (Feishu by
    default — REDACTED in this repo).
 ```
 

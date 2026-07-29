@@ -8,6 +8,7 @@ from seo_ops.db import connection
 from seo_ops.services.external_evidence import ExternalRunResult
 from seo_ops.services.hermes_orchestrator import (
     collect_hermes_search_results,
+    continue_hermes_run,
 )
 from seo_ops.web.app import create_app
 
@@ -31,6 +32,8 @@ def test_hermes_start_creates_action_and_stops_for_manual_search(settings):
     assert body["legacy_stage"] == "r0_prompt"
     assert body["next"] == "manual_search"
     assert body["search"]["providers"] == []
+    assert body["material_summary"] is not None
+    assert "notice" in body["material_summary"]
     with connection(settings) as conn:
         action = conn.execute(
             "SELECT target_ref, decision, workflow_status, legacy_stage, baseline_json "
@@ -50,6 +53,60 @@ def test_hermes_start_creates_action_and_stops_for_manual_search(settings):
     assert status.json()["next_stage"].startswith("继续外部搜索")
     assert prompt.status_code == 200
     assert "SERP Analysis" in prompt.json()["prompt"]
+
+
+def test_hermes_continue_runs_remaining_safe_stages(settings, monkeypatch):
+    """The controller, rather than Hermes, owns the complete stage order."""
+    app = create_app(settings)
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/hermes/runs",
+            json={
+                "site": "laserpointerhub",
+                "topic": "Hermes pipeline controller test",
+                "auto_continue": False,
+            },
+        ).json()
+    action_id = started["action_id"]
+    with connection(settings) as conn:
+        conn.execute(
+            "UPDATE actions SET legacy_stage = 'r2_collect' WHERE id = ?", (action_id,)
+        )
+        conn.commit()
+
+    async def r3(*_args, **_kwargs):
+        return {"success": True, "stage": "r5_write_ready"}
+
+    async def w0(*_args, **_kwargs):
+        return {"success": True, "stage": "w1_draft"}
+
+    async def w1b(*_args, **_kwargs):
+        return {"success": True, "stage": "w1b_pre_check", "fail_count": 0}
+
+    async def w2(*_args, **kwargs):
+        return {
+            "success": True,
+            "gate_passed": True,
+            "stage": "w2_post_process" if kwargs.get("apply") else "w1b_pre_check",
+        }
+
+    async def w3(*_args, **_kwargs):
+        return {"success": True, "stage": "w3_register"}
+
+    monkeypatch.setattr("seo_ops.services.hermes_orchestrator.stage_r3_ai_analyze", r3)
+    monkeypatch.setattr("seo_ops.services.hermes_orchestrator.stage_w0_validate_and_draft", w0)
+    monkeypatch.setattr("seo_ops.services.hermes_orchestrator.stage_w1b_pre_check", w1b)
+    monkeypatch.setattr("seo_ops.services.hermes_orchestrator.stage_w2_post_process", w2)
+    monkeypatch.setattr("seo_ops.services.hermes_orchestrator.stage_w3_register", w3)
+    monkeypatch.setattr(
+        "seo_ops.services.hermes_orchestrator.get_legacy_display_data",
+        lambda *_args, **_kwargs: {"precheck_passed": True},
+    )
+
+    outcome = asyncio.run(continue_hermes_run(action_id, settings=settings))
+    assert outcome.status == "completed"
+    assert outcome.stage == "w3_register"
+    assert [step["step"] for step in outcome.steps] == ["r3", "w0", "w1b", "w2", "w2_apply", "w3"]
 
 
 def test_hermes_search_bridge_formats_new_system_results(settings, monkeypatch):

@@ -1313,3 +1313,39 @@ W0/W1b/W2 gate。
 - `ruff check src/seo_ops/services/legacy_sync.py src/seo_ops/web/app.py`：All checks passed。
 - 生产工作区 `data/legacy_workflow/laserpointerhub/` 在测试后未受污染（git diff 为 clean）。
 - 更新 `docs/KNOWN_ISSUES.md`：新增 9 条已修复记录到"已修复"表。
+## 2026-07-29 — Hermes 全流程托管、可恢复搜索确认与网页重启
+
+### 完成内容
+
+- `hermes_orchestrator.py` 新增受控总控制器：在后端顺序执行 R3 → W0 → W1b →
+  W2 → W3；W1b/W2 失败时只执行一批最多两轮 AI 修订，W2 的每次修订仍必须先
+  重新通过 W1b。任一失败都返回持久 action 的实际阶段、失败信息和等待动作，
+  不让 Hermes 猜下一步或直接改工作区。
+- 新增 `POST /api/hermes/runs/{id}/continue` 和 `GET /api/hermes/runs/{id}/materials`。
+  没有搜索提供商时，服务先保留 R0 提示词并提供现有同步资料摘要；运营者可明确
+  选择 `use_existing` 或提交原样人工搜索结果，系统绝不编造外部来源。
+- 新增 Hermes `scripts/continue.sh`，并同步更新 SKILL、README、安装说明和 Hermes
+  集成文档。配置搜索提供商的正常路径在 `start.sh` 后自动继续到 W3；无凭据时只在
+  正式确认点暂停。
+- W2 两轮调整为“一次明确修订请求的批次上限”，而不是永久锁死 action。每批后仍
+  保存失败摘要和草稿 SHA 供下一批 AI 使用。`--force` 保持仅蚕食、评分正常、检查器
+  正常、至少完成一批且人工确认写回的狭窄条件。
+- 网页 Legacy 卡在每个已开始阶段增加警戒色 `R0 重新开始此任务`，只重置当前
+  action；红色蚕食人工确认仍不是万能放行。
+
+### 验证
+
+- `.venv/bin/python -m compileall -q src tests`：通过。
+- `.venv/bin/pytest -q`：按所有 309 个已收集测试分两组完整执行，均为 100% 通过；
+  保留 1 条既有 Starlette/httpx 弃用警告。
+- `.venv/bin/python -m compileall -q src tests`、改动范围 `ruff check` 与
+  `git diff --check`：通过。全仓 Ruff 仍有 2 个既有测试 F841，均不在本次改动行。
+- 新增 ADR-0024，记录 Hermes 只能经 HTTP 托管、无搜索凭据的明确确认点、两轮批次
+  和不可绕过的 W1b/W2/W3 gate。
+
+### 遗留与下一步
+
+1. 使用真实主题分别跑“旧 Legacy”“网页新流程”“Hermes 托管流程”，对比研究资料、
+   搜索意图、文章结构、事实覆盖、FAQ、链接、W1b/W2/W3 结果；未完成前不得声称
+   三者实际文章质量完全等价。
+2. 真实服务配置及 API 凭据由本地运营环境负责；代码测试不得调用生产外部搜索或 AI。

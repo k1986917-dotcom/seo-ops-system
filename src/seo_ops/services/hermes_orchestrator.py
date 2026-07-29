@@ -1,8 +1,8 @@
-"""Hermes-facing orchestration for the first automatic Legacy slice.
+"""Hermes-facing orchestration for the Legacy Research + Write pipeline.
 
-This module is intentionally small: it owns intake/action creation and the
-R0 -> external search -> R1 bridge. Later stages still run through the
-existing Legacy stage functions and their frozen gates.
+The service owns the persistent action and all workspace writes.  Hermes only
+uses the HTTP surface exposed by :mod:`seo_ops.web.app`: it never needs to
+guess a stage, edit a draft, or touch SQLite directly.
 
 Hermes must not write the SQLite database or Legacy workspace itself. The
 HTTP route calls these functions, while this module is the only place that
@@ -12,6 +12,7 @@ translates new-system external search payloads into the old R1 text format.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -32,6 +33,13 @@ from seo_ops.services.legacy_workflow import (
     get_legacy_display_data,
     stage_r0_generate_prompt,
     stage_r1_save_and_collect,
+    stage_r3_ai_analyze,
+    stage_w0_validate_and_draft,
+    stage_w1b_pre_check,
+    stage_w1b_revise_batch,
+    stage_w2_post_process,
+    stage_w2_revise_batch,
+    stage_w3_register,
 )
 from seo_ops.utils import json_dumps, json_loads, utc_now
 
@@ -66,6 +74,18 @@ class HermesBootstrapOutcome:
     message: str
     search: HermesSearchOutcome
     r1: dict[str, Any] | None
+
+
+@dataclass(frozen=True, slots=True)
+class HermesPipelineOutcome:
+    """The truthful stopping point of one Hermes-controlled run."""
+
+    action_id: int
+    status: str
+    stage: str
+    message: str
+    steps: tuple[dict[str, Any], ...]
+    waiting_for: str | None = None
 
 
 def _clean_text(value: Any, limit: int) -> str:
@@ -407,6 +427,249 @@ async def run_hermes_bootstrap(
         "R0 已完成；自动搜索结果已交给 Legacy R1。下一步可继续 R3。",
         search,
         r1,
+    )
+
+
+def _action_for_pipeline(action_id: int, settings: Settings) -> dict[str, Any]:
+    with connection(settings) as conn:
+        row = conn.execute("SELECT * FROM actions WHERE id = ?", (action_id,)).fetchone()
+    if not row:
+        raise HermesOrchestrationError("action 不存在")
+    item = dict(row)
+    if item.get("action_type") != "create" or item.get("decision") != "accepted":
+        raise HermesOrchestrationError("该 action 不是可继续的已接受新文章任务")
+    if not _clean_text(item.get("target_ref"), 300):
+        raise HermesOrchestrationError("action 缺少文章主题")
+    return item
+
+
+def _update_pipeline_stage(action_id: int, stage: str, settings: Settings) -> None:
+    with connection(settings) as conn:
+        conn.execute(
+            "UPDATE actions SET legacy_stage = ?, updated_at = ? WHERE id = ?",
+            (stage, utc_now(), action_id),
+        )
+        conn.commit()
+
+
+def _existing_material_summary(workspace: Path, topic: str) -> dict[str, Any]:
+    """Describe synced material without pretending it is fresh web research.
+
+    This is deliberately a report for a human decision.  It never promotes a
+    library item to a verified fact, and it only becomes R1 input after the
+    operator explicitly selects ``use_existing``.
+    """
+    files = {
+        "topic_context": workspace / "context" / "topic-context.json",
+        "pain_points": workspace / "context" / "pain-points-library.md",
+        "case_studies": workspace / "context" / "case-studies-library.md",
+        "sources": workspace / "context" / "external-sources-library.md",
+        "published": workspace / "published" / "published-index.md",
+    }
+    available: list[dict[str, Any]] = []
+    excerpts: list[str] = []
+    for name, path in files.items():
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+        if not text:
+            continue
+        available.append({"kind": name, "characters": len(text)})
+        # The source libraries are already the user's synced evidence. Keep
+        # only a bounded excerpt in the decision response.
+        excerpts.append(f"## Existing {name}\n{text[:1800]}")
+    return {
+        "topic": topic,
+        "available": available,
+        "source_count": len(available),
+        "summary": "\n\n".join(excerpts)[:7000],
+        "can_continue": bool(available),
+        "notice": (
+            "这些是已同步的站内上下文/资料库，不是新搜索结果；选择继续不会伪造外部资料。"
+            "后续 W1b/W2 的证据门仍会照常拦截资料不足的草稿。"
+        ),
+    }
+
+
+def existing_material_summary(action_id: int, settings: Settings | None = None) -> dict[str, Any]:
+    active_settings = settings or get_settings()
+    action = _action_for_pipeline(action_id, active_settings)
+    workspace = action_workspace(
+        active_settings.data_dir / "legacy_workflow" / "laserpointerhub", action_id
+    )
+    return _existing_material_summary(workspace, str(action["target_ref"]))
+
+
+def _existing_material_r1_input(summary: dict[str, Any]) -> str:
+    """Create an explicitly labelled R1 input from already-synced material."""
+    return (
+        "# Hermes existing-material continuation\n\n"
+        "This input contains only material already present in the SEO Ops workspace. "
+        "It is not a substitute for a live SERP or new external evidence.\n\n"
+        f"Topic: {summary['topic']}\n\n"
+        f"{summary['summary']}\n"
+    )
+
+
+async def continue_hermes_run(
+    action_id: int,
+    *,
+    search_decision: str | None = None,
+    search_results: str = "",
+    author: str = "LaserPointerHub",
+    settings: Settings | None = None,
+) -> HermesPipelineOutcome:
+    """Resume one action through all safe automatic stages.
+
+    One call may execute R3→W3.  A quality failure triggers exactly one
+    two-round AI batch for the affected gate, then returns a persisted pause.
+    A later explicit call starts a new batch; this avoids an invisible infinite
+    loop while retaining the prior failure memory for the next revision prompt.
+    """
+    active_settings = settings or get_settings()
+    action = _action_for_pipeline(action_id, active_settings)
+    topic = str(action["target_ref"])
+    workspace = action_workspace(
+        active_settings.data_dir / "legacy_workflow" / "laserpointerhub", action_id
+    )
+    steps: list[dict[str, Any]] = []
+
+    def record(name: str, result: dict[str, Any]) -> None:
+        steps.append({
+            "step": name,
+            "success": bool(result.get("success", result.get("gate_passed", False))),
+            "stage": str(result.get("stage") or ""),
+            "error": str(result.get("error") or ""),
+            "batch_attempts": result.get("batch_attempts"),
+        })
+
+    stage = str(action.get("legacy_stage") or "r0_pending")
+    if stage == "r0_prompt":
+        if search_decision == "manual_search":
+            if not _clean_text(search_results, 100000):
+                return HermesPipelineOutcome(
+                    action_id, "waiting", stage,
+                    "已等待人工搜索结果；请粘贴完整结果后继续。", tuple(steps), "manual_search",
+                )
+            r1_input = search_results
+        elif search_decision == "use_existing":
+            summary = _existing_material_summary(workspace, topic)
+            if not summary["can_continue"]:
+                return HermesPipelineOutcome(
+                    action_id, "waiting", stage,
+                    "当前没有足以提交给 Legacy R1 的已同步材料；请人工粘贴搜索结果。",
+                    tuple(steps), "manual_search",
+                )
+            r1_input = _existing_material_r1_input(summary)
+        else:
+            return HermesPipelineOutcome(
+                action_id, "waiting", stage,
+                "自动搜索不可用。请明确选择使用已有资料继续，或人工粘贴搜索结果。",
+                tuple(steps), "search_decision",
+            )
+        r1 = await stage_r1_save_and_collect(topic, r1_input, workspace)
+        record("r1", r1)
+        _update_pipeline_stage(action_id, str(r1.get("stage") or "r1_results"), active_settings)
+        if not r1.get("success"):
+            return HermesPipelineOutcome(
+                action_id, "failed", str(r1.get("stage") or "r1_results"),
+                str(r1.get("error") or "Legacy R1 收集失败"), tuple(steps), "repair_input",
+            )
+        stage = "r2_collect"
+
+    if stage == "r2_collect":
+        r3 = await stage_r3_ai_analyze(topic, workspace, active_settings)
+        record("r3", r3)
+        _update_pipeline_stage(action_id, str(r3.get("stage") or "r2_collect"), active_settings)
+        if not r3.get("success"):
+            return HermesPipelineOutcome(
+                action_id, "failed", str(r3.get("stage") or "r2_collect"),
+                str(r3.get("error") or "R3 AI 分析失败"), tuple(steps), "repair_research",
+            )
+        stage = "r5_write_ready"
+
+    if stage == "r5_write_ready":
+        w0 = await stage_w0_validate_and_draft(topic, author or "LaserPointerHub", workspace, active_settings)
+        record("w0", w0)
+        _update_pipeline_stage(action_id, str(w0.get("stage") or "r5_write_ready"), active_settings)
+        if not w0.get("success"):
+            return HermesPipelineOutcome(
+                action_id, "failed", str(w0.get("stage") or "r5_write_ready"),
+                str(w0.get("error") or "W0 写作失败"), tuple(steps), "repair_draft",
+            )
+        stage = "w1_draft"
+
+    if stage == "w1_draft":
+        w1b = await stage_w1b_pre_check(topic, "", workspace)
+        record("w1b", w1b)
+        _update_pipeline_stage(action_id, str(w1b.get("stage") or "w1_draft"), active_settings)
+        if not w1b.get("success"):
+            return HermesPipelineOutcome(
+                action_id, "failed", str(w1b.get("stage") or "w1_draft"),
+                str(w1b.get("error") or "W1b 预检无法完成"), tuple(steps), "repair_draft",
+            )
+        stage = "w1b_pre_check"
+
+    if stage == "w1b_pre_check":
+        display = get_legacy_display_data(topic, workspace, db_stage="w1b_pre_check")
+        if not display.get("precheck_passed"):
+            w1b_batch = await stage_w1b_revise_batch(topic, "", workspace, active_settings)
+            record("w1b_revise", w1b_batch)
+            _update_pipeline_stage(action_id, str(w1b_batch.get("stage") or "w1b_pre_check"), active_settings)
+            if not w1b_batch.get("gate_passed"):
+                return HermesPipelineOutcome(
+                    action_id, "paused", "w1b_pre_check",
+                    str(w1b_batch.get("error") or "W1b 两轮自动修订后仍未通过"),
+                    tuple(steps), "w1b_retry_or_restart",
+                )
+
+        w2 = await stage_w2_post_process(topic, workspace)
+        record("w2", w2)
+        _update_pipeline_stage(action_id, str(w2.get("stage") or "w1b_pre_check"), active_settings)
+        if not w2.get("gate_passed"):
+            if w2.get("error"):
+                return HermesPipelineOutcome(
+                    action_id, "paused", "w1b_pre_check", str(w2["error"]), tuple(steps), "w2_review",
+                )
+            w2_batch = await stage_w2_revise_batch(topic, workspace, active_settings)
+            record("w2_revise", w2_batch)
+            _update_pipeline_stage(action_id, str(w2_batch.get("stage") or "w1b_pre_check"), active_settings)
+            if not w2_batch.get("gate_passed"):
+                return HermesPipelineOutcome(
+                    action_id, "paused", str(w2_batch.get("stage") or "w1b_pre_check"),
+                    str(w2_batch.get("error") or "W2 两轮自动修订后仍未通过"),
+                    tuple(steps), "w2_retry_or_restart",
+                )
+
+        apply = await stage_w2_post_process(topic, workspace, apply=True)
+        record("w2_apply", apply)
+        _update_pipeline_stage(action_id, str(apply.get("stage") or "w1b_pre_check"), active_settings)
+        if not apply.get("gate_passed") or not apply.get("success"):
+            return HermesPipelineOutcome(
+                action_id, "failed", str(apply.get("stage") or "w1b_pre_check"),
+                str(apply.get("error") or "W2 写回失败"), tuple(steps), "w2_review",
+            )
+        stage = "w2_post_process"
+
+    if stage == "w2_post_process":
+        w3 = await stage_w3_register(topic, workspace, active_settings)
+        record("w3", w3)
+        _update_pipeline_stage(action_id, str(w3.get("stage") or "w2_post_process"), active_settings)
+        if not w3.get("success"):
+            return HermesPipelineOutcome(
+                action_id, "failed", str(w3.get("stage") or "w2_post_process"),
+                str(w3.get("error") or "W3 注册失败"), tuple(steps), "repair_registration",
+            )
+        return HermesPipelineOutcome(
+            action_id, "completed", "w3_register", "文章已通过全部门禁并完成 W3 注册。", tuple(steps), None,
+        )
+
+    if stage == "w3_register":
+        return HermesPipelineOutcome(
+            action_id, "completed", stage, "任务此前已完成 W3 注册。", tuple(steps), None,
+        )
+    return HermesPipelineOutcome(
+        action_id, "paused", stage, "当前阶段需要先修复输入或从 R0 重新开始。", tuple(steps), "review",
     )
 
 

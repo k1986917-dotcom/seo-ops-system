@@ -21,9 +21,11 @@ rm -rf ~/.hermes/skills/software-development/seo-ops-orchestrator/
 ## What this skill does
 
 For a new task, `start.sh` creates/resumes the action, runs R0, calls the
-configured SerpAPI/Tavily providers, and feeds the immutable search snapshot
-into Legacy R1. The remaining stage scripts POST to the corresponding SEO Ops
-endpoints for the existing deterministic pipeline.
+configured SerpAPI/Tavily providers, feeds the immutable search snapshot into
+Legacy R1, and lets the service continue through W3 when every gate passes.
+If no provider is configured, the response includes the exact R0 prompt and a
+bounded summary of already-synced materials. Hermes asks the operator whether
+to use those materials or supply external results, then calls `continue.sh`.
 The skill never writes to the workspace or the SQLite database directly;
 all state changes go through HTTP.
 
@@ -41,14 +43,16 @@ Override per-call with `--base-url`.
 
 - `SKILL.md` — Hermes-format skill definition (frontmatter + workflow)
 - `scripts/start.sh` — intake + R0 + automatic search + R1
+- `scripts/continue.sh` — resume the managed pipeline; choose existing
+  materials or an operator-supplied search-result file when needed
 - `scripts/detect_stage.sh` — read current stage
 - `scripts/r0.sh` — generate search prompt
 - `scripts/r1.sh` — save search results + run collect
-- `scripts/r2-revise.sh` — AI revises draft (separate from W2)
 - `scripts/r3.sh` — AI analysis + score
 - `scripts/w0.sh` — validate + draft
 - `scripts/w1b.sh` — pre-check (15 items)
 - `scripts/w2.sh` — post-process
+- `scripts/w2-revise.sh` — AI revision plus mandatory W1b/W2 rechecks
 - `scripts/w3.sh` — register
 - `scripts/lib.sh` — shared helpers (curl wrapper, error handling)
 - `install.sh` — deploy this skill to `~/.hermes/skills/`
@@ -65,16 +69,17 @@ Override per-call with `--base-url`.
 # Run R1 with operator-pasted search results
 ./scripts/r1.sh 99 < /path/to/search-results.md
 
-# Run all stages in sequence (only when fully synthetic data is in place)
-for s in r0 r1 r3 w0 w1b w2 w3; do
-    ./scripts/${s}.sh 99
-done
+# Continue a no-provider action with existing synced material
+./scripts/continue.sh --use-existing 99
+
+# Or continue with external results collected by the operator
+./scripts/continue.sh --search-file /path/to/search-results.md 99
 ```
 
 ## Exit codes
 
-- `0` — HTTP 200, 303, or 4xx (operator-visible error)
-- `1` — connection failed, timeout, or unexpected HTTP status
+- `0` — the service accepted the request (including a truthful paused state)
+- `1` — connection failed, timeout, or an unexpected HTTP status
 
 `curl` exit codes are translated: 0, 22, 7, 28 → all become 1.
 

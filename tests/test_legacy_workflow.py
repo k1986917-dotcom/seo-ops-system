@@ -1099,7 +1099,7 @@ class TestRevisionLoop:
         _write(tmp_path / "material-packs" / "test-topic-2026-01-01.md", "pack")
         lw.save_w2_state(tmp_path, "test-topic", _state_for(draft))
 
-    def test_revision_refused_after_cap(self, tmp_path):
+    def test_revision_can_start_a_new_explicit_batch_after_prior_cap(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
         draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
@@ -1110,10 +1110,18 @@ class TestRevisionLoop:
         )
         lw.save_report(tmp_path, "post-process", "test-topic", _POST_PROCESS_REPORT)
 
+        called = []
+
+        async def no_model(*args, **kwargs):
+            called.append(True)
+            raise RuntimeError("synthetic model unavailable")
+
+        monkeypatch.setattr(lw, "_run_ai_text", no_model)
+
         result = asyncio.run(lw.stage_w2_revise("test topic", tmp_path))
         assert result["success"] is False
-        assert "2 轮" in result["error"]
-        assert result["rounds_left"] == 0
+        assert called, "a later explicit batch must reach the reviser"
+        assert "synthetic model unavailable" in result["error"]
 
     def test_w1b_batch_retries_once_then_stops_on_pass(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw
@@ -1615,7 +1623,9 @@ class TestDisplayData:
         assert "POST-PROCESS" in data["post_process_report"]
         assert data["w2"]["score"] == 64.5
         assert data["w2"]["rounds_used"] == 1
-        assert data["w2"]["rounds_left"] == 1
+        # The displayed allowance is for the next explicitly requested batch,
+        # not a lifetime cap shared by every future operator retry.
+        assert data["w2"]["rounds_left"] == 2
 
     def test_backlink_checklist_surfaced(self, tmp_path):
         from seo_ops.services import legacy_workflow as lw
@@ -2096,6 +2106,11 @@ class TestPrecheckGateDisplay:
         # AI-revise + rerun SHOULD be present.
         assert any(f.endswith("/legacy/stage/w1b-revise") for f in forms), (
             f"AI-revise + rerun W1b button missing: {forms}"
+        )
+        # R0 restart stays available after the task has started, even when a
+        # later gate is blocking progress.
+        assert any(f.endswith("/legacy/stage/r0") for f in forms), (
+            f"R0 restart button missing from blocked stage: {forms}"
         )
         # Warning banner is shown.
         assert "legacy-warning" in body, "Warning banner missing"

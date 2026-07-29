@@ -22,6 +22,14 @@
     {% endfor %}
   </div>
 
+  {% if stage != "r0_pending" %}
+    <form method="post" action="/actions/{{ action.id }}/legacy/stage/r0" class="legacy-restart"
+          onsubmit="return confirm('从 R0 重新开始此任务？当前调研、草稿和检查产物会被当前任务的新一轮内容替换。')">
+      <button type="submit" class="button button-restart">↺ R0 重新开始此任务</button>
+      <span>用于换主题角度或放弃当前草稿；不会影响其他任务。</span>
+    </form>
+  {% endif %}
+
   {% if stage == "r0_pending" %}
     <form method="post" action="/actions/{{ action.id }}/legacy/stage/r0">
       <p class="legacy-hint">系统将为该主题生成搜索提示词。请复制到 Perplexity / ChatGPT / Kimi 搜索，然后把完整结果粘贴回来。</p>
@@ -182,9 +190,9 @@
           <button type="submit" class="button">运行后处理检查</button>
         </form>
 
-        {% if l.get("post_process_report") and not w2.get("gate_passed") and w2.get("rounds_left", 2) > 0 %}
+        {% if l.get("post_process_report") and not w2.get("gate_passed") %}
         <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2-revise" style="display:inline; margin-left:0.5rem">
-          <button type="submit" class="button button-secondary">AI 修订并重跑（剩余 {{ w2.rounds_left }} 轮）</button>
+          <button type="submit" class="button button-secondary">AI 修订并重跑（本次最多 2 轮）</button>
         </form>
         {% endif %}
 
@@ -206,11 +214,11 @@
       {% endif %}
     </div>
 
-    {% if precheck_passed and w2.get("rounds_left") == 0 and not w2.get("gate_passed") %}
+    {% if precheck_passed and w2.get("rounds_used", 0) >= 2 and not w2.get("gate_passed") %}
       {% if w2.get("score_block") %}
         <p class="legacy-hint">⚠️ 需人工审阅：已用满 2 轮修订，评分仍低于 70。按 skill 规则不进入注册，请人工改稿后重跑后处理。</p>
       {% endif %}
-      {% if w2.get("cannibal_block") %}
+      {% if w2.get("force_available") %}
         <p class="legacy-hint">⚠️ 蚕食门控仍未通过（相似度 {{ w2.cannibal }} ≥ 0.55）。只有当你确认本文与报告中列出的旧文章角度确实不同（同站术语重叠造成的 TF-IDF 误报）时，才可跳过该门控。</p>
         <form method="post" action="/actions/{{ action.id }}/legacy/stage/w2" style="display:inline"
               onsubmit="return confirm('确认本文与已发布文章角度确实不同，跳过蚕食门控？\n\n这会绕过 SEO 蚕食保护，请先读完后处理报告中列出的相似文章。')">

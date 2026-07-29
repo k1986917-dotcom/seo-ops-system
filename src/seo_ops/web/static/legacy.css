@@ -48,6 +48,14 @@
 .legacy-actions { margin-top: 0.75rem; }
 .legacy-card .button { margin-top: 0.5rem; }
 .legacy-card .button-secondary { background: #5f6368; }
+.legacy-restart {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+  margin: 0.35rem 0 0.75rem; padding: 0.45rem 0.6rem;
+  border-left: 3px solid #d97706; background: #fffbeb; font-size: 0.78rem; color: #713f12;
+}
+.legacy-restart .button { margin: 0; }
+.legacy-card .button-restart { background: #b45309; color: #fff; }
+.legacy-card .button-restart:hover { background: #92400e; }
 .legacy-card .button-danger { background: #b3261e; color: #fff; }
 .legacy-card .button-danger:hover { background: #8c1d18; }
 

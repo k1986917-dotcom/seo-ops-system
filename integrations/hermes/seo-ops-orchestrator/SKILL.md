@@ -37,10 +37,16 @@ a thin orchestrator that converts operator intent into POST requests.
     would change research; otherwise use site defaults.
   - Do not ask for an author unless the user requests a different byline;
     `LaserPointerHub` is the default.
-- Run `scripts/start.sh --site ... --topic ... [--requirements ...]`.
-- Report the provider results and current Legacy stage. If the response is
-  `needs_manual_search`, show the status and ask whether the operator wants to
-  paste external search results.
+- Run `scripts/start.sh --site ... --topic ... [--requirements ...]`. With
+  configured providers, SEO Ops continues the full R0→W3 pipeline itself.
+- If the response is `needs_manual_search`, report both the existing synced
+  materials and the generated search prompt, then ask the operator to choose:
+  use the existing materials, or paste external search results. Do not invent
+  results or silently assume that the materials are sufficient.
+- Resume with `scripts/continue.sh --use-existing <action_id>` or
+  `scripts/continue.sh --search-file results.md <action_id>`. The server then
+  performs all safe remaining stages and pauses after one two-round repair
+  batch if W1b/W2 still fails.
 - Operator accepts a research candidate and asks Hermes to start the article
 - Operator pastes search results and asks Hermes to advance to AI analysis
 - Operator wants to know the current stage of an article
@@ -71,6 +77,7 @@ Override per-call via `--base-url` flag.
 | Script | HTTP call | Purpose |
 |--------|-----------|---------|
 | `scripts/start.sh` | `POST /api/hermes/runs` | Intake + R0 + automatic search + R1 |
+| `scripts/continue.sh` | `POST /api/hermes/runs/{id}/continue` | Continue through R3→W3 or choose the manual-search branch |
 | `scripts/detect_stage.sh` | `GET /actions` | Read current stage of an action |
 | `scripts/r0.sh` | `POST /actions/{id}/legacy/stage/r0` | Generate search prompt |
 | `scripts/r1.sh` | `POST /actions/{id}/legacy/stage/r1` | Save search results + run collect |
@@ -87,35 +94,18 @@ on success, and exit 0. On failure they exit non-zero with the response body.
 
 ```
 1. scripts/start.sh --site <site> --topic <topic> [--requirements <text>]
-   → creates/resumes one action, runs R0, searches configured providers, and
-     runs R1 automatically
+   → creates/resumes one action, runs R0, searches configured providers, then
+     automatically continues R1→R3→W0→W1b→W2→W3 when all gates pass
 
 2. (only if start.sh returned needs_manual_search)
-   → report the generated prompt and ask whether the operator will paste results
+   → report the generated prompt + existing material summary and ask whether
+     to use those materials or paste external search results
 
-3. (only when manual search was selected)
-   scripts/r1.sh <action_id> < search_results.md
-   → collect script runs; data + score produced
-
-4. scripts/r3.sh <action_id>
-   → AI writes material-pack + brief
-
-5. scripts/w0.sh <action_id>
-   → AI writes draft
-
-6. scripts/w1b.sh <action_id>
-   → 15-item pre-check runs
-
-7. (if pre-check has failures)
-   POST /actions/{id}/legacy/stage/w2-revise
-   → AI revises, re-runs W1b + W2
-
-8. scripts/w2.sh <action_id>
-   → post-process (link + cannibal + score)
-
-9. (if gate passed and applied)
-   scripts/w3.sh <action_id>
-   → register + backlink checklist
+3. scripts/continue.sh --use-existing <action_id>
+   or scripts/continue.sh --search-file results.md <action_id>
+   → R1 through W3 run automatically. W1b/W2 use at most two revisions per
+     batch, never bypass their evidence/quality gates, and pause truthfully if
+     a batch still fails.
 ```
 
 ## Failure recovery
