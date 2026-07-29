@@ -1,5 +1,25 @@
 # 工作日志
 
+## 2026-07-28 — 证据驱动事实校验第二轮修订 (2 项必修)
+
+### 背景
+第二轮复测发现两处必修漏洞：原子写回滚未处理「旧文件原本不存在」场景（旧文件缺失时只能 restore 有内容，无法 unlink 第一次已替换进去的新文件）；`_run_fact_check` 在 `strip`/`[:12]` 之前没有对 ledger 字段做类型校验，非 str 类型（如 `evidence_id=123`）会直接 AttributeError。
+
+### 完成
+- **第二轮 Fix1 原子写回滚补齐**：`_write_ahead_draft_and_ledger` 增加 `draft_existed` / `cl_existed` 与 `draft_replaced` / `cl_replaced` 标志；rollback 区分三种情况：旧文件存在 → restore 旧内容；旧文件不存在但被 replace 创建 → unlink；旧文件不存在且 replace 未发生 → 不动。保证 rollback 后状态永远是「两个旧版本（含都不存在）」或「两个新版本」，杜绝「new draft + 无/旧 ledger」。
+- **第二轮 Fix2 fact check 字段类型校验**：`_run_fact_check` 中所有 ledger 字段在 strip / slice 之前先 `isinstance(..., str)`：evidence_id、source_url、quote、key_finding、claim_text、claim_type、material_pack_sha256、draft_sha256、evidence_ids 每项。非 str 产生结构化 blocking 项（含字段名 + 实际类型），绝不 AttributeError；evidence_ids 错误信息新增条目索引便于定位。
+- **第二轮 Fix1 测试**：`test_second_replace_failure_removes_both_when_neither_existed`：初始 draft + claim ledger 都不存在，第二次 replace 失败后两者必须都不存在（杜绝新 draft 泄漏）。
+- **第二轮 Fix2 测试**：7 个字段类型错误测试 `test_evidence_id_int_blocked` / `test_source_url_int_blocked` / `test_claim_text_int_blocked` / `test_claim_type_int_blocked` / `test_material_pack_sha_int_blocked` / `test_draft_sha_int_blocked` / `test_evidence_ids_entry_int_blocked`，每个用 `123` 整型注入对应字段，断言产生结构化 blocking 且 detail 含字段名 + 类型错误字样。
+
+### 验证
+- `pytest tests/ -q`：282 passed（较前次 +8：1 个原子写 + 7 个 fact check 字段类型）
+- `ruff check` 6 个 pre-existing F841，无新增
+- HEAD: `7c351aa97663e008e192fc85e4cb72832f5c4cf6`
+
+### 未完成 / 遗留
+- 未在 action-2 生产数据上验证（按要求）
+- W2 revise 备份路径使用原 draft 后缀；与 `_today_str()` 自动滚动后可能错位，需在 UI 提示
+
 ## 2026-07-28 — 证据驱动事实校验复测修订 (6 项必修)
 
 ### 背景

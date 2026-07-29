@@ -2,6 +2,19 @@
 
 所有用户可见变化记录在此。版本遵循语义化版本。
 
+## [0.11.3] - 2026-07-28
+
+### Fixed
+
+- **原子写回滚处理旧文件缺失**：`_write_ahead_draft_and_ledger` rollback 现在区分「旧文件存在 → restore 旧内容」与「旧文件不存在 → unlink 第一次已替换进去的新文件」。杜绝新 draft 单独泄漏，保证 rollback 后永远是「两个旧版本（含都不存在）」或「两个新版本」。
+- **`_run_fact_check` 字段类型校验前置**：所有 ledger 字段（evidence_id、source_url、quote、key_finding、claim_text、claim_type、material_pack_sha256、draft_sha256、evidence_ids 每项）在任何 `strip` / `[:12]` 操作之前先做 `isinstance(..., str)` 校验；非 str 类型产生结构化 blocking 项（含字段名 + 实际类型），绝不抛 AttributeError。
+
+### 测试覆盖新增
+
+- `test_second_replace_failure_removes_both_when_neither_existed`：初始 draft + claim ledger 都不存在 → 第二次 replace 失败 → 两者必须都不存在。
+- 7 个字段类型错误测试（evidence_id / source_url / claim_text / claim_type / material_pack_sha256 / draft_sha256 / evidence_ids 每项）注入整型 123，断言产生结构化 blocking 且 detail 含字段名 + 类型错误字样。
+- 完整测试：282 passed；`ruff check` 6 个 pre-existing F841，无新增。
+
 ## [0.11.2] - 2026-07-28
 
 ### Fixed

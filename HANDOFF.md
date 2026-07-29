@@ -4,7 +4,13 @@
 
 ## 一句话状态
 
-源码 `0.11.2`（uncommitted）、SQLite v13。证据驱动事实校验复测 6 项全部修完：W2 revise 走证据闭环 + 真正原子写 + W0/W1b 句子提取统一 + fact check schema fail-closed + 通过后拒绝 revise + 真实端到端测试。旧文章制作通道不变。
+源码 `0.11.3`（uncommitted）、SQLite v13。证据驱动事实校验第二轮复测 2 项全部修完：原子写回滚处理旧文件缺失场景（rollback 后永远「两个旧版本（含都不存在）」或「两个新版本」）；`_run_fact_check` 全部 ledger 字段在 strip/slice 前先做 `isinstance(..., str)` 类型校验，非 str 产生结构化 blocking 绝不 AttributeError。旧文章制作通道不变。
+
+## 2026-07-28 — 证据驱动事实校验第二轮修订 (0.11.3)
+
+- **原子写回滚处理旧文件缺失**：`_write_ahead_draft_and_ledger` 增加 `draft_existed` / `cl_existed` 与 `draft_replaced` / `cl_replaced` 标志；rollback 区分「旧存在 → restore」「旧不存在 → unlink 新文件」「未 replace → 不动」。杜绝新 draft 单独泄漏。
+- **`_run_fact_check` 字段类型校验前置**：所有字段（evidence_id、source_url、quote、key_finding、claim_text、claim_type、material_pack_sha256、draft_sha256、evidence_ids 每项）在 strip/slice 前先 `isinstance(..., str)`；非 str 产生结构化 blocking（含字段名 + 实际类型）。
+- 完整 `pytest -q` 282 passed（新增 8 个测试：1 个原子写 + 7 个字段类型），`ruff check` 6 个 pre-existing F841 无新增。
 
 ## 2026-07-28 — 证据驱动事实校验复测修订 (0.11.2)
 
