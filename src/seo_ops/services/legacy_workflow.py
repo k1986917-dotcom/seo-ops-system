@@ -942,6 +942,10 @@ def _extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
     return sentences
 
 
+_CANONICAL_KEYS = frozenset({"version", "claims"})
+_CLAIM_ALLOWED_KEYS = frozenset({"sentence_id", "claim_type", "evidence_ids", "claim_text"})
+
+
 def _validate_claim_ledger_with_sentence_ids(
     data: dict, sentences: list[dict[str, str]],
 ) -> dict:
@@ -952,24 +956,30 @@ def _validate_claim_ledger_with_sentence_ids(
 
     1.  Check the JSON schema (version, claims list) the same way
         ``_validate_claim_ledger_json`` does.
-    2.  For each claim:
-        *   Require a non-empty str ``sentence_id``.
+    2.  **Reject unknown keys** at the top level and on each claim.
+    3.  For each claim:
+        *   Require a non-empty str ``sentence_id`` matched **exactly**
+            (no whitespace trimming, no tolerance).
         *   Resolve ``sentence_id`` against ``sentences``; unknown IDs fail.
         *   **Ignore** any ``claim_text`` returned by the model and replace
             it with the server-side original sentence text (``text``).
         *   Validate ``claim_type`` and ``evidence_ids`` with the same strict
             type/emptiness rules as ``_validate_claim_ledger_json``.
-    3.  Run a final belt-and-suspenders check that the server-filled
-        ``claim_text`` normalizes (using ``_normalize_claim``) to the same
-        value as the matching ``norm`` — this should always be true, and
-        guards against any future drift in the tokenizer.
+    4.  Build the canonical ledger dict with server-filled ``claim_text``
+        and a persisted ``sentence_id`` on each claim.
 
-    Returns the canonical ledger dict with server-filled ``claim_text``
-    and a persisted ``sentence_id`` on each claim.  Raises ``ValueError``
-    with a concrete, non-sensitive reason on any failure.
+    Raises ``ValueError`` with a concrete, non-sensitive reason on any failure.
+    The caller (**not** this helper) must pass the canonical result through
+    ``_validate_claim_ledger_json`` as the final authoritative gate.
     """
     if not isinstance(data, dict):
         raise ValueError("CLAIM_LEDGER must be a JSON object")
+    unknown_top = {k for k in data if k not in _CANONICAL_KEYS}
+    if unknown_top:
+        raise ValueError(
+            f"CLAIM_LEDGER contains unknown field(s): "
+            f"{' '.join(sorted(unknown_top))}"
+        )
     if data.get("version") != 1:
         raise ValueError(
             f"CLAIM_LEDGER version must be 1, got {data.get('version')}"
@@ -988,13 +998,19 @@ def _validate_claim_ledger_with_sentence_ids(
     for idx, c in enumerate(claims):
         if not isinstance(c, dict):
             raise ValueError(f"claims[{idx}] is not a dict")
+        unknown_claim = {k for k in c if k not in _CLAIM_ALLOWED_KEYS}
+        if unknown_claim:
+            raise ValueError(
+                f"claims[{idx}] contains unknown field(s): "
+                f"{' '.join(sorted(unknown_claim))}"
+            )
         sid = c.get("sentence_id")
-        if not isinstance(sid, str) or not sid.strip():
+        if not isinstance(sid, str) or not sid:
             raise ValueError(
                 f"claims[{idx}].sentence_id is missing, empty, or not a str"
             )
-        sentence = by_id.get(sid.strip())
-        if sentence is None:
+        # Exact match: no .strip() tolerance.
+        if sid not in by_id:
             raise ValueError(
                 f"claims[{idx}].sentence_id '{sid}' is not in the draft "
                 f"sentence list"
@@ -1022,34 +1038,14 @@ def _validate_claim_ledger_with_sentence_ids(
     # legitimately support multiple evidence-led claims of different types).
     canonical_claims: list[dict[str, Any]] = []
     for c in claims:
-        sentence = by_id[c["sentence_id"].strip()]
+        sentence = by_id[c["sentence_id"]]
         claim = {
             "sentence_id": sentence["sentence_id"],
             "claim_text": sentence["text"],
             "claim_type": c["claim_type"].strip(),
             "evidence_ids": list(c["evidence_ids"]),
         }
-        # Belt-and-suspenders: the server-filled text must normalize exactly
-        # to the value the sentence-id system computed at extraction time.
-        if _normalize_claim(claim["claim_text"]) != sentence["norm"]:
-            raise ValueError(
-                f"claims[?] sentence_id {sentence['sentence_id']} "
-                f"server-fill normalize mismatch (internal consistency)"
-            )
         canonical_claims.append(claim)
-
-    # Re-run the authoritative full-sentence matcher on server-filled text.
-    # This can never reject when the tokenizer is consistent, but it protects
-    # the invariant that anything written to disk passes the gate.
-    normalized_draft = {s["norm"] for s in sentences}
-    for idx, c in enumerate(canonical_claims):
-        if c.get("claim_text") is None or not isinstance(c["claim_text"], str):
-            raise ValueError(f"canonical claims[{idx}].claim_text missing")
-        if _normalize_claim(c["claim_text"]) not in normalized_draft:
-            raise ValueError(
-                f"canonical claims[{idx}] sentence_id {c['sentence_id']} "
-                f"did not normalize-match the draft (internal consistency)"
-            )
 
     canonical = {"version": 1, "claims": canonical_claims}
     return canonical
@@ -2215,7 +2211,15 @@ Return the JSON object only."""
         data = json.loads(clean)
     except Exception as exc:
         raise ValueError(f"CLAIM_LEDGER JSON parse failed: {exc}") from None
-    return _validate_claim_ledger_with_sentence_ids(data, sentences)
+    canonical = _validate_claim_ledger_with_sentence_ids(data, sentences)
+    # Re-validate the canonical output through the authoritative
+    # _validate_claim_ledger_json.  Both `_normalize_claim` and the
+    # belt-and-suspenders checks in the helper should already guarantee
+    # this passes, but re-running the canonical string serves as the
+    # final, single source-of-truth gate that every persisted ledger
+    # must satisfy.
+    canonical_json = json.dumps(canonical, ensure_ascii=False, indent=2)
+    return _validate_claim_ledger_json(canonical_json, draft_md)
 
 
 def _write_context_block(workspace: Path) -> str:

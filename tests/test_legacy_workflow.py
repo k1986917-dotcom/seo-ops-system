@@ -3815,6 +3815,46 @@ class TestSentenceIdBinding:
         # the canonical output.
         assert "WRONG PARAPHRASE BY MODEL" not in json.dumps(canonical)
 
+    def test_top_level_unknown_field_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [], "extra_field": "should_fail"}
+        with pytest.raises(ValueError, match="unknown field"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_claim_unknown_field_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        data = {"version": 1, "claims": [
+            {"sentence_id": "S002", "claim_type": "spec",
+             "evidence_ids": ["ev_001"], "invalid_key": "nope"},
+        ]}
+        with pytest.raises(ValueError, match="unknown field"):
+            _validate_claim_ledger_with_sentence_ids(data, sentences)
+
+    def test_sentence_id_with_leading_space_rejected(self):
+        from seo_ops.services.legacy_workflow import (
+            _extract_draft_sentences,
+            _validate_claim_ledger_with_sentence_ids,
+        )
+
+        sentences = _extract_draft_sentences(self._draft_md())
+        for bad_id in (" S002", "S002 ", " S002 "):
+            data = {"version": 1, "claims": [
+                {"sentence_id": bad_id, "claim_type": "spec",
+                 "evidence_ids": ["ev_001"]},
+            ]}
+            with pytest.raises(ValueError, match="sentence_id"):
+                _validate_claim_ledger_with_sentence_ids(data, sentences)
+
     def test_unknown_sentence_id_rejected(self):
         from seo_ops.services.legacy_workflow import (
             _extract_draft_sentences,
@@ -4319,6 +4359,84 @@ class TestSentenceIdAtomicWrite:
         assert result.get("success") is False
         assert "simulated second replace" in result.get("error", "")
         # Old draft/ledger must be byte-for-byte the same.
+        assert old_draft.read_bytes() == snapshot_draft
+        assert old_cl.read_bytes() == snapshot_cl
+
+    def test_w0_replace_failure_preserves_same_date_old_draft(
+        self, tmp_path, monkeypatch
+    ):
+        """When the old draft is on the SAME date as the target write path,
+        the second replace failure must still leave it byte-for-byte intact
+        (the rollback restores the content that was snapshot'd)."""
+        import os as _os
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "sid-atomic-samedate"
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        # Old draft uses the SAME dated path that _write_ahead_draft_and_ledger
+        # will target (draft_path = drafts/{slug}-{today}.md).
+        old_draft = ws / "drafts" / f"{slug}-{today}.md"
+        old_cl = ws / "research" / f"claim-ledger-{slug}.json"
+        old_draft.write_text("OLD DRAFT SAME DATE", encoding="utf-8")
+        old_cl.write_text('{"version":1,"claims":[]}', encoding="utf-8")
+
+        (ws / "material-packs" / f"{slug}-{today}.md").write_text("mp", encoding="utf-8")
+        (ws / "research" / f"evidence-ledger-{slug}.json").write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(b"mp").hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001", "source_url": "https://ex.com/a",
+                "quote": "data", "canonical_concepts": ["x"],
+                "claim_types": ["y"], "required": False,
+            }],
+        }), encoding="utf-8")
+        (ws / "research" / f"brief-{slug}-{today}.md").write_text(
+            "# Brief\nH2: One\n", encoding="utf-8")
+
+        snapshot_draft = old_draft.read_bytes()
+        snapshot_cl = old_cl.read_bytes()
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_body":
+                return "# Title\n\nNew sentence for replacement.\n"
+            if purpose == "legacy_write_claim_ledger":
+                return json.dumps({
+                    "version": 1,
+                    "claims": [{
+                        "sentence_id": "S002", "claim_type": "spec",
+                        "evidence_ids": ["ev_001"],
+                    }],
+                })
+            raise AssertionError(purpose)
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        original_replace = _os.replace
+        counter = [0]
+
+        def bad_replace(src, dst):
+            counter[0] += 1
+            if counter[0] == 2:
+                raise OSError("simulated second replace")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(_os, "replace", bad_replace)
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("sid atomic samedate", "T", ws))
+        assert result.get("success") is False
+        assert "simulated second replace" in result.get("error", "")
         assert old_draft.read_bytes() == snapshot_draft
         assert old_cl.read_bytes() == snapshot_cl
 
