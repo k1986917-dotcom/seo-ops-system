@@ -2844,6 +2844,379 @@ class TestFactCheckSchemaValidation:
         joined = "\n".join(r['detail'] for r in fact)
         assert "key_finding" in joined and "类型错误" in joined, joined
 
+    # ── Fix1 round 4: null / missing fields on unreferenced evidence ──────
+
+    def test_unreferenced_evidence_source_url_null_blocked(self, tmp_path):
+        """ev_001 clean & referenced; ev_002 unreferenced, source_url=null."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"evidence_id":"ev_002","source_url":null,'
+                '"quote":"some quote","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                "]}"
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with source_url=null: {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "source_url" in joined and ("null" in joined or "None" in joined or "类型" in joined), joined
+
+    def test_unreferenced_evidence_source_url_missing_blocked(self, tmp_path):
+        """ev_001 clean & referenced; ev_002 unreferenced, no source_url key."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"evidence_id":"ev_002",'
+                '"quote":"some quote","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                "]}"
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with missing source_url: {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "source_url" in joined and ("缺" in joined or "类型" in joined), joined
+
+    def test_unreferenced_evidence_evidence_id_missing_blocked(self, tmp_path):
+        """ev_001 clean & referenced; ev_002 unreferenced, no evidence_id key."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"source_url":"https://ex.com/2",'
+                '"quote":"some quote","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                "]}"
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with missing evidence_id: {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "evidence_id" in joined, joined
+
+    def test_unreferenced_evidence_evidence_id_empty_blocked(self, tmp_path):
+        """ev_001 clean & referenced; ev_002 unreferenced, evidence_id=''."""
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":['
+                '{"evidence_id":"ev_001","source_url":"https://ex.com/1",'
+                '"quote":"good data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false},'
+                '{"evidence_id":"","source_url":"https://ex.com/2",'
+                '"quote":"some quote","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}'
+                "]}"
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), (
+            f"Should block unreferenced evidence with evidence_id='': {fact}"
+        )
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "证据" in joined or "空字符串" in joined or "blocking" in joined, joined
+
+
+class TestValidateClaimLedgerTypeCheck:
+    """Fix2: _validate_claim_ledger_json must type-check before .strip()."""
+
+    def test_claim_text_int_raises_value_error(self):
+        from seo_ops.services.legacy_workflow import _validate_claim_ledger_json
+
+        with pytest.raises(ValueError) as exc:
+            _validate_claim_ledger_json(
+                '{"version":1,"claims":[{"claim_text":123,"claim_type":"general","evidence_ids":["ev_001"]}]}',
+                "body sentence.",
+            )
+        msg = str(exc.value)
+        assert "claims[0]" in msg
+        assert "claim_text" in msg
+        assert "int" in msg
+
+    def test_claim_type_int_raises_value_error(self):
+        from seo_ops.services.legacy_workflow import _validate_claim_ledger_json
+
+        with pytest.raises(ValueError) as exc:
+            _validate_claim_ledger_json(
+                '{"version":1,"claims":[{"claim_text":"body sentence.","claim_type":456,"evidence_ids":["ev_001"]}]}',
+                "body sentence.",
+            )
+        msg = str(exc.value)
+        assert "claims[0]" in msg
+        assert "claim_type" in msg
+        assert "int" in msg
+
+    def test_claim_text_none_raises_value_error(self):
+        from seo_ops.services.legacy_workflow import _validate_claim_ledger_json
+
+        with pytest.raises(ValueError) as exc:
+            _validate_claim_ledger_json(
+                '{"version":1,"claims":[{"claim_text":null,"claim_type":"general","evidence_ids":["ev_001"]}]}',
+                "body sentence.",
+            )
+        msg = str(exc.value)
+        assert "claims[0]" in msg
+        assert "claim_text" in msg
+        assert "NoneType" in msg
+
+
+class TestEntryPointNumericClaimRejection:
+    """Fix3: W0 / W1b revise / W2 revise with numeric claim_text or
+    claim_type must fail without changing draft, claim ledger, or state."""
+
+    def _prep_workspace(self, tmp_path, slug):
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        mp_path = ws / "material-packs" / f"{slug}-{today}.md"
+        mp_path.write_text("material pack content for AI.", encoding="utf-8")
+
+        ev_path = ws / "research" / f"evidence-ledger-{slug}.json"
+        ev_path.write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(
+                b"material pack content for AI."
+            ).hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001",
+                "source_url": "https://ex.com/a",
+                "quote": "data",
+                "canonical_concepts": ["test"],
+                "claim_types": ["spec"],
+                "required": False,
+            }],
+        }), encoding="utf-8")
+
+        draft_path = ws / "drafts" / f"{slug}-{today}.md"
+        draft_body = (
+            "---\nTitle: T\nSlug: " + slug + "\nAuthor: Test\n"
+            "Summary: S.\nTags: t\n"
+            "SEO Title: T SEO Title Long Enough For Validation\n"
+            "SEO Description: " + "A" * 152 + "\n"
+            "SEO Keywords: t\n"
+            "---\n\n"
+            "# T\n\n"
+            "This is a body sentence.\n\n"
+        )
+        draft_path.write_text(draft_body, encoding="utf-8")
+
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        dr_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+        cl_path.write_text(json.dumps({
+            "version": 1,
+            "claims": [{
+                "claim_text": "This is a body sentence.",
+                "claim_type": "general",
+                "evidence_ids": ["ev_001"],
+            }],
+            "draft_sha256": dr_sha,
+        }), encoding="utf-8")
+
+        lw.save_report(
+            ws, "post-process", slug,
+            "# POST-PROCESS\n## 质量评分\n- 总分: 55 → ❌\n",
+        )
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": False, "applied": False,
+             "precheck_passed": True, "precheck_tier": "Cluster Content"},
+        )
+
+        return ws, slug, draft_path, cl_path
+
+    def test_w0_with_numeric_claim_text_fails_no_file_change(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path = self._prep_workspace(tmp_path, slug="numeric-w0")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        # W0 clears old artifacts then tries to write to {slug}-{today}.md.
+        # If it fails before _write_ahead_draft_and_ledger, that file is
+        # never created and the old claim ledger stays deleted.
+        draft_expected = ws / "drafts" / f"{slug}-{today}.md"
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_draft":
+                return (
+                    "---\nTitle: T\nSlug: numeric-w0\nAuthor: T\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough\n"
+                    "SEO Description: " + "B" * 152 + "\n"
+                    "SEO Keywords: t\n"
+                    "---\n\n"
+                    "# T\n\n"
+                    "claim body sentence.\n\n"
+                    "===CLAIM_LEDGER===\n"
+                    '{"version":1,"claims":[{"claim_text":999,'
+                    '"claim_type":"spec","evidence_ids":["ev_001"]}]}\n'
+                )
+            return ""
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("numeric w0", "Test", ws))
+        assert result.get("success") is not True
+
+        # W0 cleared old artifacts then failed before writing → draft not created.
+        assert not draft_expected.exists(), (
+            f"Draft leaked after failed W0: {draft_expected}"
+        )
+        # Claim ledger was cleared by W0 re-entry, not re-created → absent.
+        assert not cl_path.exists(), "Claim ledger leaked after failed W0"
+
+    def test_w1b_revise_with_numeric_claim_type_fails_no_file_change(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path = self._prep_workspace(tmp_path, slug="numeric-w1b")
+        cl_snapshot = cl_path.read_text(encoding="utf-8") if cl_path.exists() else None
+        draft_snapshot = draft_path.read_text(encoding="utf-8")
+
+        # stage_w1b_revise needs a pre-check report.
+        lw.save_report(
+            ws, "pre-check", slug,
+            "# WRITE 预检报告 — " + slug + ".md\n"
+            "| 字数 | ❌ | 20 (下限500) |\n",
+        )
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_revise":
+                return (
+                    "---\nTitle: T\nSlug: numeric-w1b\nAuthor: T\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough\n"
+                    "SEO Description: " + "B" * 152 + "\n"
+                    "SEO Keywords: t\n"
+                    "---\n\n"
+                    "# T\n\n"
+                    "revised body sentence.\n\n"
+                    "===CLAIM_LEDGER===\n"
+                    '{"version":1,"claims":[{"claim_text":"revised body sentence.",'
+                    '"claim_type":456,"evidence_ids":["ev_001"]}]}\n'
+                )
+            return ""
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w1b_revise("numeric w1b", "Cluster Content", ws))
+        assert result.get("success") is not True
+        assert "claim_type" in result.get("error", "") and "类型错误" in result.get("error", ""), (
+            f"Expected type error in response: {result.get('error')}"
+        )
+
+        assert draft_path.read_text(encoding="utf-8") == draft_snapshot
+        new_cl = cl_path.read_text(encoding="utf-8") if cl_path.exists() else None
+        assert new_cl == cl_snapshot, "claim ledger changed after failed W1b revise"
+
+    def test_w2_revise_with_numeric_claim_text_fails_no_file_change(self, tmp_path, monkeypatch):
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path = self._prep_workspace(tmp_path, slug="numeric-w2")
+
+        # Add evidence ledger with a matching evidence_id
+        ev_path = ws / "research" / f"evidence-ledger-{slug}.json"
+        ev_path.write_text(json.dumps({
+            "version": 1,
+            "material_pack_sha256": hashlib.sha256(
+                b"material pack content for AI."
+            ).hexdigest(),
+            "evidence": [{
+                "evidence_id": "ev_001",
+                "source_url": "https://ex.com/a",
+                "quote": "data",
+                "canonical_concepts": ["test"],
+                "claim_types": ["spec"],
+                "required": False,
+            }],
+        }), encoding="utf-8")
+
+        cl_snapshot = cl_path.read_text(encoding="utf-8") if cl_path.exists() else None
+        draft_snapshot = draft_path.read_text(encoding="utf-8")
+
+        async def fake_ai(purpose, *a, **kw):
+            return (
+                "---\nTitle: T\nSlug: numeric-w2\nAuthor: T\n"
+                "Summary: S.\nTags: t\n"
+                "SEO Title: T SEO Title Long Enough\n"
+                "SEO Description: " + "B" * 152 + "\n"
+                "SEO Keywords: t\n"
+                "---\n\n"
+                "# T\n\n"
+                "w2 revised body sentence.\n\n"
+                "===CLAIM_LEDGER===\n"
+                '{"version":1,"claims":[{"claim_text":789,"claim_type":"spec","evidence_ids":["ev_001"]}]}\n'
+            )
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w2_revise("numeric w2", ws))
+        assert result.get("success") is not True
+
+        assert draft_path.read_text(encoding="utf-8") == draft_snapshot
+        new_cl = cl_path.read_text(encoding="utf-8") if cl_path.exists() else None
+        assert new_cl == cl_snapshot, "claim ledger changed after failed W2 revise"
+
 
 class TestW2PostPassRejection:
     """Fix5: After gate_passed or applied, W2 revise must be rejected."""

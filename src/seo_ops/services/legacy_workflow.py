@@ -791,10 +791,24 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
     for idx, c in enumerate(claims):
         if not isinstance(c, dict):
             raise ValueError(f"claims[{idx}] is not a dict")
-        ct = (c.get("claim_text") or "").strip()
-        ctype = (c.get("claim_type") or "").strip()
+        # claim_text: must be str before .strip() (never AttributeError).
+        ct_raw = c.get("claim_text")
+        if not isinstance(ct_raw, str):
+            raise ValueError(
+                f"claims[{idx}].claim_text 类型错误："
+                f"期望 str，实际 {type(ct_raw).__name__}"
+            )
+        ct = ct_raw.strip()
         if not ct:
             raise ValueError(f"claims[{idx}].claim_text is empty")
+        # claim_type: must be str before .strip() (never AttributeError).
+        ctype_raw = c.get("claim_type")
+        if not isinstance(ctype_raw, str):
+            raise ValueError(
+                f"claims[{idx}].claim_type 类型错误："
+                f"期望 str，实际 {type(ctype_raw).__name__}"
+            )
+        ctype = ctype_raw.strip()
         if not ctype:
             raise ValueError(f"claims[{idx}].claim_type is empty")
         eids = c.get("evidence_ids")

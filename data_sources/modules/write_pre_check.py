@@ -598,8 +598,18 @@ def _run_fact_check(
                 f"  • [blocking] evidence[{idx}] 不是 dict，而是 {type(ev).__name__}"
             )
             continue
-        eid_raw = ev.get("evidence_id")
+        # evidence_id: must be a non-empty str. null / missing / empty /
+        # non-str all block — even if no claim references this evidence.
+        if "evidence_id" not in ev:
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] 缺 evidence_id 字段"
+            )
+            continue
+        eid_raw = ev["evidence_id"]
         if eid_raw is None:
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}].evidence_id 是 null"
+            )
             continue
         if not isinstance(eid_raw, str):
             blocking_items.append(
@@ -609,27 +619,41 @@ def _run_fact_check(
             continue
         eid = eid_raw.strip()
         if not eid:
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}].evidence_id 是空字符串"
+            )
             continue
         if eid in seen_ids:
             blocking_items.append(
                 f"  • [blocking] evidence-ledger 含重复 evidence_id={eid}"
             )
             continue
-        # Pre-validate source_url/quote/key_finding types so an unreferenced
-        # evidence with bad fields still blocks (fail-closed for the whole
-        # ledger, not just for evidence referenced by some claim).
-        url_raw = ev.get("source_url")
-        if url_raw is not None and not isinstance(url_raw, str):
+        # source_url: must be a non-empty str. null / missing / empty /
+        # non-str all block — even if no claim references this evidence.
+        if "source_url" not in ev:
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) 缺 source_url 字段"
+            )
+            continue
+        url_raw = ev["source_url"]
+        if url_raw is None:
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}] (id={eid}) source_url 是 null"
+            )
+            continue
+        if not isinstance(url_raw, str):
             blocking_items.append(
                 f"  • [blocking] evidence[{idx}] (id={eid}) source_url 类型错误："
                 f"期望 str，实际 {type(url_raw).__name__}"
             )
             continue
-        if isinstance(url_raw, str) and not url_raw.strip():
+        if not url_raw.strip():
             blocking_items.append(
                 f"  • [blocking] evidence[{idx}] (id={eid}) source_url 是空字符串"
             )
             continue
+        # quote / key_finding: must be str (None allowed); at least one
+        # non-empty.
         quote_raw = ev.get("quote")
         kf_raw = ev.get("key_finding")
         if quote_raw is not None and not isinstance(quote_raw, str):
