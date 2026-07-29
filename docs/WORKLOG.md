@@ -1346,6 +1346,36 @@ W0/W1b/W2 gate。
 - `ruff check src/seo_ops/services/legacy_sync.py src/seo_ops/web/app.py`：All checks passed。
 - 生产工作区 `data/legacy_workflow/laserpointerhub/` 在测试后未受污染（git diff 为 clean）。
 - 更新 `docs/KNOWN_ISSUES.md`：新增 9 条已修复记录到"已修复"表。
+## 2026-07-29 — 紧凑证据写作交接与独立 Claim Ledger
+
+### 完成内容
+
+- R3/W0 增加可重建的 `write-brief-{slug}.json`、`coverage-contract-{slug}.json` 和
+  `evidence-cards-{slug}.json`。覆盖合同把 R3 大纲的每个 H2 显式记录为必答项；章节卡
+  通过确定性词项召回、required evidence 保留及零匹配回退构建，完整 ledger 不被删除。
+- W0 改为正文 AI 任务后，再运行独立 claim-ledger AI 任务。后者只能返回 JSON，仍走
+  `_validate_claim_ledger_json`、服务端 `draft_sha256` 和 `_write_ahead_draft_and_ledger`。
+- W1b/W2 修订同样分开正文/ledger；输入从完整 material pack 缩为当前草稿、失败报告、
+  紧凑 hand-off、相关卡、当前已用证据与受限内链图。
+- 新增 ADR-0025、回归测试与 changelog。没有改 evidence ledger、claim ledger schema、
+  W0 原子写、W1b/W2/W3 gate，也没有调用真实 AI 或外部搜索。
+
+### 验证
+
+- `python -m compileall -q src tests`：通过。
+- `pytest -q tests/test_legacy_workflow.py`：通过（1 条既有 Starlette/httpx 弃用警告）。
+- `pytest -q`：312 passed，保留 1 条既有 Starlette/httpx 弃用警告。
+- `ruff check src/seo_ops/services/legacy_workflow.py tests/legacy_workflow_helpers.py`：通过；
+  `ruff check --ignore F841 tests/test_legacy_workflow.py`：通过。该测试文件仍有 2 个既有
+  F841（行 2131、2179），均不在本次新增/修改行。
+- `git diff --check`：通过。
+
+### 下一步
+
+1. 完整执行 `pytest -q`、改动范围 Ruff 与 `git diff --check`。
+2. 生成包含此前 W0 交卷补丁在内的单一更新包；本地正确启动后从 action #3 重试 W0。
+3. 在真实主题上完成 R3→W3 且比较旧/新文章的结构、事实覆盖、FAQ、链接和 gate 结果。
+
 ## 2026-07-29 — Hermes 全流程托管、可恢复搜索确认与网页重启
 
 ### 完成内容

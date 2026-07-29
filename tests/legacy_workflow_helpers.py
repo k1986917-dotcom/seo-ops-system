@@ -25,10 +25,10 @@ async def ai_text(purpose: str, system: str, user: str, *, settings=None, max_to
     it can be monkeypatched in place of the real function (which is also async).
     Returns a small deterministic string that satisfies the AI caller's parser.
     """
-    return _synthetic_ai_response(purpose)
+    return _synthetic_ai_response(purpose, user)
 
 
-def _synthetic_ai_response(purpose: str) -> str:
+def _synthetic_ai_response(purpose: str, user: str = "") -> str:
     """Return synthetic AI text that satisfies post-process parsers."""
     if purpose == "legacy_research_analyze":
         return (
@@ -58,7 +58,7 @@ def _synthetic_ai_response(purpose: str) -> str:
             "## 5. Opportunity Score\n- 0.78\n"
             "## 6. Objectivity Checklist\n- [x] all good\n"
         )
-    if purpose == "legacy_write_draft":
+    if purpose == "legacy_write_body":
         return (
             "---\n"
             "Title: \"Synthetic Draft Title\"\n"
@@ -92,12 +92,20 @@ def _synthetic_ai_response(purpose: str) -> str:
             '<script type="application/ld+json">\n'
             '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[]}\n'
             "</script>\n"
-            "===CLAIM_LEDGER===\n"
+        )
+    if purpose == "legacy_write_claim_ledger":
+        if "This is a revised synthetic draft." in user:
+            return (
+                '{"version":1,"claims":['
+                '{"claim_text":"This is a revised synthetic draft.","claim_type":"general","evidence_ids":["ev_revised001"]}'
+                ']}\n'
+            )
+        return (
             '{"version":1,"claims":['
             '{"claim_text":"This is a synthetic draft used as a test fixture.","claim_type":"technical_specification","evidence_ids":["ev_test001"]}'
             ']}\n'
         )
-    if purpose == "legacy_write_revise":
+    if purpose == "legacy_write_revise_body":
         return (
             "---\n"
             "Title: \"Synthetic Revised Title\"\n"
@@ -123,11 +131,7 @@ def _synthetic_ai_response(purpose: str) -> str:
             "### Q: revised question 2?\n\n"
             "A: revised answer 2.\n\n"
             "### Q: revised question 3?\n\n"
-            "A: revised answer 3.\n\n"
-            "===CLAIM_LEDGER===\n"
-            '{"version":1,"claims":['
-            '{"claim_text":"This is a revised synthetic draft.","claim_type":"general","evidence_ids":["ev_revised001"]}'
-            ']}\n'
+            "A: revised answer 3.\n"
         )
     if purpose == "legacy_backlink_select":
         return (
@@ -206,7 +210,7 @@ def install_async_ai_patch(monkeypatch) -> None:
     """Make _run_ai_text return synthetic text in async context too."""
 
     async def fake_async_ai(purpose, system, user, **kwargs):
-        return _synthetic_ai_response(purpose)
+        return _synthetic_ai_response(purpose, user)
 
     monkeypatch.setattr(
         "seo_ops.services.legacy_workflow._run_ai_text", fake_async_ai

@@ -485,6 +485,9 @@ class TestResearchScoringOrder:
         assert result["success"] is True
         assert result["stage"] == "r5_write_ready"
         assert calls == ["research_scorer.py", "ai"]
+        assert (tmp_path / "research" / "write-brief-test-topic.json").exists()
+        assert (tmp_path / "research" / "coverage-contract-test-topic.json").exists()
+        assert (tmp_path / "research" / "evidence-cards-test-topic.json").exists()
 
     def test_failed_current_score_cannot_reuse_stale_report(
         self, tmp_path, monkeypatch
@@ -516,6 +519,93 @@ class TestResearchScoringOrder:
         assert "scorer crashed" in result["error"]
         assert ai_called is False
         assert not (tmp_path / "material-packs").exists()
+
+
+class TestCompactWritingHandoff:
+    def test_contracts_keep_required_evidence_and_cover_each_outline_section(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "construction-laser"
+        _write(
+            tmp_path / "research" / f"brief-{slug}-2026-01-01.md",
+            "## 3. Recommended Outline (H2)\n\n"
+            "H2: Ceiling layout and line-of-sight planning\n"
+            "H2: Safe use around crews and reflective surfaces\n",
+        )
+        _write(
+            tmp_path / "research" / f"evidence-ledger-{slug}.json",
+            json.dumps({
+                "version": 1,
+                "material_pack_sha256": "pack-sha",
+                "evidence": [
+                    {
+                        "evidence_id": "ev_layout",
+                        "source_url": "https://example.test/layout",
+                        "quote": "Line-of-sight planning reduces layout ambiguity.",
+                        "key_finding": "",
+                        "canonical_concepts": ["ceiling", "layout"],
+                        "claim_types": ["authority_citation"],
+                        "required": False,
+                    },
+                    {
+                        "evidence_id": "ev_required",
+                        "source_url": "https://example.test/safety",
+                        "quote": "Use controls around reflective surfaces.",
+                        "key_finding": "",
+                        "canonical_concepts": ["safety", "reflective"],
+                        "claim_types": ["authority_citation"],
+                        "required": True,
+                    },
+                ],
+            }),
+        )
+
+        paths = lw._write_context_contracts(
+            tmp_path, slug, "Laser Pointer for Ceiling Layout", tier="Cluster Content",
+        )
+        brief = json.loads(paths["brief"].read_text(encoding="utf-8"))
+        contract = json.loads(paths["coverage"].read_text(encoding="utf-8"))
+        cards = json.loads(paths["cards"].read_text(encoding="utf-8"))
+
+        assert brief["outline"] == [
+            "Ceiling layout and line-of-sight planning",
+            "Safe use around crews and reflective surfaces",
+        ]
+        assert all(section["must_cover"] for section in contract["sections"])
+        assert all(section["candidate_evidence_ids"] for section in contract["sections"])
+        assert "ev_required" in contract["sections"][0]["candidate_evidence_ids"]
+        assert {card["evidence_id"] for card in cards["all_cards"]} == {
+            "ev_layout", "ev_required"
+        }
+
+    def test_revision_cards_keep_existing_claim_evidence(self, tmp_path):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "repair-topic"
+        _write(tmp_path / "research" / f"brief-{slug}-2026-01-01.md", "H2: Repair the article")
+        _write(
+            tmp_path / "research" / f"evidence-ledger-{slug}.json",
+            json.dumps({"version": 1, "evidence": [
+                {"evidence_id": "ev_keep", "source_url": "https://example.test/keep",
+                 "quote": "Existing factual sentence support.", "key_finding": "",
+                 "canonical_concepts": ["existing"], "claim_types": [], "required": False},
+                {"evidence_id": "ev_other", "source_url": "https://example.test/other",
+                 "quote": "Other source support.", "key_finding": "",
+                 "canonical_concepts": ["other"], "claim_types": [], "required": False},
+            ]}),
+        )
+        _write(
+            tmp_path / "research" / f"claim-ledger-{slug}.json",
+            json.dumps({"version": 1, "claims": [
+                {"claim_text": "Existing factual sentence.", "claim_type": "general",
+                 "evidence_ids": ["ev_keep"]}
+            ]}),
+        )
+
+        _, rendered = lw._revision_context_contracts(
+            tmp_path, slug, "Repair topic", relevant_text="a link failure",
+        )
+        assert "ev_keep" in rendered
 
     def test_collect_failure_cannot_reuse_previous_output(
         self, tmp_path, monkeypatch
@@ -1190,10 +1280,11 @@ class TestRevisionLoop:
         original = old_draft.read_text(encoding="utf-8")
         new_draft = tmp_path / "drafts" / f"test-topic-{today}.md"
 
-        async def fake_ai(*args, **kwargs):
+        async def fake_ai(purpose, *args, **kwargs):
+            if purpose == "legacy_write_revise_body":
+                return "---\nTitle: T\n---\nrevised body line.\n"
+            assert purpose == "legacy_write_claim_ledger"
             return (
-                "---\nTitle: T\n---\nrevised body line.\n"
-                "===CLAIM_LEDGER===\n"
                 '{"version":1,"claims":[{"claim_text":"revised body line.","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
             )
 
@@ -1246,10 +1337,11 @@ class TestRevisionLoop:
         lw.save_report(tmp_path, "post-process", "test-topic", _POST_PROCESS_REPORT)
         scripts = []
 
-        async def fake_ai(*args, **kwargs):
+        async def fake_ai(purpose, *args, **kwargs):
+            if purpose == "legacy_write_revise_body":
+                return "---\nTitle: T\n---\nrevised body line.\n"
+            assert purpose == "legacy_write_claim_ledger"
             return (
-                "---\nTitle: T\n---\nrevised body line.\n"
-                "===CLAIM_LEDGER===\n"
                 '{"version":1,"claims":[{"claim_text":"revised body line.","claim_type":"general","evidence_ids":["ev_x001"]}]}\n'
             )
 
@@ -2307,17 +2399,15 @@ class TestW2ReviseEvidence闭环:
         ws, slug, draft_path, cl_path, _, _ = self._prepare_full(tmp_path)
         original_draft = draft_path.read_text(encoding="utf-8")
 
-        async def fake_ai(*a, **kw):
-            return (
-                "Title: Revised\n\nRevised body text here.\n\n"
-                "===CLAIM_LEDGER===\n"
-                "NOT JSON AT ALL"
-            )
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_revise_body":
+                return "Title: Revised\n\nRevised body text here.\n"
+            return "NOT JSON AT ALL"
 
         monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
         result = asyncio.run(lw.stage_w2_revise("test topic", ws))
         assert result["success"] is False
-        assert "claim-ledger 解析失败" in result["error"]
+        assert "claim-ledger 生成/校验失败" in result["error"]
         assert draft_path.read_text(encoding="utf-8") == original_draft
 
     def test_w2_no_separator_leaves_draft_unchanged(self, tmp_path, monkeypatch):
@@ -2326,13 +2416,15 @@ class TestW2ReviseEvidence闭环:
         ws, slug, draft_path, _, _, _ = self._prepare_full(tmp_path)
         original_draft = draft_path.read_text(encoding="utf-8")
 
-        async def fake_ai(*a, **kw):
-            return "Title: Revised\n\nRevised body with no claim ledger."
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_revise_body":
+                return "Title: Revised\n\nRevised body with no claim ledger."
+            return "not json"
 
         monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
         result = asyncio.run(lw.stage_w2_revise("test topic", ws))
         assert result["success"] is False
-        assert "===CLAIM_LEDGER===" in result["error"]
+        assert "CLAIM_LEDGER JSON parse failed" in result["error"]
         assert draft_path.read_text(encoding="utf-8") == original_draft
 
     def test_w2_end_to_end_revise_and_precheck(self, tmp_path, monkeypatch):
@@ -2341,13 +2433,12 @@ class TestW2ReviseEvidence闭环:
         from seo_ops.services import legacy_workflow as lw
 
         ws, slug, draft_path, cl_path, _, _ = self._prepare_full(tmp_path)
-        original_draft = draft_path.read_text(encoding="utf-8")
         today = datetime.now(UTC).strftime("%Y-%m-%d")
 
         precheck_called = []
 
         async def fake_ai(purpose, *a, **kw):
-            if purpose == "legacy_write_revise":
+            if purpose == "legacy_write_revise_body":
                 return (
                     "---\n"
                     "Title: Revised Topic\n"
@@ -2372,13 +2463,15 @@ class TestW2ReviseEvidence闭环:
                     '<script type="application/ld+json">\n'
                     '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[]}\n'
                     "</script>\n"
-                    "===CLAIM_LEDGER===\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                return (
                     '{"version":1,"claims":[\n'
                     '{"claim_text":"The 5mW green laser pointer has a wavelength of 532nm.","claim_type":"technical_specification","evidence_ids":["ev_001"]},\n'
                     '{"claim_text":"It is used for presentations and stars.","claim_type":"general","evidence_ids":["ev_001"]}\n'
                     ']}\n'
                 )
-            return original_draft
+            raise AssertionError(f"unexpected purpose: {purpose}")
 
         async def fake_run(self, script, args):
             precheck_called.append(script)
@@ -2593,7 +2686,7 @@ class TestW0AtomicWriteFailure:
         state_snapshot = state_path.read_bytes()
 
         async def fake_ai(purpose, *a, **kw):
-            if purpose == "legacy_write_draft":
+            if purpose == "legacy_write_body":
                 return (
                     "---\nTitle: T\nSlug: w0-replace-fail\nAuthor: T\n"
                     "Summary: S.\nTags: t\n"
@@ -2602,12 +2695,14 @@ class TestW0AtomicWriteFailure:
                     "SEO Keywords: t\n"
                     "---\n\n"
                     "# T\n\n"
-                    "new body sentence.\n\n"
-                    "===CLAIM_LEDGER===\n"
+                    "new body sentence.\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                return (
                     '{"version":1,"claims":[{"claim_text":"new body sentence.",'
                     '"claim_type":"spec","evidence_ids":["ev_001"]}]}\n'
                 )
-            return ""
+            raise AssertionError(f"unexpected purpose: {purpose}")
 
         async def fake_run(self, script, args):
             return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
@@ -2633,8 +2728,8 @@ class TestW0AtomicWriteFailure:
         assert cl_path.read_bytes() == cl_snapshot, "old claim ledger was modified"
         assert state_path.read_bytes() == state_snapshot, "old w2 state was modified"
 
-    def test_w0_prompt_repeats_non_optional_claim_ledger_contract(self, tmp_path, monkeypatch):
-        """W0 must make the ledger format prominent in both AI prompt layers."""
+    def test_w0_uses_compact_body_and_separate_claim_ledger_prompts(self, tmp_path, monkeypatch):
+        """W0 must split body writing from the strict ledger audit task."""
         from datetime import UTC, datetime
 
         from seo_ops.services import legacy_workflow as lw
@@ -2649,14 +2744,11 @@ class TestW0AtomicWriteFailure:
         captured = {}
 
         async def fake_ai(purpose, system_prompt, user_prompt, **kwargs):
-            assert purpose == "legacy_write_draft"
-            captured["system"] = system_prompt
-            captured["user"] = user_prompt
-            return (
-                "# Draft\n\nUse the material pack as the source of truth.\n\n"
-                "===CLAIM_LEDGER===\n"
-                '{"version":1,"claims":[]}'
-            )
+            captured[purpose] = (system_prompt, user_prompt)
+            if purpose == "legacy_write_body":
+                return "# Draft\n\nUse the material pack as the source of truth.\n"
+            assert purpose == "legacy_write_claim_ledger"
+            return '{"version":1,"claims":[]}'
 
         async def fake_run(self, script, args):
             return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
@@ -2667,12 +2759,15 @@ class TestW0AtomicWriteFailure:
         result = asyncio.run(lw.stage_w0_validate_and_draft("w0 output contract", "Test", ws))
 
         assert result["success"] is True
-        for prompt in (captured["system"], captured["user"]):
-            assert "MANDATORY FINAL OUTPUT CONTRACT — DO NOT OMIT" in prompt
-            assert "required delivery contract, not an optional appendix" in prompt
-            assert "exactly `===CLAIM_LEDGER===`" in prompt
-            assert "Do not use a Markdown code fence for the JSON" in prompt
-            assert "response ends at the\nclosing `}`" in prompt
+        body_system, body_user = captured["legacy_write_body"]
+        ledger_system, ledger_user = captured["legacy_write_claim_ledger"]
+        assert "Return only the complete article Markdown" in body_system
+        assert "Compact Write Brief" in body_user
+        assert "Coverage Contract" in body_user
+        assert "Material Pack" not in body_user
+        assert "Return exactly one valid JSON object" in ledger_system
+        assert "Return no separator" in ledger_system
+        assert "## Article" in ledger_user
 
 
 class TestSentenceNormalizationUnified:
@@ -3487,7 +3582,7 @@ class TestEntryPointNumericClaimRejection:
         )
 
         async def fake_ai(purpose, *a, **kw):
-            if purpose == "legacy_write_revise":
+            if purpose == "legacy_write_revise_body":
                 return (
                     "---\nTitle: T\nSlug: numeric-w1b\nAuthor: T\n"
                     "Summary: S.\nTags: t\n"
@@ -3496,12 +3591,14 @@ class TestEntryPointNumericClaimRejection:
                     "SEO Keywords: t\n"
                     "---\n\n"
                     "# T\n\n"
-                    "revised body sentence.\n\n"
-                    "===CLAIM_LEDGER===\n"
+                    "revised body sentence.\n"
+                )
+            if purpose == "legacy_write_claim_ledger":
+                return (
                     '{"version":1,"claims":[{"claim_text":"revised body sentence.",'
                     '"claim_type":456,"evidence_ids":["ev_001"]}]}\n'
                 )
-            return ""
+            raise AssertionError(f"unexpected purpose: {purpose}")
 
         async def fake_run(self, script, args):
             return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)

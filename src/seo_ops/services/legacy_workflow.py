@@ -44,6 +44,17 @@ _CONTEXT_CHAR_LIMIT = 6000
 _REPORT_CHAR_LIMIT = 12000
 _OLD_ARTICLE_CHAR_LIMIT = 8000
 
+# The legacy skills correctly split research from writing, but the original
+# adapter still handed W0 the entire pack plus four long context files.  These
+# budgets are deliberately much smaller and are used only for the new,
+# auditable write hand-off artifacts below.  The full material pack remains on
+# disk and remains the source used by the deterministic gates.
+_WRITE_BRIEF_CHAR_LIMIT = 7000
+_WRITE_CONTEXT_TOTAL_CHAR_LIMIT = 5000
+_EVIDENCE_CARD_TEXT_LIMIT = 320
+_EVIDENCE_CARDS_PER_SECTION = 4
+_REVISION_LINKS_CHAR_LIMIT = 3000
+
 # write/SKILL.md 段2: "最多 2 轮"
 MAX_REVISION_ROUNDS = 2
 
@@ -148,6 +159,9 @@ STAGE_FILES: dict[str, tuple[str, ...]] = {
            "research/research-data-{slug}-*.json"),
     "r3": ("research/research-score-{slug}-*.md",
            "research/brief-{slug}-*.md",
+           "research/write-brief-{slug}.json",
+           "research/coverage-contract-{slug}.json",
+           "research/evidence-cards-{slug}.json",
            "research/backlink-suggestions-{slug}-*.md",
            "material-packs/{slug}-*.md"),
     "w0": ("drafts/{slug}-*.md",
@@ -1008,6 +1022,264 @@ def _ledger_refs(workspace: Path, slug: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ── Compact, auditable writing hand-off ─────────────────────────────────
+
+def _contract_path(workspace: Path, slug: str, name: str) -> Path:
+    return workspace / "research" / f"{name}-{slug}.json"
+
+
+def _contract_tokens(text: str) -> set[str]:
+    """Return meaningful lexical tokens for deterministic card selection."""
+    ignored = {
+        "about", "after", "article", "best", "body", "content", "from",
+        "guide", "into", "laser", "more", "page", "pointer", "section",
+        "that", "the", "their", "this", "with", "your",
+    }
+    return {
+        token for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) >= 3 and token not in ignored
+    }
+
+
+def _brief_outline(brief_text: str, topic: str) -> list[str]:
+    """Extract the R3 H2 plan without asking another model to summarize it.
+
+    The research skill's brief uses ``H2:`` lines inside a Recommended Outline
+    block.  Some older workspaces have a less formal brief, so direct Markdown
+    H2s are accepted as a conservative fallback.  A generic fallback keeps a
+    resumed task writable, but is explicitly labelled as such in the contract.
+    """
+    headings = [
+        match.group(1).strip().rstrip("# ")
+        for match in re.finditer(r"(?mi)^\s*H2:\s*(.+?)\s*$", brief_text)
+        if match.group(1).strip()
+    ]
+    if not headings:
+        headings = [
+            match.group(1).strip().rstrip("# ")
+            for match in re.finditer(r"(?m)^##\s+(.+?)\s*$", brief_text)
+            if match.group(1).strip()
+        ]
+    seen: set[str] = set()
+    deduped = []
+    for heading in headings:
+        key = heading.casefold()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(heading)
+    return deduped[:7] or [f"Answer the reader's core question about {topic}"]
+
+
+def _evidence_card(entry: dict[str, Any]) -> dict[str, Any]:
+    """Keep exact IDs and short source text; never summarize away evidence."""
+    support = str(entry.get("quote") or entry.get("key_finding") or "").strip()
+    return {
+        "evidence_id": str(entry.get("evidence_id") or ""),
+        "source_url": str(entry.get("source_url") or ""),
+        "support": support[:_EVIDENCE_CARD_TEXT_LIMIT],
+        "concepts": list(entry.get("canonical_concepts") or []),
+        "claim_types": list(entry.get("claim_types") or []),
+        "required": bool(entry.get("required")),
+    }
+
+
+def _select_evidence_cards(
+    heading: str, evidence: list[dict[str, Any]], *, limit: int = _EVIDENCE_CARDS_PER_SECTION,
+) -> list[dict[str, Any]]:
+    """Recall broadly, then deterministically rank a small chapter card set.
+
+    Every available card stays in ``evidence-cards`` for audit/recovery.  The
+    selected set is only the context passed to the writer.  Required evidence
+    is never silently filtered out, and a lexical zero-match falls back to the
+    first available cards instead of pretending that a section has no sources.
+    """
+    heading_tokens = _contract_tokens(heading)
+    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    for index, entry in enumerate(evidence):
+        haystack = " ".join([
+            " ".join(str(x) for x in entry.get("canonical_concepts") or []),
+            str(entry.get("quote") or ""),
+            str(entry.get("key_finding") or ""),
+        ])
+        score = len(heading_tokens & _contract_tokens(haystack))
+        if entry.get("required"):
+            score += 100
+        ranked.append((score, -index, entry))
+    ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    selected = [entry for score, _, entry in ranked if score > 0][:limit]
+    if not selected:
+        selected = [entry for _, _, entry in ranked[:limit]]
+    return [_evidence_card(entry) for entry in selected]
+
+
+def _write_context_contracts(workspace: Path, slug: str, topic: str, *,
+                             tier: str = "", intent: str = "",
+                             guidance: str = "") -> dict[str, Path]:
+    """Persist the compact R3→W0 hand-off and its deterministic provenance.
+
+    This is not a new truth source and it is not a gate bypass.  It is a small
+    projection of the existing R3 brief and evidence ledger so the writing
+    model can focus on the article rather than rediscovering every source.
+    """
+    brief_path = _latest_file(f"research/brief-{slug}-*.md", workspace)
+    brief_text = _read_text(brief_path, _WRITE_BRIEF_CHAR_LIMIT)
+    evidence_ledger = _read_evidence_ledger(workspace, slug) or {}
+    evidence = [
+        item for item in evidence_ledger.get("evidence", [])
+        if isinstance(item, dict) and item.get("evidence_id")
+    ]
+    headings = _brief_outline(brief_text, topic)
+    sections = [
+        {
+            "section_id": f"section_{index}",
+            "heading": heading,
+            "must_cover": True,
+            "candidate_evidence_ids": [
+                card["evidence_id"]
+                for card in _select_evidence_cards(heading, evidence)
+            ],
+        }
+        for index, heading in enumerate(headings, start=1)
+    ]
+    brief = {
+        "version": 1,
+        "topic": topic,
+        "tier": tier,
+        "intent": intent,
+        "guidance": guidance[:1200],
+        "outline": headings,
+        "research_brief_excerpt": brief_text,
+    }
+    contract = {
+        "version": 1,
+        "topic": topic,
+        "material_pack_sha256": evidence_ledger.get("material_pack_sha256", ""),
+        "sections": sections,
+        "selection_policy": "deterministic lexical recall + required evidence retention",
+    }
+    cards = {
+        "version": 1,
+        "topic": topic,
+        "material_pack_sha256": evidence_ledger.get("material_pack_sha256", ""),
+        "all_cards": [_evidence_card(entry) for entry in evidence],
+        "sections": [
+            {
+                "section_id": section["section_id"],
+                "heading": section["heading"],
+                "cards": _select_evidence_cards(section["heading"], evidence),
+            }
+            for section in sections
+        ],
+    }
+    paths = {
+        "brief": _contract_path(workspace, slug, "write-brief"),
+        "coverage": _contract_path(workspace, slug, "coverage-contract"),
+        "cards": _contract_path(workspace, slug, "evidence-cards"),
+    }
+    for name, data in (("brief", brief), ("coverage", contract), ("cards", cards)):
+        paths[name].parent.mkdir(parents=True, exist_ok=True)
+        paths[name].write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return paths
+
+
+def _load_write_context_contracts(workspace: Path, slug: str, topic: str, *,
+                                  tier: str = "", intent: str = "",
+                                  guidance: str = "") -> dict[str, Any]:
+    """Load an R3 projection or rebuild it for a resumed pre-existing action."""
+    paths = _write_context_contracts(
+        workspace, slug, topic, tier=tier, intent=intent, guidance=guidance,
+    )
+    loaded: dict[str, Any] = {}
+    for name, path in paths.items():
+        try:
+            loaded[name] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded[name] = {}
+    return loaded
+
+
+def _format_evidence_cards(cards: dict[str, Any], *, relevant_text: str = "",
+                           preserve_evidence_ids: set[str] | None = None) -> str:
+    """Render compact cards, optionally retaining cards used by the old draft."""
+    all_cards = [item for item in cards.get("all_cards", []) if isinstance(item, dict)]
+    selected_ids: set[str] = set(preserve_evidence_ids or set())
+    relevant_tokens = _contract_tokens(relevant_text)
+    if relevant_tokens:
+        ranked: list[tuple[int, str]] = []
+        for card in all_cards:
+            haystack = " ".join([
+                str(card.get("support") or ""),
+                " ".join(str(x) for x in card.get("concepts") or []),
+            ])
+            ranked.append((len(relevant_tokens & _contract_tokens(haystack)), str(card.get("evidence_id") or "")))
+        ranked.sort(reverse=True)
+        selected_ids.update(eid for score, eid in ranked[:8] if score > 0 and eid)
+    if not selected_ids:
+        for section in cards.get("sections", []):
+            if isinstance(section, dict):
+                selected_ids.update(
+                    str(card.get("evidence_id") or "")
+                    for card in section.get("cards", []) if isinstance(card, dict)
+                )
+    shown = [card for card in all_cards if str(card.get("evidence_id") or "") in selected_ids]
+    if not shown:
+        shown = all_cards[:12]
+    lines = []
+    for card in shown[:16]:
+        lines.append(
+            f"- {card.get('evidence_id')}: {card.get('support')} "
+            f"| {card.get('source_url')}"
+        )
+    return "\n".join(lines)
+
+
+def _compact_write_context(workspace: Path) -> str:
+    """Keep only bounded editorial preferences; full context stays available on disk."""
+    source_limits = [
+        ("Brand voice", "brand-voice.md", 1600),
+        ("Style guide", "style-guide.md", 1100),
+        ("SEO guidance", "seo-guidelines.md", 1100),
+        ("Writing examples", "writing-examples.md", 1200),
+    ]
+    remaining = _WRITE_CONTEXT_TOTAL_CHAR_LIMIT
+    parts = []
+    for label, filename, limit in source_limits:
+        if remaining <= 0:
+            break
+        text = _read_text(workspace / "context" / filename, min(limit, remaining))
+        if text:
+            parts.append(f"### {label}\n{text}")
+            remaining -= len(text)
+    return "\n\n".join(parts)
+
+
+def _current_claim_evidence_ids(workspace: Path, slug: str) -> set[str]:
+    """Keep cards already used by a valid-looking draft during a revision."""
+    ledger = _read_claim_ledger(workspace, slug) or {}
+    ids: set[str] = set()
+    for claim in ledger.get("claims", []):
+        if isinstance(claim, dict):
+            ids.update(
+                str(item) for item in claim.get("evidence_ids", [])
+                if isinstance(item, str) and item
+            )
+    return ids
+
+
+def _revision_context_contracts(
+    workspace: Path, slug: str, topic: str, *, relevant_text: str,
+) -> tuple[dict[str, Any], str]:
+    """Return brief/cards relevant to a repair without repeating the full pack."""
+    contracts = _load_write_context_contracts(workspace, slug, topic)
+    cards = contracts.get("cards") or {}
+    rendered = _format_evidence_cards(
+        cards,
+        relevant_text=relevant_text,
+        preserve_evidence_ids=_current_claim_evidence_ids(workspace, slug),
+    )
+    return contracts, rendered
+
+
 # ── R0: Generate Search Prompt ──────────────────────────────────────────
 
 def _build_search_prompt(topic: str, workspace: Path, operator_requirements: str = "") -> str:
@@ -1525,6 +1797,14 @@ Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, 
 
     # Write structured evidence ledger parsed from the material pack.
     ev_result = _write_evidence_ledger(workspace, slug, mp_path)
+    _write_context_contracts(
+        workspace,
+        slug,
+        topic,
+        tier=resolve_tier(topic, workspace),
+        intent=str(read_topic_context(topic, workspace).get("intent") or ""),
+        guidance=str(read_topic_context(topic, workspace).get("guidance") or ""),
+    )
 
     return {
         "success": True,
@@ -1691,6 +1971,65 @@ No preamble, no commentary, no code fence around the whole document."""
 _WRITE_AI_SYSTEM += "\n\n" + _CLAIM_LEDGER_OUTPUT_CONTRACT
 
 
+# W0 used to ask one model response to satisfy both a long editorial brief and
+# a machine-readable evidence audit.  Keep the same hard validation, but give
+# each cognitive task a small, unambiguous prompt.
+_WRITE_BODY_AI_SYSTEM = """You are an SEO content writer.
+
+Write a complete article Markdown with frontmatter, H1, direct-answer
+introduction, Key Takeaways, logical H2 sections, conclusion, FAQ, and visible
+FAQPage JSON-LD when the article contains FAQ answers. Follow the supplied
+write brief and coverage contract: every must-cover section needs a useful
+reader-facing answer, but do not pad a section simply to use a card.
+
+Use only the supplied evidence cards for externally verifiable facts. If a
+card does not support a fact, write analysis or a qualified recommendation
+instead. Never invent measurements, test results, quotes, authors, URLs,
+regulations, products, or first-hand experience. Keep links limited to the
+provided internal-link candidates and source URLs.
+
+Return only the complete article Markdown. Do not output a claim ledger, JSON,
+analysis, preamble, or code fence."""
+
+_CLAIM_LEDGER_AI_SYSTEM = """You are an evidence auditor for an SEO article.
+
+Return exactly one valid JSON object with this shape:
+{"version":1,"claims":[{"claim_text":"a complete factual sentence copied verbatim from the article","claim_type":"general","evidence_ids":["ev_exact"]}]}
+
+List every externally verifiable factual sentence in the supplied article.
+Each claim_text must be one complete sentence copied verbatim; every
+evidence_id must be an exact ID from the supplied evidence cards and must
+actually support that sentence. Do not infer, invent, omit the supporting ID,
+or use Markdown fences. If there are genuinely no factual claims, return
+{"version":1,"claims":[]}. Return no separator, explanation, or trailing text."""
+
+
+async def _generate_claim_ledger_for_draft(
+    draft_md: str, cards: dict[str, Any], *, settings=None,
+) -> dict[str, Any]:
+    """Generate then validate a claim ledger as an independent AI task.
+
+    This helper intentionally never repairs or invents a ledger.  The same
+    strict parser and downstream fact-check gate remain authoritative.
+    """
+    evidence_cards = _format_evidence_cards(cards) or "(No usable evidence cards were supplied.)"
+    user_prompt = f"""## Article
+{draft_md}
+
+## Evidence cards (the only allowed evidence IDs)
+{evidence_cards}
+
+Return the JSON object only."""
+    raw = await _run_ai_text(
+        "legacy_write_claim_ledger", _CLAIM_LEDGER_AI_SYSTEM, user_prompt,
+        settings=settings, max_tokens=8000,
+    )
+    clean = _strip_code_fence(raw)
+    if "===CLAIM_LEDGER===" in clean:
+        raise ValueError("claim-ledger task must return JSON only, without ===CLAIM_LEDGER===")
+    return _validate_claim_ledger_json(clean, draft_md)
+
+
 def _write_context_block(workspace: Path) -> str:
     parts = []
     for key, fname in [("brand_voice", "brand-voice.md"),
@@ -1741,56 +2080,61 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
     ctx = read_topic_context(topic, workspace)
     tier = resolve_tier(topic, workspace)
 
-    # Build evidence reference block for the AI prompt.
-    ev_refs = _ledger_refs(workspace, slug)
-    ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
+    contracts = _load_write_context_contracts(
+        workspace,
+        slug,
+        topic,
+        tier=tier,
+        intent=str(ctx.get("intent") or _detect_intent(topic)),
+        guidance=str(ctx.get("guidance") or ""),
+    )
+    evidence_cards = _format_evidence_cards(contracts.get("cards") or {})
 
     user_prompt = f"""Write: "{topic}"
 
-## Topic Context
-- Page tier: {tier}
-- Search intent: {ctx.get('intent') or _detect_intent(topic)}
-- Differentiation guidance: {ctx.get('guidance') or '(none recorded)'}
-- Cannibalization note: {ctx.get('cannibal_risk') or '(none recorded)'}
+Use `{author.strip() or 'LaserPointerHub'}` as the frontmatter Author.
 
-## Material Pack
-{_read_text(mp, _PACK_CHAR_LIMIT)}
+## Compact Write Brief
+{json.dumps(contracts.get('brief') or {}, ensure_ascii=False, indent=2)}
 
-## Context
-{_write_context_block(workspace)}
-{ev_section}
-Follow the system instructions. The delivery contract below is repeated here
-because it is mandatory and must be the final rule you follow:
+## Coverage Contract
+{json.dumps(contracts.get('coverage') or {}, ensure_ascii=False, indent=2)}
 
-{_CLAIM_LEDGER_OUTPUT_CONTRACT}"""
+## Chapter Evidence Cards
+{evidence_cards}
+
+## Editorial Preferences
+{_compact_write_context(workspace)}
+
+The full material pack remains the authoritative archive and will be checked
+after this step. Use this compact hand-off to write the article. Return the
+article Markdown only."""
 
     try:
-        content = await _run_ai_text(
-            "legacy_write_draft", _write_system_prompt(author), user_prompt,
+        draft_md = _strip_code_fence(await _run_ai_text(
+            "legacy_write_body", _WRITE_BODY_AI_SYSTEM, user_prompt,
             settings=settings, max_tokens=16000)
+        )
     except Exception as exc:
         return {"success": False, "error": str(exc), "report": report}
 
-    clean = _strip_code_fence(content)
-    sep = "===CLAIM_LEDGER==="
-    if sep not in clean:
-        return {
-            "success": False,
-            "error": "AI 输出未包含 ===CLAIM_LEDGER=== 区块；请重试 W0",
-            "report": report,
-        }
-    parts = clean.split(sep, 1)
-    draft_md = parts[0].strip()
-    cl_json = parts[1].strip()
-
     if not draft_md:
         return {"success": False, "error": "AI 输出了空的文章正文", "report": report}
+    if "===CLAIM_LEDGER===" in draft_md:
+        return {
+            "success": False,
+            "error": "W0 正文任务错误包含 CLAIM_LEDGER；正文和账本必须分开生成",
+            "report": report,
+        }
 
-    # Parse and validate the claim ledger, then compute draft_sha256 serverside.
     try:
-        cl_data = _validate_claim_ledger_json(cl_json, draft_md)
+        cl_data = await _generate_claim_ledger_for_draft(
+            draft_md, contracts.get("cards") or {}, settings=settings,
+        )
     except ValueError as exc:
-        return {"success": False, "error": str(exc), "report": report}
+        return {"success": False, "error": f"claim-ledger 生成/校验失败: {exc}", "report": report}
+    except Exception as exc:
+        return {"success": False, "error": f"claim-ledger 生成失败: {exc}", "report": report}
 
     cl_data["draft_sha256"] = hashlib.sha256(draft_md.encode("utf-8")).hexdigest()
 
@@ -2032,17 +2376,17 @@ async def stage_w1b_revise(
     if not precheck_report:
         return {"success": False, "error": "没有预检报告，请先运行 W1b"}
 
-    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     resolved_tier = resolve_tier(topic, workspace, tier)
-
-    ev_refs = _ledger_refs(workspace, slug)
-    ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
     retry_memory = _recent_revision_memory(state, "w1b")
     retry_section = (
         f"\n## Earlier failed attempts (do not repeat these mistakes)\n{retry_memory}\n"
         if retry_memory else "\n"
     )
 
+    contracts, evidence_cards = _revision_context_contracts(
+        workspace, slug, topic,
+        relevant_text=f"{precheck_report}\n{retry_memory}",
+    )
     user_prompt = f"""Revise the article for: "{topic}"
 
 The article failed the W1b pre-check. Fix the items listed below using
@@ -2056,37 +2400,39 @@ invent facts, numbers, quotes, or URLs.
 ## Current draft (frontmatter may have been auto-repaired)
 {_read_text(draft)}
 
-## Material pack (only source of truth)
-{_read_text(mp, _PACK_CHAR_LIMIT) if mp else '(not available)'}
+## Compact write brief and coverage contract
+{json.dumps(contracts.get('brief') or {}, ensure_ascii=False, indent=2)}
+{json.dumps(contracts.get('coverage') or {}, ensure_ascii=False, indent=2)}
+
+## Evidence cards relevant to this repair
+{evidence_cards}
 
 ## Valid internal link targets
-{_read_text(workspace / 'context' / 'internal-links-map.md', _CONTEXT_CHAR_LIMIT)}
-{ev_section}
-Output the complete revised article Markdown, then ===CLAIM_LEDGER=== and
-the updated claim ledger JSON matching the new draft."""
+{_read_text(workspace / 'context' / 'internal-links-map.md', _REVISION_LINKS_CHAR_LIMIT)}
+
+Return the revised article Markdown only."""
 
     try:
-        revised = await _run_ai_text(
-            "legacy_write_revise", _REVISE_AI_SYSTEM, user_prompt,
+        new_draft_md = _strip_code_fence(await _run_ai_text(
+            "legacy_write_revise_body", _REVISE_BODY_AI_SYSTEM, user_prompt,
             settings=settings, max_tokens=16000,
-        )
+        ))
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
-    clean = _strip_code_fence(revised)
-    sep = "===CLAIM_LEDGER==="
-    if sep not in clean:
-        return {"success": False, "error": "修订输出未含 ===CLAIM_LEDGER==="}
-    parts = clean.split(sep, 1)
-    new_draft_md = parts[0].strip()
-    cl_json = parts[1].strip()
     if not new_draft_md:
         return {"success": False, "error": "修订输出文章正文为空"}
+    if "===CLAIM_LEDGER===" in new_draft_md:
+        return {"success": False, "error": "修订正文任务错误包含 CLAIM_LEDGER"}
 
     try:
-        cl_data = _validate_claim_ledger_json(cl_json, new_draft_md)
+        cl_data = await _generate_claim_ledger_for_draft(
+            new_draft_md, contracts.get("cards") or {}, settings=settings,
+        )
     except ValueError as exc:
-        return {"success": False, "error": f"修订 CLAIM_LEDGER 校验失败: {exc}"}
+        return {"success": False, "error": f"修订 CLAIM_LEDGER 生成/校验失败: {exc}"}
+    except Exception as exc:
+        return {"success": False, "error": f"修订 CLAIM_LEDGER 生成失败: {exc}"}
 
     cl_data["draft_sha256"] = hashlib.sha256(new_draft_md.encode("utf-8")).hexdigest()
 
@@ -2340,6 +2686,19 @@ Output the article Markdown, then ``===CLAIM_LEDGER===``, then the JSON.
 No preamble, no commentary, no code fence around the whole document."""
 
 
+_REVISE_BODY_AI_SYSTEM = """You are revising an SEO article that failed an automated quality gate.
+
+Fix every concrete failure in the supplied report. Preserve the frontmatter,
+reader intent, useful structure, and supported content that is not implicated
+by the report. Use only the supplied evidence cards for externally verifiable
+facts; do not invent facts, numbers, quotes, test results, authors, URLs,
+regulations, or first-hand experience. For a cannibalization failure, change
+the angle or cut the overlapping material rather than merely rephrasing it.
+
+Return only the complete revised article Markdown. Do not output a claim
+ledger, JSON, preamble, commentary, or code fence."""
+
+
 async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
     """Run one W2 AI revision, then re-run W1b and W2.
 
@@ -2363,17 +2722,17 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
     if not report:
         return {"success": False, "error": "没有后处理报告，请先运行后处理检查"}
 
-    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     metrics = _parse_post_process(report)
-
-    ev_refs = _ledger_refs(workspace, slug)
-    ev_section = f"\n## Evidence References\n{ev_refs}\n" if ev_refs else "\n"
     retry_memory = _recent_revision_memory(state, "w2")
     retry_section = (
         f"\n## Earlier failed attempts (do not repeat these mistakes)\n{retry_memory}\n"
         if retry_memory else "\n"
     )
 
+    contracts, evidence_cards = _revision_context_contracts(
+        workspace, slug, topic,
+        relevant_text=f"{report}\n{retry_memory}",
+    )
     user_prompt = f"""Revise the article for: "{topic}"
 
 ## Post-Process Report (what failed)
@@ -2383,40 +2742,40 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
 ## Current Draft
 {_read_text(draft)}
 
-## Material Pack (only source of truth)
-{_read_text(mp, _PACK_CHAR_LIMIT)}
+## Compact write brief and coverage contract
+{json.dumps(contracts.get('brief') or {}, ensure_ascii=False, indent=2)}
+{json.dumps(contracts.get('coverage') or {}, ensure_ascii=False, indent=2)}
+
+## Evidence cards relevant to this repair
+{evidence_cards}
 
 ## Valid internal link targets
-{_read_text(workspace / 'context' / 'internal-links-map.md', _CONTEXT_CHAR_LIMIT)}
-{ev_section}
-Follow the system instructions. Output the full revised article Markdown, then
-===CLAIM_LEDGER=== and the claim ledger JSON."""
+{_read_text(workspace / 'context' / 'internal-links-map.md', _REVISION_LINKS_CHAR_LIMIT)}
+
+Return the revised article Markdown only."""
 
     original_draft_text = _read_text(draft)
 
     try:
-        revised = await _run_ai_text(
-            "legacy_write_revise", _REVISE_AI_SYSTEM, user_prompt,
-            settings=settings, max_tokens=16000)
+        draft_md = _strip_code_fence(await _run_ai_text(
+            "legacy_write_revise_body", _REVISE_BODY_AI_SYSTEM, user_prompt,
+            settings=settings, max_tokens=16000))
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
-    clean = _strip_code_fence(revised)
-    sep = "===CLAIM_LEDGER==="
-    if sep not in clean:
-        return {"success": False, "error": "AI 输出未包含 ===CLAIM_LEDGER=== 区块；请重试 W2"}
-
-    parts = clean.split(sep, 1)
-    draft_md = parts[0].strip()
-    cl_json = parts[1].strip()
-
     if not draft_md:
         return {"success": False, "error": "AI 输出了空的文章正文"}
+    if "===CLAIM_LEDGER===" in draft_md:
+        return {"success": False, "error": "W2 正文任务错误包含 CLAIM_LEDGER"}
 
     try:
-        cl_data = _validate_claim_ledger_json(cl_json, draft_md)
+        cl_data = await _generate_claim_ledger_for_draft(
+            draft_md, contracts.get("cards") or {}, settings=settings,
+        )
     except ValueError as exc:
-        return {"success": False, "error": f"claim-ledger 解析失败: {exc}"}
+        return {"success": False, "error": f"claim-ledger 生成/校验失败: {exc}"}
+    except Exception as exc:
+        return {"success": False, "error": f"claim-ledger 生成失败: {exc}"}
 
     cl_data["draft_sha256"] = hashlib.sha256(draft_md.encode("utf-8")).hexdigest()
 
