@@ -1683,18 +1683,21 @@ Follow the system instructions. Output the full article Markdown, then
 
     cl_data["draft_sha256"] = hashlib.sha256(draft_md.encode("utf-8")).hexdigest()
 
-    # Candidate is valid: now invalidate old downstream artifacts and commit
-    # the new draft + claim-ledger atomically.  Until this point no existing
-    # draft, claim-ledger, or w2-state file has been touched.
-    clear_stage_artifacts(workspace, slug, "w0")
-    cl_p = workspace / "research" / f"claim-ledger-{slug}.json"
-    if cl_p.exists():
-        cl_p.unlink()
+    # Commit the candidate atomically WITHOUT deleting old artifacts first.
+    # _write_ahead_draft_and_ledger snapshots existing files and rolls back on
+    # failure, so old draft / claim-ledger remain untouched if anything fails.
+    try:
+        _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"W0 写入草稿/claim-ledger 失败: {exc}",
+            "report": report,
+        }
 
-    # Write-ahead: write temp files then rename.
-    _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
-
-    # A fresh draft invalidates any previous post-process verdict.
+    # Only after a successful atomic commit: invalidate downstream W1b/W2
+    # artifacts and reset W2 state.  Old draft/ledger are already replaced.
+    clear_stage_artifacts(workspace, slug, "w1b")
     save_w2_state(workspace, slug, {"rounds": 0, "gate_passed": False, "applied": False})
 
     return {"success": True, "stage": "w1_draft", "report": report}

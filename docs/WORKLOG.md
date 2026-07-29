@@ -1,5 +1,22 @@
 # 工作日志
 
+## 2026-07-29 — 证据驱动事实校验最终验收追加修复 (W0 原子写异常路径)
+
+### 背景
+287cfd3 修复后，W0 在候选 draft/ledger 校验成功后仍会先 `clear_stage_artifacts('w0')` 删除旧 draft / claim-ledger / w2-state，再调用 `_write_ahead_draft_and_ledger`。若后者的第二次 `os.replace` 失败，旧文件已提前删除，回滚无法恢复，最终丢失旧产物并抛出未处理 `OSError`。
+
+### 完成
+- **Fix W0 原子写异常路径**：`stage_w0_validate_and_draft` 改为先调用 `_write_ahead_draft_and_ledger`（该函数内部会 snapshot 旧文件并在失败时 rollback），调用成功后再清理 `w1b` 产物（旧预检/后处理报告）并重置 w2-state。`_write_ahead_draft_and_ledger` 任何异常都被捕获并转为 `success=False` + 明确错误信息，不再向调用方抛未处理异常。
+- **测试**：新增 `TestW0AtomicWriteFailure::test_w0_second_replace_failure_preserves_old_artifacts`，预置旧 draft / claim-ledger / w2-state，mock 第二次 `os.replace` 抛 `OSError`，断言 W0 不抛异常、`success=False`、三份旧文件字节级不变。
+
+### 验证
+- `pytest tests/ -q`：301 passed（较前次 +1）
+- `ruff check src/seo_ops/services/legacy_workflow.py data_sources/modules/write_pre_check.py tests/test_legacy_workflow.py`：5 个 pre-existing F841，无新增
+
+### 未完成 / 遗留
+- 未在 action-2 生产数据上验证（按要求）
+- W2 revise 备份路径使用原 draft 后缀；与 `_today_str()` 自动滚动后可能错位，需在 UI 提示
+
 ## 2026-07-29 — 证据驱动事实校验最终验收修复 (2 项)
 
 ### 背景

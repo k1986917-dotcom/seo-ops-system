@@ -2459,6 +2459,117 @@ class TestAtomicWrite:
         assert '"version": 1' in cl_path.read_text(encoding="utf-8")
 
 
+class TestW0AtomicWriteFailure:
+    """W0 must preserve old artifacts if _write_ahead_draft_and_ledger fails."""
+
+    def _prep_workspace(self, tmp_path, slug):
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "material-packs").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+        (ws / "context").mkdir(parents=True)
+        (ws / "reports").mkdir(parents=True)
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        mp_path = ws / "material-packs" / f"{slug}-{today}.md"
+        mp_path.write_text("material pack content for AI.", encoding="utf-8")
+
+        draft_path = ws / "drafts" / f"{slug}-{today}.md"
+        draft_body = (
+            "---\nTitle: T\nSlug: " + slug + "\nAuthor: Test\n"
+            "Summary: S.\nTags: t\n"
+            "SEO Title: T SEO Title Long Enough For Validation\n"
+            "SEO Description: " + "A" * 152 + "\n"
+            "SEO Keywords: t\n"
+            "---\n\n"
+            "# T\n\n"
+            "This is a body sentence.\n\n"
+        )
+        draft_path.write_text(draft_body, encoding="utf-8")
+
+        cl_path = ws / "research" / f"claim-ledger-{slug}.json"
+        dr_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+        cl_path.write_text(json.dumps({
+            "version": 1,
+            "claims": [{
+                "claim_text": "This is a body sentence.",
+                "claim_type": "general",
+                "evidence_ids": ["ev_001"],
+            }],
+            "draft_sha256": dr_sha,
+        }), encoding="utf-8")
+
+        lw.save_report(
+            ws, "post-process", slug,
+            "# POST-PROCESS\n## 质量评分\n- 总分: 55 → ❌\n",
+        )
+        lw.save_w2_state(
+            ws, slug,
+            {"rounds": 0, "gate_passed": False, "applied": False,
+             "precheck_passed": True, "precheck_tier": "Cluster Content"},
+        )
+
+        return ws, slug, draft_path, cl_path
+
+    def test_w0_second_replace_failure_preserves_old_artifacts(self, tmp_path, monkeypatch):
+        import os as _os
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws, slug, draft_path, cl_path = self._prep_workspace(tmp_path, slug="w0-replace-fail")
+        state_path = ws / "reports" / f"w2-state-{slug}.json"
+
+        draft_snapshot = draft_path.read_bytes()
+        cl_snapshot = cl_path.read_bytes()
+        state_snapshot = state_path.read_bytes()
+
+        async def fake_ai(purpose, *a, **kw):
+            if purpose == "legacy_write_draft":
+                return (
+                    "---\nTitle: T\nSlug: w0-replace-fail\nAuthor: T\n"
+                    "Summary: S.\nTags: t\n"
+                    "SEO Title: T SEO Title Long Enough\n"
+                    "SEO Description: " + "B" * 152 + "\n"
+                    "SEO Keywords: t\n"
+                    "---\n\n"
+                    "# T\n\n"
+                    "new body sentence.\n\n"
+                    "===CLAIM_LEDGER===\n"
+                    '{"version":1,"claims":[{"claim_text":"new body sentence.",'
+                    '"claim_type":"spec","evidence_ids":["ev_001"]}]}\n'
+                )
+            return ""
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        original_replace = _os.replace
+        replace_count = [0]
+
+        def bad_replace(src, dst):
+            replace_count[0] += 1
+            if replace_count[0] == 2:
+                raise OSError("simulated second replace failure")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(_os, "replace", bad_replace)
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("w0 replace fail", "Test", ws))
+
+        assert result.get("success") is False
+        assert "simulated second replace failure" in result.get("error", "")
+        assert draft_path.read_bytes() == draft_snapshot, "old draft was modified"
+        assert cl_path.read_bytes() == cl_snapshot, "old claim ledger was modified"
+        assert state_path.read_bytes() == state_snapshot, "old w2 state was modified"
+
+
 class TestSentenceNormalizationUnified:
     """Fix3: W0/W1b must use the same sentence extraction logic."""
 

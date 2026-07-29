@@ -4,7 +4,12 @@
 
 ## 一句话状态
 
-源码 `0.11.5`（uncommitted）、SQLite v13。证据驱动事实校验最终验收通过：`_run_fact_check` 根 JSON 非 dict 时不再调用 `.get()`，直接结构化 blocking；`stage_w0_validate_and_draft` 失败时不再删除旧 draft / claim-ledger / w2-state。旧文章制作通道不变。
+源码 `0.11.5`（uncommitted）、SQLite v13。证据驱动事实校验最终验收通过：`_run_fact_check` 根 JSON 非 dict 时不再调用 `.get()`；`stage_w0_validate_and_draft` 在写入失败时保留旧 draft / claim-ledger / w2-state 并返回明确错误，不抛未处理异常。旧文章制作通道不变。
+
+## 2026-07-29 — 证据驱动事实校验最终验收追加修复 (0.11.5)
+
+- **W0 原子写异常路径保护**：`stage_w0_validate_and_draft` 先调用 `_write_ahead_draft_and_ledger`（失败时内部 rollback），成功后再清理 `w1b` 预检/后处理报告并重置 w2-state；`_write_ahead_draft_and_ledger` 异常被捕获转为 `success=False` 与明确错误信息，绝不向页面抛未处理异常。
+- 完整 `pytest -q` 301 passed（新增 1 个测试），`ruff check` 5 个 pre-existing F841 无新增。
 
 ## 2026-07-29 — 证据驱动事实校验最终验收修复 (0.11.5)
 
