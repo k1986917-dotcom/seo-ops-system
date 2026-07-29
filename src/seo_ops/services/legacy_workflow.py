@@ -1536,6 +1536,43 @@ Follow the system instructions exactly. Output Material Pack, then ===BRIEF===, 
 
 # ── W0-W1: Validate + Draft ─────────────────────────────────────────────
 
+_CLAIM_LEDGER_OUTPUT_CONTRACT = """## MANDATORY FINAL OUTPUT CONTRACT — DO NOT OMIT
+
+This is a required delivery contract, not an optional appendix. Your response
+must contain exactly these two parts, in this exact order:
+
+1. The complete article Markdown, including its frontmatter.
+2. On a line by itself, exactly `===CLAIM_LEDGER===`, immediately followed by
+   one valid JSON object and nothing else.
+
+Required shape of part 2 (the values below are placeholders only; never copy
+them literally):
+
+{
+  "version": 1,
+  "claims": [
+    {
+      "claim_text": "One complete factual sentence copied verbatim from the article.",
+      "claim_type": "general",
+      "evidence_ids": ["<copy-an-exact-id-from-Evidence-References>"]
+    }
+  ]
+}
+
+For every factual claim in the article, copy the full sentence verbatim into
+`claim_text` and use only the exact supporting evidence ID shown in Evidence
+References. Never invent an evidence ID. If the article genuinely contains no
+factual claims, use exactly `{"version":1,"claims":[]}` instead.
+
+Before submitting, silently verify: the separator exists exactly once; JSON is
+valid; every claim_text is a complete sentence from the article; every
+evidence_id is copied from Evidence References; and the response ends at the
+closing `}` of the JSON object. Do not use a Markdown code fence for the JSON.
+Do not add a preamble, explanation, apology, checklist, or any text after the
+JSON object. Missing this section makes the whole response unusable.
+"""
+
+
 _WRITE_AI_SYSTEM = """You are an SEO content writer. Follow these exact structural rules.
 
 ## Article Structure (in order):
@@ -1648,6 +1685,11 @@ SEO Keywords: [comma-separated, primary first]
 Output the article Markdown, then ``===CLAIM_LEDGER===``, then the JSON.
 No preamble, no commentary, no code fence around the whole document."""
 
+# Repeat the delivery contract at the end of the system instruction. W0 has
+# many structural writing rules; the final, explicit contract keeps small
+# instruction-following models from treating the ledger as an optional note.
+_WRITE_AI_SYSTEM += "\n\n" + _CLAIM_LEDGER_OUTPUT_CONTRACT
+
 
 def _write_context_block(workspace: Path) -> str:
     parts = []
@@ -1717,8 +1759,10 @@ async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
 ## Context
 {_write_context_block(workspace)}
 {ev_section}
-Follow the system instructions. Output the full article Markdown, then
-===CLAIM_LEDGER=== and the claim ledger JSON."""
+Follow the system instructions. The delivery contract below is repeated here
+because it is mandatory and must be the final rule you follow:
+
+{_CLAIM_LEDGER_OUTPUT_CONTRACT}"""
 
     try:
         content = await _run_ai_text(

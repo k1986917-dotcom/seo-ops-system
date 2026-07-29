@@ -1,5 +1,38 @@
 # 工作日志
 
+## 2026-07-29 — W0 claim-ledger 最终交卷合同强化
+
+### 背景
+
+真实 Hermes 验收中，DeepSeek V4 Flash 已完成 R0→R3，却在 W0 只返回文章正文，漏掉
+必需的 `===CLAIM_LEDGER===` JSON 区块。W0 正确 fail-closed；本单元只改善给模型的格式
+指令，不能把缺失 ledger 变为 warning、自动补造 ledger，或改动 W0/W1b/W2/W3 gate。
+
+### 完成
+
+- 新增统一的 W0 最终交卷合同，并同时置于系统提示末尾和用户提示末尾，要求固定的
+  “完整 Markdown 正文 → 单独分隔符 → 一个 JSON 对象”顺序。
+- 合同明确 JSON 的 `version`、`claims`、`claim_text`、`claim_type`、`evidence_ids`
+  形状；要求 claim_text 是正文逐字完整句、evidence ID 必须从 Evidence References
+  原样复制；无事实 claim 时才允许空数组。
+- 合同明确禁止 JSON 代码围栏、前言、解释和 JSON 后的尾随文字，并要求模型在提交前
+  自检分隔符、JSON、逐字 claim 和 evidence ID。
+- 新增 W0 prompt 回归测试，验证两层 prompt 都含不可省略合同及关键格式限制。
+
+### 验证
+
+- 目标 W0 contract 与原子写回归：2 passed。
+- 完整 `pytest -q`：310 passed，保留 1 条既有 Starlette/httpx 弃用警告。
+- `ruff check src/seo_ops/services/legacy_workflow.py`：通过；
+  `ruff check --ignore F841 tests/test_legacy_workflow.py`：通过。全仓该测试文件仍有
+  2 个既有 F841（2039、2087），本单元未新增。
+- `git diff --check`：通过。
+
+### 下一步
+
+- 本单元已提交；将提交导入本机 `codex/hermes-automation` 后正常 push，再使用正确的模块
+  启动命令在 action #3 重试 W0。若模型仍违反合同，保留真实失败报告，不绕过严格 gate。
+
 ## 2026-07-29 — 网页受控 AI 修订批次与失败记忆
 
 ### 完成

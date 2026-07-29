@@ -4,7 +4,23 @@
 
 ## 一句话状态
 
-源码 `0.11.5`（uncommitted）、SQLite v13。证据驱动事实校验最终验收通过：`_run_fact_check` 根 JSON 非 dict 时不再调用 `.get()`；`stage_w0_validate_and_draft` 在写入失败时保留旧 draft / claim-ledger / w2-state 并返回明确错误，不抛未处理异常。旧文章制作通道不变。
+源码 `0.11.5`、SQLite v13。证据驱动事实校验最终验收通过：`_run_fact_check` 根 JSON 非 dict 时不再调用 `.get()`；`stage_w0_validate_and_draft` 在写入失败时保留旧 draft / claim-ledger / w2-state 并返回明确错误，不抛未处理异常。旧文章制作通道不变。
+
+## 2026-07-29 — W0 claim-ledger 交卷格式强化（当前工作单元）
+
+- 真实 Hermes 验收显示 DeepSeek V4 Flash 可以完成 R0→R3，但曾在 W0 返回正文而
+  漏掉 `===CLAIM_LEDGER===`。这是模型格式遵循问题；严格 parser、原子写、证据/事实
+  校验和所有后续 gate 均不应修改。
+- W0 现把同一份不可省略的最终交卷合同放在系统提示末尾和用户提示末尾，明确固定
+  输出顺序、合法 JSON shape、证据 ID 来源、无代码围栏和 JSON 后不得有尾随文字。
+- 新增回归测试，确保这份合同同时存在于两层 W0 AI prompt；不调用真实 AI 或外部 API。
+
+### 下一步
+
+1. 运行完整测试和仅改动文件的 Ruff；通过后以一个新提交推送 `codex/hermes-automation`。
+2. 本机 `git pull` 后，使用 `PYTHONPATH=. .venv/bin/python -m seo_ops` 启动，并从
+   action #3 重新运行 W0；不手改 draft、ledger、数据库或状态文件。
+3. 若模型仍漏 ledger，保存真实失败输出并停止；不得通过放松 parser 或自动生成 ledger 解决。
 
 ## 2026-07-29 — Hermes 第一段真实自动化（当前工作单元）
 

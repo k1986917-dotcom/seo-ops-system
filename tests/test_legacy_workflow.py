@@ -2633,6 +2633,47 @@ class TestW0AtomicWriteFailure:
         assert cl_path.read_bytes() == cl_snapshot, "old claim ledger was modified"
         assert state_path.read_bytes() == state_snapshot, "old w2 state was modified"
 
+    def test_w0_prompt_repeats_non_optional_claim_ledger_contract(self, tmp_path, monkeypatch):
+        """W0 must make the ledger format prominent in both AI prompt layers."""
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "w0-contract"
+        (ws / "material-packs").mkdir(parents=True)
+        slug = "w0-output-contract"
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        (ws / "material-packs" / f"{slug}-{today}.md").write_text(
+            "Material pack content.", encoding="utf-8"
+        )
+        captured = {}
+
+        async def fake_ai(purpose, system_prompt, user_prompt, **kwargs):
+            assert purpose == "legacy_write_draft"
+            captured["system"] = system_prompt
+            captured["user"] = user_prompt
+            return (
+                "# Draft\n\nUse the material pack as the source of truth.\n\n"
+                "===CLAIM_LEDGER===\n"
+                '{"version":1,"claims":[]}'
+            )
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+
+        result = asyncio.run(lw.stage_w0_validate_and_draft("w0 output contract", "Test", ws))
+
+        assert result["success"] is True
+        for prompt in (captured["system"], captured["user"]):
+            assert "MANDATORY FINAL OUTPUT CONTRACT — DO NOT OMIT" in prompt
+            assert "required delivery contract, not an optional appendix" in prompt
+            assert "exactly `===CLAIM_LEDGER===`" in prompt
+            assert "Do not use a Markdown code fence for the JSON" in prompt
+            assert "response ends at the\nclosing `}`" in prompt
+
 
 class TestSentenceNormalizationUnified:
     """Fix3: W0/W1b must use the same sentence extraction logic."""
