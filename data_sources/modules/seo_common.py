@@ -396,6 +396,9 @@ def slugify(text: str) -> str:
 
 # ── Shared claim-text / sentence extraction (single authoritative impl) ──
 
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
 def normalize_claim_text(text: str) -> str:
     """Normalize a claim_text or draft sentence for exact full-string match.
 
@@ -425,16 +428,10 @@ def extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
 
     Returns ``[{"sentence_id": "S001", "text": <original>, "norm": <norm>}, …]``
     """
-    body = draft_md
-    if draft_md.startswith("---"):
-        parts = draft_md.split("---", 2)
-        if len(parts) >= 3:
-            body = parts[2]
-    _re_import = __import__("re")
-    _SENTENCE_SPLIT = _re_import.compile(r"(?<=[.!?])\s+")
+    body = strip_frontmatter(draft_md or "")
     sentences: list[dict[str, str]] = []
-    for para in _re_import.split(r"\n\n+", body):
-        for sent in _SENTENCE_SPLIT.split(para):
+    for para in re.split(r"\n\n+", body):
+        for sent in _SENTENCE_SPLIT_RE.split(para):
             text = sent.strip()
             norm = normalize_claim_text(text)
             if not norm:

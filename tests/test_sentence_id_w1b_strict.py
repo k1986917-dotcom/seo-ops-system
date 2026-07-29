@@ -1,4 +1,10 @@
 import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
 
 
 def _run_fact_check(tmp_path, ev_text, cl_text, draft_text="Draft sentence.\n"):
@@ -67,7 +73,7 @@ class TestStrictSentenceIdMode:
         fact = _run_fact_check(tmp_path, _valid_ev(), _valid_cl(cl),
                                "The 5mW green laser has a wavelength of 532nm.\n")
         joined = "\n".join(r['detail'] for r in fact)
-        assert "缺 sentence_id 字段" in joined, joined
+        assert "sentence_id 是 null" in joined, joined
 
     def test_sentence_id_empty_string_blocked(self, tmp_path):
         cl = '[{"sentence_id":"","claim_text":"The 5mW green laser has a wavelength of 532nm.","claim_type":"spec","evidence_ids":["ev_001"]}]'
@@ -81,7 +87,26 @@ class TestStrictSentenceIdMode:
         fact = _run_fact_check(tmp_path, _valid_ev(), _valid_cl(cl),
                                "The 5mW green laser has a wavelength of 532nm.\n")
         joined = "\n".join(r['detail'] for r in fact)
-        assert "空字符串" in joined, joined
+        assert "纯空白字符串" in joined, joined
+
+    @pytest.mark.parametrize("sentence_id", [" S001", "S001 ", " S001 "])
+    def test_sentence_id_edge_whitespace_blocked(
+        self, tmp_path, sentence_id
+    ):
+        claims = json.dumps([{
+            "sentence_id": sentence_id,
+            "claim_text": "The 5mW green laser has a wavelength of 532nm.",
+            "claim_type": "spec",
+            "evidence_ids": ["ev_001"],
+        }])
+        fact = _run_fact_check(
+            tmp_path,
+            _valid_ev(),
+            _valid_cl(claims),
+            "The 5mW green laser has a wavelength of 532nm.\n",
+        )
+        joined = "\n".join(r["detail"] for r in fact)
+        assert "含首尾空白" in joined, joined
 
     def test_sentence_id_int_blocked(self, tmp_path):
         cl = '[{"sentence_id":123,"claim_text":"The 5mW green laser has a wavelength of 532nm.","claim_type":"spec","evidence_ids":["ev_001"]}]'
@@ -146,16 +171,27 @@ class TestSharedExtractorConsistency:
         assert "Real sentence." in texts
         assert not any("Title" in t for t in texts), "frontmatter leaked"
 
-    def test_heading_excluded(self):
-        from data_sources.modules.seo_common import extract_draft_sentences
+    def test_heading_handling_is_identical(self):
+        from data_sources.modules.write_pre_check import _draft_sentence_table
+        from src.seo_ops.services.legacy_workflow import _extract_draft_sentences
+
         draft = "---\nTitle: T\n---\n\n## A heading\n\nBody.\n"
-        sents = extract_draft_sentences(draft)
-        texts = [s["text"] for s in sents]
-        # heading has no period, so it won't be sentence-split
-        # but it will appear since `## A heading` is a paragraph
-        # wait - it has no trailing punctuation, but it's still a line.
-        # _normalize_claim doesn't strip `##`. Let's just check body.
-        assert any("Body" in t for t in texts), "body should appear"
+        w0_sentences = _extract_draft_sentences(draft)
+        w1b_table = _draft_sentence_table(draft)
+        w1b_sentences = [
+            {
+                "sentence_id": sentence_id,
+                "text": sentence["text"],
+                "norm": sentence["norm"],
+            }
+            for sentence_id, sentence in w1b_table.items()
+        ]
+
+        assert w0_sentences == w1b_sentences
+        assert [sentence["text"] for sentence in w0_sentences] == [
+            "## A heading",
+            "Body.",
+        ]
 
     def test_markdown_link(self):
         from data_sources.modules.seo_common import extract_draft_sentences
@@ -209,6 +245,84 @@ class TestFactualSentenceCoverage:
         joined = "\n".join(r['detail'] for r in fact)
         # The second factual sentence "It has a 532nm wavelength." is not covered.
         assert "文章含事实句但 ledger 未覆盖" in joined, joined
+
+
+class TestStandaloneScript:
+    def test_write_pre_check_standalone_runs_fact_check(self, tmp_path):
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "data_sources/modules/write_pre_check.py"
+        material_pack = tmp_path / "material-pack.md"
+        evidence_ledger = tmp_path / "evidence-ledger.json"
+        claim_ledger = tmp_path / "claim-ledger.json"
+        draft = tmp_path / "draft.md"
+
+        material_pack.write_text("mp", encoding="utf-8")
+        draft_text = "The 5mW green laser has a wavelength of 532nm.\n"
+        draft.write_text(draft_text, encoding="utf-8")
+        material_pack_sha = hashlib.sha256(material_pack.read_bytes()).hexdigest()
+        draft_sha = hashlib.sha256(
+            draft_text.strip().encode("utf-8")
+        ).hexdigest()
+
+        evidence_ledger.write_text(
+            json.dumps({
+                "version": 1,
+                "material_pack_sha256": material_pack_sha,
+                "evidence": [{
+                    "evidence_id": "ev_001",
+                    "source_url": "https://example.com/source",
+                    "quote": "supporting source text",
+                    "canonical_concepts": ["laser"],
+                    "claim_types": ["spec"],
+                    "required": False,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        claim_ledger.write_text(
+            json.dumps({
+                "version": 1,
+                "claims": [{
+                    "sentence_id": "S001",
+                    "claim_text": draft_text.strip(),
+                    "claim_type": "spec",
+                    "evidence_ids": ["ev_001"],
+                }],
+                "draft_sha256": draft_sha,
+            }),
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--draft",
+                str(draft),
+                "--tier",
+                "Cluster Content",
+                "--pack",
+                str(material_pack),
+                "--evidence-ledger",
+                str(evidence_ledger),
+                "--claim-ledger",
+                str(claim_ledger),
+                "--material-pack",
+                str(material_pack),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        combined = proc.stdout + proc.stderr
+
+        # The short fixture intentionally fails unrelated SEO checks, so the
+        # CLI exits 1. It must still complete normally and run fact checking.
+        assert proc.returncode == 1, combined
+        assert "Traceback" not in combined
+        assert "ModuleNotFoundError" not in combined
+        assert "事实校验" in proc.stdout
 
 
 class TestExistingTestsStillPass:

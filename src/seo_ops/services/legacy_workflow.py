@@ -803,8 +803,7 @@ def _remove_ledger_files(workspace: Path, slug: str) -> None:
 
 def _normalize_claim(text: str) -> str:
     """Wrap the shared ``normalize_claim_text`` from ``seo_common``."""
-    from data_sources.modules.seo_common import normalize_claim_text as _nct
-    return _nct(text)
+    return seo_common.normalize_claim_text(text)
 
 
 def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
@@ -835,9 +834,12 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
         raise ValueError("CLAIM_LEDGER.claims must be a list")
 
     # Build the normative sentence set from the shared implementation.
-    from data_sources.modules.seo_common import extract_draft_sentences as _eds
-    _all_sentences = _eds(draft_body) if draft_body else []
-    normalized_draft = {s["norm"] for s in _all_sentences}
+    all_sentences = (
+        seo_common.extract_draft_sentences(draft_body)
+        if draft_body
+        else []
+    )
+    normalized_draft = {sentence["norm"] for sentence in all_sentences}
 
     for idx, c in enumerate(claims):
         if not isinstance(c, dict):
@@ -883,8 +885,7 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
 
 def _extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
     """Wrap the shared ``extract_draft_sentences`` from ``seo_common``."""
-    from data_sources.modules.seo_common import extract_draft_sentences as _eds
-    return _eds(draft_md)
+    return seo_common.extract_draft_sentences(draft_md)
 
 
 _CANONICAL_KEYS = frozenset({"version", "claims"})

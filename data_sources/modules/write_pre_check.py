@@ -39,13 +39,20 @@ import sys
 from pathlib import Path
 
 try:
-    from seo_common import classify_value
+    from data_sources.modules import seo_common
 except ImportError:
     import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location('seo_common', Path(__file__).resolve().parent / 'seo_common.py')
+
+    _spec = _ilu.spec_from_file_location(
+        "seo_common",
+        Path(__file__).resolve().parent / "seo_common.py",
+    )
+    if _spec is None or _spec.loader is None:
+        raise ImportError("cannot load local seo_common.py") from None
     seo_common = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(seo_common)
-    classify_value = seo_common.classify_value
+
+classify_value = seo_common.classify_value
 
 try:
     from seo_config import TIER_MIN_WORDS
@@ -394,39 +401,38 @@ _FACTUAL_SIGNAL_RE = re.compile(
 
 def _strip_frontmatter(body: str) -> str:
     """Remove YAML frontmatter delimited by ``---``."""
-    if body.startswith("---"):
-        parts = body.split("---", 2)
-        if len(parts) >= 3:
-            return parts[2]
-    return body
+    return seo_common.strip_frontmatter(body)
 
 
 def _draft_sentences_set(draft_body: str) -> set[str]:
-    """Delegates to ``seo_common.extract_draft_sentences`` and returns
-    the set of normalized sentence texts."""
+    """Return the shared normalized draft-sentence inventory."""
     if not draft_body:
         return set()
-    from data_sources.modules.seo_common import extract_draft_sentences as _eds
-    return {s["norm"] for s in _eds(draft_body)}
+    return {
+        sentence["norm"]
+        for sentence in seo_common.extract_draft_sentences(draft_body)
+    }
 
 
 def _draft_sentence_table(draft_body: str) -> dict[str, dict[str, str]]:
-    """Delegates to ``seo_common.extract_draft_sentences`` and returns
-    a ``{sentence_id: {text, norm}}`` lookup table."""
+    """Return the shared sentence inventory keyed by exact sentence_id."""
     if not draft_body:
         return {}
-    from data_sources.modules.seo_common import extract_draft_sentences as _eds
-    return {s["sentence_id"]: {"text": s["text"], "norm": s["norm"]} for s in _eds(draft_body)}
+    return {
+        sentence["sentence_id"]: {
+            "text": sentence["text"],
+            "norm": sentence["norm"],
+        }
+        for sentence in seo_common.extract_draft_sentences(draft_body)
+    }
 
 
 def _extract_factual_sentences(draft_body: str) -> list[dict]:
-    """Return factual sentences using the shared sentence table and the
-    existing ``_FACTUAL_SIGNAL_RE`` fact heuristic."""
+    """Filter factual assertions from the shared sentence inventory."""
     if not draft_body:
         return []
-    from data_sources.modules.seo_common import extract_draft_sentences as _eds
     out: list[dict] = []
-    for entry in _eds(draft_body):
+    for entry in seo_common.extract_draft_sentences(draft_body):
         text = entry["text"]
         if len(text) < 15:
             continue
@@ -441,18 +447,15 @@ def _extract_factual_sentences(draft_body: str) -> list[dict]:
 # ── Normalized claim matching ───────────────────────────────────────────
 
 def _normalize(text: str) -> str:
-    """Delegates to ``seo_common.normalize_claim_text``."""
-    from data_sources.modules.seo_common import normalize_claim_text as _nct
-    return _nct(text)
+    """Delegate to the shared canonical claim normalizer."""
+    return seo_common.normalize_claim_text(text)
 
 
 def _claim_in_draft(claim_text: str, draft_body: str) -> bool:
-    """True if the normalized claim_text exists as a normalized sentence in
-    the draft body (using the shared authoritative sentence extractor)."""
+    """True when claim_text matches one shared normalized draft sentence."""
     if not claim_text or not draft_body:
         return False
-    from data_sources.modules.seo_common import normalize_claim_text as _nct
-    norm_ct = _nct(claim_text)
+    norm_ct = seo_common.normalize_claim_text(claim_text)
     if not norm_ct:
         return False
     return norm_ct in _draft_sentences_set(draft_body)
@@ -755,10 +758,15 @@ def _run_fact_check(
 
         # ── Strict sentence_id mode (when at least one claim has the field) ──
         if strict_sentence_id_mode:
-            sid_raw = claim.get("sentence_id")
-            if sid_raw is None:
+            if "sentence_id" not in claim:
                 blocking_items.append(
                     f"  • [blocking] claims[{idx}] 缺 sentence_id 字段"
+                )
+                continue
+            sid_raw = claim["sentence_id"]
+            if sid_raw is None:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id 是 null"
                 )
                 continue
             if not isinstance(sid_raw, str):
@@ -767,35 +775,44 @@ def _run_fact_check(
                     f"期望 str，实际 {type(sid_raw).__name__}"
                 )
                 continue
-            sid = sid_raw.strip()
-            if not sid:
+            if sid_raw == "":
                 blocking_items.append(
                     f"  • [blocking] claims[{idx}].sentence_id 是空字符串"
                 )
                 continue
-            sent_info = claim_sentence_table.get(sid)
+            if not sid_raw.strip():
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id 是纯空白字符串"
+                )
+                continue
+            if sid_raw != sid_raw.strip():
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id 含首尾空白"
+                )
+                continue
+            sent_info = claim_sentence_table.get(sid_raw)
             if sent_info is None:
                 blocking_items.append(
-                    f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
+                    f"  • [blocking] claims[{idx}].sentence_id '{sid_raw}' "
                     f"在当前草稿中不存在"
                 )
                 continue
             # Exact match between the raw claim_text and the server sentence.
             if ct_raw != sent_info["text"]:
                 blocking_items.append(
-                    f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
+                    f"  • [blocking] claims[{idx}].sentence_id '{sid_raw}' "
                     f"的 claim_text 与草稿原句不一致"
                 )
                 continue
-            if _normalize(ct) != sent_info["norm"]:
+            if _normalize(ct_raw) != sent_info["norm"]:
                 blocking_items.append(
-                    f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
+                    f"  • [blocking] claims[{idx}].sentence_id '{sid_raw}' "
                     f"规范化后与草稿句子不匹配"
                 )
                 continue
         else:
             # ── Legacy mode (no sentence_id in any claim) ──
-            if not _claim_in_draft(ct, draft_body):
+            if not _claim_in_draft(ct_raw, draft_body):
                 blocking_items.append(
                     f"  • [blocking] claim_text 不在草稿正文中: '{ct[:60]}'"
                 )
