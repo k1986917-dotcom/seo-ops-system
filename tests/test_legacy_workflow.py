@@ -4441,6 +4441,163 @@ class TestSentenceIdAtomicWrite:
         assert old_cl.read_bytes() == snapshot_cl
 
 
+class TestUnifiedSentenceMatching:
+    """_claim_in_draft and _extract_factual_sentences must use the same
+    paragraph-first, frontmatter-aware split as the server-side
+    _extract_draft_sentences / _validate_claim_ledger_json."""
+
+    def test_rich_markdown_claim_text_matches(self):
+        """Markdown formatting (bold, links, blockquotes) must not cause
+        false negatives in _claim_in_draft."""
+        from data_sources.modules.write_pre_check import _claim_in_draft, _extract_factual_sentences
+
+        draft = (
+            "---\nTitle: T\nSlug: s\n---\n\n"
+            "## Safety\n\n"
+            "- **Class 2 is safe:** The blink reflex prevents eye injury.\n"
+            "- [OSHA states](http://osha.gov) that Class 3R lasers require controls.\n"
+            "  This is a continuation of the same list item.\n"
+        )
+        # The server-filled claim_text is the exact extracted sentence.
+        # Use _extract_draft_sentences from legacy_workflow.py to get the
+        # canonical sentences, then verify _claim_in_draft finds each one.
+        from seo_ops.services.legacy_workflow import _extract_draft_sentences
+        sents = _extract_draft_sentences(draft)
+        assert len(sents) >= 3, f"expected >=3 sentences, got {len(sents)}"
+        for s in sents:
+            assert _claim_in_draft(s["text"], draft), (
+                f"extracted sentence not found by _claim_in_draft: {s['sentence_id']} '{s['text'][:60]}'"
+            )
+        # Factual extraction must not pick up frontmatter lines or
+        # markdown link syntax as separate sentences.
+        extracted = _extract_factual_sentences(draft)
+        texts = {e["sentence"] for e in extracted}
+        for bad in ("---", "Title: T", "Slug: s", "## Safety"):
+            assert not any(bad in t for t in texts), f"frontmatter leaked: {bad}"
+
+    def test_markdown_link_sentence_matches(self):
+        """A claim_text that includes a Markdown link must be found by
+        _claim_in_draft when the draft contains the identical link."""
+        from data_sources.modules.write_pre_check import _claim_in_draft
+
+        draft = (
+            "---\nTitle: T\n---\n\n"
+            "[OSHA states](http://osha.gov) that Class 3R lasers require "
+            "controls.\n"
+        )
+        ct = "[OSHA states](http://osha.gov) that Class 3R lasers require controls."
+        assert _claim_in_draft(ct, draft)
+
+    def test_tampered_claim_text_blocked_by_fact_check(self, tmp_path):
+        """sentence_id correct but claim_text is NOT the server-filled
+        canonical sentence → _run_fact_check must block."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_text = "The 5mW green laser has a wavelength of 532nm.\n"
+        dr_f.write_text(dr_text, encoding="utf-8")
+        # _run_fact_check computes draft_body = draft_text.split('===CLAIM_LEDGER===')[0].strip()
+        draft_body = dr_text.strip()
+        dr_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com/a",'
+            '"quote":"data","canonical_concepts":["x"],"claim_types":["y"],"required":false}]}',
+            encoding="utf-8",
+        )
+        # claim ledger with sentence_id BUT tampered claim_text
+        cl_f.write_text(
+            '{"version":1,"claims":[{"sentence_id":"S001",'
+            '"claim_text":"THE MODEL TAMPERED WITH THIS TEXT",'
+            '"claim_type":"spec","evidence_ids":["ev_001"]}],'
+            '"draft_sha256":"' + dr_sha + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "claim_text 不在草稿正文中" in joined, (
+            f"Tampered claim_text must be blocked: {joined[:200]}"
+        )
+
+    def test_draft_changed_after_ledger_blocks(self, tmp_path):
+        """If the draft on disk has a different sha256 than the ledger,
+        _run_fact_check must block at the SHA check (it never reaches
+        _claim_in_draft)."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text("Draft text, different from ledger sha.\n", encoding="utf-8")
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[]}',
+            encoding="utf-8",
+        )
+        cl_f.write_text(
+            '{"version":1,"claims":[],"draft_sha256":"0000000000000000000000000000000000000000"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "draft_sha256 不匹配" in joined, (
+            f"SHA mismatch must be caught: {joined[:200]}"
+        )
+
+    def test_legacy_ledger_no_sentence_id_still_works(self, tmp_path):
+        """A ledger without sentence_id must still pass _claim_in_draft
+        if the claim_text matches a draft sentence exactly."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_text = "The 5mW green laser has a wavelength of 532nm.\n"
+        dr_f.write_text(dr_text, encoding="utf-8")
+        draft_body = dr_text.strip()
+        dr_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com/a",'
+            '"quote":"data","canonical_concepts":["x"],"claim_types":["y"],"required":false}]}',
+            encoding="utf-8",
+        )
+        # No sentence_id, old-style claim_text
+        cl_f.write_text(
+            '{"version":1,"claims":[{"claim_text":"The 5mW green laser has a wavelength of 532nm.",'
+            '"claim_type":"spec","evidence_ids":["ev_001"]}],'
+            '"draft_sha256":"' + dr_sha + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        assert all(r['pass'] for r in fact), (
+            f"Legacy ledger should pass: {[r['detail'][:80] for r in fact]}"
+        )
+
+
 _POST_PROCESS_REPORT_60 = """# POST-PROCESS 报告
 
 ## 质量评分

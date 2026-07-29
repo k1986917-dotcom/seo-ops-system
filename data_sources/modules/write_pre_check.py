@@ -392,26 +392,65 @@ _FACTUAL_SIGNAL_RE = re.compile(
 )
 
 
+def _strip_frontmatter(body: str) -> str:
+    """Remove YAML frontmatter delimited by ``---``, matching
+    ``_validate_claim_ledger_json`` behaviour in ``legacy_workflow.py``."""
+    if body.startswith("---"):
+        parts = body.split("---", 2)
+        if len(parts) >= 3:
+            return parts[2]
+    return body
+
+
+def _draft_sentences_set(draft_body: str) -> set[str]:
+    """Split the draft body into normalized sentences using the same
+    paragraph-then-sentence approach as ``_extract_draft_sentences`` in
+    ``legacy_workflow.py``.  Frontmatter is stripped first.
+
+    Returns ``set[str]`` of ``_normalize``-d sentences for fast membership
+    testing.  This is the single authoritative split for both
+    ``_claim_in_draft`` and ``_extract_factual_sentences``.
+    """
+    if not draft_body:
+        return set()
+    body = _strip_frontmatter(draft_body)
+    import re as _re
+    _SENTENCE_SPLIT = _re.compile(r'(?<=[.!?])\s+')
+    result: set[str] = set()
+    for para in _re.split(r'\n\n+', body):
+        for sent in _SENTENCE_SPLIT.split(para):
+            norm = _normalize(sent)
+            if norm:
+                result.add(norm)
+    return result
+
+
 def _extract_factual_sentences(draft_body: str) -> list[dict]:
     """Find sentences in the draft that contain factual assertions.
 
     Returns a list of ``{"sentence": str, "sentence_sha": str}`` dicts.
     Each sentence is the original text, unstripped, so that
-    ``_normalize_claim`` on the ledger can match it.
+    ``_normalize`` on the ledger can match it.  Frontmatter is excluded
+    and the same paragraph-first split as ``_validate_claim_ledger_json``
+    is used, so the sentence inventory is identical to the server-side
+    ``_extract_draft_sentences``.
     """
+    if not draft_body:
+        return []
+    body = _strip_frontmatter(draft_body)
     import re as _re
-    # Split on sentence boundaries.
-    sents = _re.split(r'(?<=[.!?])\s+', draft_body)
+    _SENTENCE_SPLIT = _re.compile(r'(?<=[.!?])\s+')
     out: list[dict] = []
-    for s in sents:
-        s = s.strip()
-        if not s or len(s) < 15:
-            continue
-        if _FACTUAL_SIGNAL_RE.search(s):
-            out.append({
-                "sentence": s,
-                "sentence_sha": hashlib.sha256(s.encode("utf-8")).hexdigest(),
-            })
+    for para in _re.split(r'\n\n+', body):
+        for sent in _SENTENCE_SPLIT.split(para):
+            s = sent.strip()
+            if not s or len(s) < 15:
+                continue
+            if _FACTUAL_SIGNAL_RE.search(s):
+                out.append({
+                    "sentence": s,
+                    "sentence_sha": hashlib.sha256(s.encode("utf-8")).hexdigest(),
+                })
     return out
 
 
@@ -433,23 +472,19 @@ def _normalize(text: str) -> str:
 
 
 def _claim_in_draft(claim_text: str, draft_body: str) -> bool:
-    """True if the normalized claim_text exists as a normalized line in the
-    draft body.  This is a full-sentence equality check (not substring)."""
+    """True if the normalized claim_text exists as a normalized sentence in
+    the draft body (paragraph-first split, frontmatter stripped).
+
+    This is a full-sentence equality check (not substring), using the exact
+    same ``_normalize`` function and paragraph-first tokenizer as the
+    server-side sentence-id validator.
+    """
     if not claim_text or not draft_body:
         return False
     norm_ct = _normalize(claim_text)
     if not norm_ct:
         return False
-    # Attempt exact normalized match against each draft line.
-    for line in draft_body.split("\n"):
-        if _normalize(line) == norm_ct:
-            return True
-    # Also try split on sentence boundaries.
-    import re as _re
-    for sent in _re.split(r'(?<=[.!?])\s+', draft_body):
-        if _normalize(sent) == norm_ct:
-            return True
-    return False
+    return norm_ct in _draft_sentences_set(draft_body)
 
 
 # ── Fact check (check 14) ──────────────────────────────────────────────
