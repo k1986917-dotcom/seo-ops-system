@@ -824,16 +824,20 @@ def _write_ahead_draft_and_ledger(
     ``{"draft_path": str, "claim_path": str}``.
 
     Write-ahead protocol:
-    1. Snapshot old content of both files (for rollback).
+    1. Record whether each target file existed, snapshot its content if so.
     2. Write temp files with the new content.
     3. Flush + fsync each temp file.
     4. Rename draft temp → real.
     5. Rename ledger temp → real.
-    6. On ANY failure after step 2, rollback both files to their old content
-       and delete temp files.
+    6. On ANY failure after step 2, restore consistency:
+       - If old file existed → restore old content.
+       - If old file did NOT exist (but the first replace created it)
+         → delete the file so the workspace returns to "neither exists".
+       - If both replaces succeeded → leave both new files.
 
     This guarantees no mixed-version state survives: either both files are
-    updated atomically, or neither is.
+    the new version, or both are the old version (including the case where
+    neither existed before).
     """
     import os as _os
     import tempfile as _tf
@@ -843,17 +847,21 @@ def _write_ahead_draft_and_ledger(
     draft_path.parent.mkdir(parents=True, exist_ok=True)
     cl_path.parent.mkdir(parents=True, exist_ok=True)
 
-    old_draft_content: str | None = None
-    old_cl_content: str | None = None
+    draft_existed = draft_path.exists()
+    cl_existed = cl_path.exists()
+    old_draft_content: str | None = (
+        draft_path.read_text(encoding="utf-8") if draft_existed else None
+    )
+    old_cl_content: str | None = (
+        cl_path.read_text(encoding="utf-8") if cl_existed else None
+    )
+
     tmp_draft_path: Path | None = None
     tmp_cl_path: Path | None = None
+    draft_replaced = False
+    cl_replaced = False
 
     try:
-        if draft_path.exists():
-            old_draft_content = draft_path.read_text(encoding="utf-8")
-        if cl_path.exists():
-            old_cl_content = cl_path.read_text(encoding="utf-8")
-
         _, tmp_draft_path_str = _tf.mkstemp(
             dir=str(draft_path.parent),
             prefix=f".{slug}-", suffix=".md.tmp"
@@ -875,9 +883,11 @@ def _write_ahead_draft_and_ledger(
 
         _os.replace(tmp_draft_path, draft_path)
         tmp_draft_path = None
+        draft_replaced = True
 
         _os.replace(tmp_cl_path, cl_path)
         tmp_cl_path = None
+        cl_replaced = True
 
     except Exception:
         if tmp_draft_path is not None and tmp_draft_path.exists():
@@ -888,13 +898,22 @@ def _write_ahead_draft_and_ledger(
         if tmp_cl_path is not None and tmp_cl_path.exists():
             try:
                 tmp_cl_path.unlink()
-                pass
             except OSError:
                 pass
-        if old_draft_content is not None:
-            draft_path.write_text(old_draft_content, encoding="utf-8")
-        if old_cl_content is not None:
-            cl_path.write_text(old_cl_content, encoding="utf-8")
+        if draft_replaced and not draft_existed:
+            try:
+                draft_path.unlink()
+            except OSError:
+                pass
+        elif draft_replaced and draft_existed:
+            draft_path.write_text(old_draft_content or "", encoding="utf-8")
+        if cl_replaced and not cl_existed:
+            try:
+                cl_path.unlink()
+            except OSError:
+                pass
+        elif cl_replaced and cl_existed:
+            cl_path.write_text(old_cl_content or "", encoding="utf-8")
         raise
 
     return {"draft_path": str(draft_path), "claim_path": str(cl_path)}

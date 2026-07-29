@@ -466,10 +466,30 @@ def _run_fact_check(
 
     Each failure outputs a structured entry with claim_text, claim_type,
     reason, evidence_id, URL, and quote/kf for use in the AI revision prompt.
+
+    All ledger fields (evidence_id, source_url, quote, key_finding,
+    claim_text, claim_type, material_pack_sha256, draft_sha256, and each
+    evidence_ids entry) are type-validated BEFORE any strip/slice/format
+    operation.  Non-string types produce structured blocking items rather
+    than AttributeError.
     """
     # Helper to emit a structured-grade entry.
     def grade_detail(level: str, msg: str, detail: str) -> None:
         grade(level, msg, detail)
+
+    # Helper: pull a string field with type check. Returns (value, ok).
+    def _str_field(
+        container: dict, key: str, field_label: str, errors: list[str]
+    ) -> tuple[str, bool]:
+        v = container.get(key)
+        if v is None:
+            return "", False
+        if not isinstance(v, str):
+            errors.append(
+                f"  • [blocking] {field_label} 类型错误：期望 str，实际 {type(v).__name__}"
+            )
+            return "", False
+        return v, True
 
     # 1. Evidence-ledger exists & is valid.
     if not evidence_path or not Path(evidence_path).exists():
@@ -501,7 +521,16 @@ def _run_fact_check(
     mp_sha = hashlib.sha256(
         Path(material_pack_path).read_bytes()
     ).hexdigest()
-    ev_mp_sha = ev_data.get("material_pack_sha256", "")
+    # Type-check material_pack_sha256 BEFORE any strip/slice.
+    ev_mp_sha_raw = ev_data.get("material_pack_sha256")
+    if ev_mp_sha_raw is not None and not isinstance(ev_mp_sha_raw, str):
+        grade_detail(
+            "fail", "事实校验",
+            f"evidence-ledger.material_pack_sha256 类型错误："
+            f"期望 str，实际 {type(ev_mp_sha_raw).__name__}",
+        )
+        return
+    ev_mp_sha = ev_mp_sha_raw or ""
     if ev_mp_sha != mp_sha:
         grade_detail(
             "fail", "事实校验",
@@ -541,7 +570,16 @@ def _run_fact_check(
     # Only the article body (before ===CLAIM_LEDGER===) is hashed.
     draft_body = draft_text.split("===CLAIM_LEDGER===")[0].strip()
     actual_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
-    expected_sha = cl_data.get("draft_sha256", "")
+    # Type-check draft_sha256 BEFORE any strip/slice.
+    expected_sha_raw = cl_data.get("draft_sha256")
+    if expected_sha_raw is not None and not isinstance(expected_sha_raw, str):
+        grade_detail(
+            "fail", "事实校验",
+            f"claim-ledger.draft_sha256 类型错误："
+            f"期望 str，实际 {type(expected_sha_raw).__name__}",
+        )
+        return
+    expected_sha = expected_sha_raw or ""
     if not expected_sha or actual_sha != expected_sha:
         grade_detail(
             "fail", "事实校验",
@@ -560,7 +598,16 @@ def _run_fact_check(
                 f"  • [blocking] evidence[{idx}] 不是 dict，而是 {type(ev).__name__}"
             )
             continue
-        eid = (ev.get("evidence_id") or "").strip() if isinstance(ev, dict) else ""
+        eid_raw = ev.get("evidence_id")
+        if eid_raw is None:
+            continue
+        if not isinstance(eid_raw, str):
+            blocking_items.append(
+                f"  • [blocking] evidence[{idx}].evidence_id 类型错误："
+                f"期望 str，实际 {type(eid_raw).__name__}"
+            )
+            continue
+        eid = eid_raw.strip()
         if not eid:
             continue
         if eid in seen_ids:
@@ -578,8 +625,43 @@ def _run_fact_check(
                 f"  • [blocking] claims[{idx}] 不是 dict，而是 {type(claim).__name__}"
             )
             continue
-        ct = (claim.get("claim_text") or "").strip()
-        ctype = (claim.get("claim_type") or "").strip()
+
+        # Type-check claim_text BEFORE strip/slice.
+        ct_raw = claim.get("claim_text")
+        if ct_raw is None:
+            blocking_items.append(f"  • [blocking] claims[{idx}].claim_text 为空")
+            continue
+        if not isinstance(ct_raw, str):
+            blocking_items.append(
+                f"  • [blocking] claims[{idx}].claim_text 类型错误："
+                f"期望 str，实际 {type(ct_raw).__name__}"
+            )
+            continue
+        ct = ct_raw.strip()
+        if not ct:
+            blocking_items.append(f"  • [blocking] claims[{idx}].claim_text 为空")
+            continue
+
+        # Type-check claim_type BEFORE strip/slice.
+        ctype_raw = claim.get("claim_type")
+        if ctype_raw is None:
+            blocking_items.append(
+                f"  • [blocking] claim '{ct[:40]}' 缺 claim_type"
+            )
+            continue
+        if not isinstance(ctype_raw, str):
+            blocking_items.append(
+                f"  • [blocking] claims[{idx}].claim_type 类型错误："
+                f"期望 str，实际 {type(ctype_raw).__name__}"
+            )
+            continue
+        ctype = ctype_raw.strip()
+        if not ctype:
+            blocking_items.append(
+                f"  • [blocking] claim '{ct[:40]}' 缺 claim_type"
+            )
+            continue
+
         eids = claim.get("evidence_ids")
         if not isinstance(eids, list):
             blocking_items.append(
@@ -587,14 +669,6 @@ def _run_fact_check(
             )
             continue
 
-        if not ct:
-            blocking_items.append(f"  • [blocking] claims[{idx}].claim_text 为空")
-            continue
-        if not ctype:
-            blocking_items.append(
-                f"  • [blocking] claim '{ct[:40]}' 缺 claim_type"
-            )
-            continue
         if not _claim_in_draft(ct, draft_body):
             blocking_items.append(
                 f"  • [blocking] claim_text 不在草稿正文中: '{ct[:60]}'"
@@ -607,10 +681,17 @@ def _run_fact_check(
             )
             continue
 
-        for eid in eids:
-            if not eid or not isinstance(eid, str):
+        for eid_idx, eid in enumerate(eids):
+            # Type-check each evidence_ids entry BEFORE using.
+            if not isinstance(eid, str):
                 blocking_items.append(
-                    f"  • [blocking] claim '{ct[:40]}' 含空的 evidence_id"
+                    f"  • [blocking] claims[{idx}].evidence_ids[{eid_idx}] 类型错误："
+                    f"期望 str，实际 {type(eid).__name__}"
+                )
+                continue
+            if not eid:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].evidence_ids[{eid_idx}] 是空字符串"
                 )
                 continue
             ev = ev_map.get(eid)
@@ -620,15 +701,44 @@ def _run_fact_check(
                     f"evidence_id={eid}"
                 )
                 continue
-            url = (ev.get("source_url") or "").strip()
+            # Type-check source_url BEFORE strip/slice.
+            url_raw = ev.get("source_url")
+            if url_raw is None:
+                blocking_items.append(
+                    f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
+                    f"缺 source_url"
+                )
+                continue
+            if not isinstance(url_raw, str):
+                blocking_items.append(
+                    f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
+                    f"source_url 类型错误：期望 str，实际 {type(url_raw).__name__}"
+                )
+                continue
+            url = url_raw.strip()
             if not url:
                 blocking_items.append(
                     f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
                     f"缺 source_url"
                 )
                 continue
-            quote = (ev.get("quote") or "").strip()
-            kf = (ev.get("key_finding") or "").strip()
+            # Type-check quote and key_finding BEFORE strip/slice.
+            quote_raw = ev.get("quote")
+            kf_raw = ev.get("key_finding")
+            if quote_raw is not None and not isinstance(quote_raw, str):
+                blocking_items.append(
+                    f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
+                    f"quote 类型错误：期望 str，实际 {type(quote_raw).__name__}"
+                )
+                continue
+            if kf_raw is not None and not isinstance(kf_raw, str):
+                blocking_items.append(
+                    f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
+                    f"key_finding 类型错误：期望 str，实际 {type(kf_raw).__name__}"
+                )
+                continue
+            quote = (quote_raw or "").strip()
+            kf = (kf_raw or "").strip()
             if not quote and not kf:
                 blocking_items.append(
                     f"  • [blocking] evidence_id={eid} (claim: {ct[:40]}) "
@@ -641,7 +751,9 @@ def _run_fact_check(
     claimed_texts = {
         _normalize(c.get("claim_text", ""))
         for c in claims
-        if isinstance(c, dict) and c.get("claim_text")
+        if isinstance(c, dict)
+        and isinstance(c.get("claim_text"), str)
+        and c.get("claim_text")
     }
     for cand in extracted:
         norm = _normalize(cand["sentence"])

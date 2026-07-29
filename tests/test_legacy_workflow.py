@@ -2389,6 +2389,54 @@ class TestAtomicWrite:
         assert old_draft.read_text(encoding="utf-8") == "old draft content"
         assert old_cl.read_text(encoding="utf-8") == '{"version":1,"claims":[]}'
 
+    def test_second_replace_failure_removes_both_when_neither_existed(self, tmp_path, monkeypatch):
+        """Reproduce: both files missing initially, second replace fails,
+        result must be both files still missing (not new draft + nothing)."""
+        import os as _os
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+
+        ws = tmp_path / "ws"
+        (ws / "drafts").mkdir(parents=True)
+        (ws / "research").mkdir(parents=True)
+
+        slug = "atomic-both-missing"
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        expected_draft = ws / "drafts" / f"{slug}-{today}.md"
+        expected_cl = ws / "research" / f"claim-ledger-{slug}.json"
+
+        assert not expected_draft.exists(), "precondition: draft must not exist"
+        assert not expected_cl.exists(), "precondition: claim ledger must not exist"
+
+        new_draft_text = "new draft content"
+        new_cl_data = {
+            "version": 1,
+            "claims": [],
+            "draft_sha256": hashlib.sha256(new_draft_text.encode()).hexdigest(),
+        }
+
+        original_replace = _os.replace
+        replace_count = [0]
+
+        def bad_replace(src, dst):
+            replace_count[0] += 1
+            if replace_count[0] == 2:
+                raise OSError("simulated second replace failure")
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(_os, "replace", bad_replace)
+
+        with pytest.raises(OSError, match="simulated second replace failure"):
+            lw._write_ahead_draft_and_ledger(ws, slug, new_draft_text, new_cl_data)
+
+        assert not expected_draft.exists(), (
+            f"draft leaked after rollback: {expected_draft}"
+        )
+        assert not expected_cl.exists(), (
+            f"claim ledger leaked after rollback: {expected_cl}"
+        )
+
     def test_write_creates_both_files_atomically(self, tmp_path):
         from seo_ops.services import legacy_workflow as lw
 
@@ -2541,6 +2589,172 @@ class TestFactCheckSchemaValidation:
         _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
         fact = [r for r in results if '事实校验' in r['item']]
         assert not all(r['pass'] for r in fact), f"Should block string evidence_ids: {fact}"
+
+    # ── Type-validation blocking tests (Fix4 round 2) ──
+
+    def _fact_check_grade(self, tmp_path, ev_text, cl_text,
+                          draft_text="claim sentence here."):
+        """Helper: run _run_fact_check and return the fact-check grade entries."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_f.write_text(draft_text, encoding="utf-8")
+        dr_sha = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+
+        # Allow caller to embed mp_sha/draft_sha as placeholders.
+        ev_text = ev_text.replace("__MP_SHA__", mp_sha)
+        cl_text = cl_text.replace("__DR_SHA__", dr_sha)
+
+        ev_f.write_text(ev_text, encoding="utf-8")
+        cl_f.write_text(cl_text, encoding="utf-8")
+
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({
+                'item': msg, 'level': level,
+                'pass': level != 'fail', 'detail': str(detail),
+            })
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        return [r for r in results if '事实校验' in r['item']]
+
+    def test_evidence_id_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":[{"evidence_id":123,"source_url":"https://ex.com",'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int evidence_id: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "evidence_id" in joined and "类型错误" in joined, joined
+
+    def test_source_url_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":[{"evidence_id":"ev_001","source_url":123,'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int source_url: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "source_url" in joined and "类型错误" in joined, joined
+
+    def test_claim_text_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com",'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":123,'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int claim_text: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "claim_text" in joined and "类型错误" in joined, joined
+
+    def test_claim_type_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com",'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":123,"evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int claim_type: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "claim_type" in joined and "类型错误" in joined, joined
+
+    def test_material_pack_sha_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":123,'
+                '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com",'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int material_pack_sha256: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "material_pack_sha256" in joined and "类型错误" in joined, joined
+
+    def test_draft_sha_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com",'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":["ev_001"]}],'
+                '"draft_sha256":123}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int draft_sha256: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "draft_sha256" in joined and "类型错误" in joined, joined
+
+    def test_evidence_ids_entry_int_blocked(self, tmp_path):
+        fact = self._fact_check_grade(
+            tmp_path,
+            ev_text=(
+                '{"version":1,"material_pack_sha256":"__MP_SHA__",'
+                '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com",'
+                '"quote":"data","canonical_concepts":[],"claim_types":["spec"],'
+                '"required":false}]}'
+            ),
+            cl_text=(
+                '{"version":1,"claims":[{"claim_text":"claim sentence here.",'
+                '"claim_type":"general","evidence_ids":[123]}],'
+                '"draft_sha256":"__DR_SHA__"}'
+            ),
+        )
+        assert not all(r['pass'] for r in fact), f"Should block int evidence_ids entry: {fact}"
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "evidence_ids" in joined and "类型错误" in joined, joined
 
 
 class TestW2PostPassRejection:
