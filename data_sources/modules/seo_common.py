@@ -392,3 +392,56 @@ def slugify(text: str) -> str:
     # across CLI subprocesses or server restarts.
     digest = hashlib.sha256(str(text).encode('utf-8')).hexdigest()[:12]
     return f'topic-{digest}'
+
+
+# ── Shared claim-text / sentence extraction (single authoritative impl) ──
+
+def normalize_claim_text(text: str) -> str:
+    """Normalize a claim_text or draft sentence for exact full-string match.
+
+    - strip
+    - collapse all runs of whitespace (including \\n) to single space
+    - strip trailing punctuation ``.,;:!?``
+    - strip again (trailing punctuation removal may leave space)
+    """
+    if not text:
+        return ""
+    text = text.strip()
+    text = " ".join(text.split())
+    text = text.rstrip(".,;:!?")
+    return text.strip()
+
+
+def extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
+    """Split the draft body into stable, audit-able sentences using the
+    same algorithm every consumer must use.
+
+    1. Strip YAML frontmatter (``---...---``).
+    2. Split by blank lines (``\\n\\n+``) into paragraphs.
+    3. Within each paragraph split by ``(?<=[.!?])\\s+``.
+    4. Strip each sentence, normalise via ``normalize_claim_text``, skip
+       empty results.
+    5. Assign sequential IDs ``S001``, ``S002``, …
+
+    Returns ``[{"sentence_id": "S001", "text": <original>, "norm": <norm>}, …]``
+    """
+    body = draft_md
+    if draft_md.startswith("---"):
+        parts = draft_md.split("---", 2)
+        if len(parts) >= 3:
+            body = parts[2]
+    _re_import = __import__("re")
+    _SENTENCE_SPLIT = _re_import.compile(r"(?<=[.!?])\s+")
+    sentences: list[dict[str, str]] = []
+    for para in _re_import.split(r"\n\n+", body):
+        for sent in _SENTENCE_SPLIT.split(para):
+            text = sent.strip()
+            norm = normalize_claim_text(text)
+            if not norm:
+                continue
+            sentences.append({
+                "sentence_id": f"S{len(sentences) + 1:03d}",
+                "text": text,
+                "norm": norm,
+            })
+    return sentences

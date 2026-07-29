@@ -393,8 +393,7 @@ _FACTUAL_SIGNAL_RE = re.compile(
 
 
 def _strip_frontmatter(body: str) -> str:
-    """Remove YAML frontmatter delimited by ``---``, matching
-    ``_validate_claim_ledger_json`` behaviour in ``legacy_workflow.py``."""
+    """Remove YAML frontmatter delimited by ``---``."""
     if body.startswith("---"):
         parts = body.split("---", 2)
         if len(parts) >= 3:
@@ -403,100 +402,57 @@ def _strip_frontmatter(body: str) -> str:
 
 
 def _draft_sentences_set(draft_body: str) -> set[str]:
-    """Split the draft body into normalized sentences using the same
-    paragraph-then-sentence approach as ``_extract_draft_sentences`` in
-    ``legacy_workflow.py``.  Frontmatter is stripped first.
-
-    Returns ``set[str]`` of ``_normalize``-d sentences for fast membership
-    testing.  This is the single authoritative split for both
-    ``_claim_in_draft`` and ``_extract_factual_sentences``.
-    """
-    return {row["norm"] for row in _draft_sentence_table(draft_body).values()}
+    """Delegates to ``seo_common.extract_draft_sentences`` and returns
+    the set of normalized sentence texts."""
+    if not draft_body:
+        return set()
+    from data_sources.modules.seo_common import extract_draft_sentences as _eds
+    return {s["norm"] for s in _eds(draft_body)}
 
 
 def _draft_sentence_table(draft_body: str) -> dict[str, dict[str, str]]:
-    """Return ``{sentence_id: {"text": str, "norm": str}, ...}`` for every
-    sentence extracted from ``draft_body`` using the authoritative
-    paragraph-first, frontmatter-aware tokenizer.
-
-    Uses the same logic as ``_extract_draft_sentences`` in
-    ``legacy_workflow.py`` so that sentence_ids issued during W0 match
-    exactly the sentences the W1b fact-check reads back.
-    """
+    """Delegates to ``seo_common.extract_draft_sentences`` and returns
+    a ``{sentence_id: {text, norm}}`` lookup table."""
     if not draft_body:
         return {}
-    body = _strip_frontmatter(draft_body)
-    import re as _re
-    _SENTENCE_SPLIT = _re.compile(r'(?<=[.!?])\s+')
-    table: dict[str, dict[str, str]] = {}
-    for para in _re.split(r'\n\n+', body):
-        for sent in _SENTENCE_SPLIT.split(para):
-            text = sent.strip()
-            norm = _normalize(text)
-            if not norm:
-                continue
-            sid = f"S{len(table) + 1:03d}"
-            table[sid] = {"text": text, "norm": norm}
-    return table
+    from data_sources.modules.seo_common import extract_draft_sentences as _eds
+    return {s["sentence_id"]: {"text": s["text"], "norm": s["norm"]} for s in _eds(draft_body)}
 
 
 def _extract_factual_sentences(draft_body: str) -> list[dict]:
-    """Find sentences in the draft that contain factual assertions.
-
-    Returns a list of ``{"sentence": str, "sentence_sha": str}`` dicts.
-    Each sentence is the original text, unstripped, so that
-    ``_normalize`` on the ledger can match it.  Frontmatter is excluded
-    and the same paragraph-first split as ``_validate_claim_ledger_json``
-    is used, so the sentence inventory is identical to the server-side
-    ``_extract_draft_sentences``.
-    """
+    """Return factual sentences using the shared sentence table and the
+    existing ``_FACTUAL_SIGNAL_RE`` fact heuristic."""
     if not draft_body:
         return []
-    body = _strip_frontmatter(draft_body)
-    import re as _re
-    _SENTENCE_SPLIT = _re.compile(r'(?<=[.!?])\s+')
+    from data_sources.modules.seo_common import extract_draft_sentences as _eds
     out: list[dict] = []
-    for para in _re.split(r'\n\n+', body):
-        for sent in _SENTENCE_SPLIT.split(para):
-            s = sent.strip()
-            if not s or len(s) < 15:
-                continue
-            if _FACTUAL_SIGNAL_RE.search(s):
-                out.append({
-                    "sentence": s,
-                    "sentence_sha": hashlib.sha256(s.encode("utf-8")).hexdigest(),
-                })
+    for entry in _eds(draft_body):
+        text = entry["text"]
+        if len(text) < 15:
+            continue
+        if _FACTUAL_SIGNAL_RE.search(text):
+            out.append({
+                "sentence": text,
+                "sentence_sha": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            })
     return out
 
 
 # ── Normalized claim matching ───────────────────────────────────────────
 
 def _normalize(text: str) -> str:
-    """Normalize a claim_text or draft sentence for exact full-string match.
-
-    - strip
-    - collapse all runs of whitespace (including \n) to single space
-    - strip trailing punctuation (.,;:!?)
-    """
-    if not text:
-        return ""
-    text = text.strip()
-    text = " ".join(text.split())
-    text = text.rstrip(".,;:!?")
-    return text.strip()
+    """Delegates to ``seo_common.normalize_claim_text``."""
+    from data_sources.modules.seo_common import normalize_claim_text as _nct
+    return _nct(text)
 
 
 def _claim_in_draft(claim_text: str, draft_body: str) -> bool:
     """True if the normalized claim_text exists as a normalized sentence in
-    the draft body (paragraph-first split, frontmatter stripped).
-
-    This is a full-sentence equality check (not substring), using the exact
-    same ``_normalize`` function and paragraph-first tokenizer as the
-    server-side sentence-id validator.
-    """
+    the draft body (using the shared authoritative sentence extractor)."""
     if not claim_text or not draft_body:
         return False
-    norm_ct = _normalize(claim_text)
+    from data_sources.modules.seo_common import normalize_claim_text as _nct
+    norm_ct = _nct(claim_text)
     if not norm_ct:
         return False
     return norm_ct in _draft_sentences_set(draft_body)
@@ -737,9 +693,14 @@ def _run_fact_check(
         ev_map[eid] = ev
 
     # Build authoritative sentence table from the current draft body.
-    # For claims with a ``sentence_id`` the fact-check must verify that
-    # the ID and its corresponding text match the draft exactly.
     claim_sentence_table = _draft_sentence_table(draft_body)
+
+    # Determine ledger mode: if ANY claim has a ``sentence_id`` field the
+    # entire ledger is processed in strict mode (every claim must carry a
+    # valid ID).  Only when NO claim has the field does legacy mode apply.
+    strict_sentence_id_mode = any(
+        isinstance(c, dict) and "sentence_id" in c for c in claims
+    )
 
     # 6. Validate each claim.
     for idx, claim in enumerate(claims):
@@ -792,17 +753,26 @@ def _run_fact_check(
             )
             continue
 
-        # If the claim carries a sentence_id, verify it strictly against
-        # the current draft body: the ID must exist in the sentence table
-        # and the claim_text must match (both raw and normalized).
-        sid_raw = claim.get("sentence_id")
-        if sid_raw is not None:
-            if not isinstance(sid_raw, str) or not sid_raw:
+        # ── Strict sentence_id mode (when at least one claim has the field) ──
+        if strict_sentence_id_mode:
+            sid_raw = claim.get("sentence_id")
+            if sid_raw is None:
                 blocking_items.append(
-                    f"  • [blocking] claims[{idx}].sentence_id 类型错误或为空"
+                    f"  • [blocking] claims[{idx}] 缺 sentence_id 字段"
                 )
                 continue
-            sid = sid_raw
+            if not isinstance(sid_raw, str):
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id 类型错误："
+                    f"期望 str，实际 {type(sid_raw).__name__}"
+                )
+                continue
+            sid = sid_raw.strip()
+            if not sid:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id 是空字符串"
+                )
+                continue
             sent_info = claim_sentence_table.get(sid)
             if sent_info is None:
                 blocking_items.append(
@@ -810,25 +780,26 @@ def _run_fact_check(
                     f"在当前草稿中不存在"
                 )
                 continue
-            if sent_info["text"] != ct:
+            # Exact match between the raw claim_text and the server sentence.
+            if ct_raw != sent_info["text"]:
                 blocking_items.append(
                     f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
                     f"的 claim_text 与草稿原句不一致"
                 )
                 continue
-            # Also verify normalized match (belt-and-suspenders).
             if _normalize(ct) != sent_info["norm"]:
                 blocking_items.append(
                     f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
                     f"规范化后与草稿句子不匹配"
                 )
                 continue
-
-        if not _claim_in_draft(ct, draft_body):
-            blocking_items.append(
-                f"  • [blocking] claim_text 不在草稿正文中: '{ct[:60]}'"
-            )
-            continue
+        else:
+            # ── Legacy mode (no sentence_id in any claim) ──
+            if not _claim_in_draft(ct, draft_body):
+                blocking_items.append(
+                    f"  • [blocking] claim_text 不在草稿正文中: '{ct[:60]}'"
+                )
+                continue
 
         if not eids:
             blocking_items.append(

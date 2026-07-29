@@ -802,22 +802,9 @@ def _remove_ledger_files(workspace: Path, slug: str) -> None:
 
 
 def _normalize_claim(text: str) -> str:
-    """Normalize a claim_text or draft sentence for exact matching.
-
-    - strip
-    - collapse all runs of whitespace/newlines to single space
-    - strip trailing punctuation (.,;:!?)
-
-    This ensures that an AI-generated claim_text of the form
-    ``"5mW is enough\\nfor ceiling work."`` matches the draft
-    sentence ``5mW is enough for ceiling work``.
-    """
-    if not text:
-        return ""
-    text = text.strip()
-    text = " ".join(text.split())  # collapse any whitespace
-    text = text.rstrip(".,;:!?")
-    return text.strip()
+    """Wrap the shared ``normalize_claim_text`` from ``seo_common``."""
+    from data_sources.modules.seo_common import normalize_claim_text as _nct
+    return _nct(text)
 
 
 def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
@@ -847,19 +834,10 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
     if not isinstance(claims, list):
         raise ValueError("CLAIM_LEDGER.claims must be a list")
 
-    import re as _re
-    body_for_sentences = draft_body
-    if draft_body.startswith("---"):
-        parts = draft_body.split("---", 2)
-        if len(parts) >= 3:
-            body_for_sentences = parts[2]
-    _SENTENCE_SPLIT_RE = _re.compile(r'(?<=[.!?])\s+')
-    normalized_draft = set()
-    for para in _re.split(r'\n\n+', body_for_sentences):
-        for sent in _SENTENCE_SPLIT_RE.split(para):
-            norm = _normalize_claim(sent)
-            if norm:
-                normalized_draft.add(norm)
+    # Build the normative sentence set from the shared implementation.
+    from data_sources.modules.seo_common import extract_draft_sentences as _eds
+    _all_sentences = _eds(draft_body) if draft_body else []
+    normalized_draft = {s["norm"] for s in _all_sentences}
 
     for idx, c in enumerate(claims):
         if not isinstance(c, dict):
@@ -903,43 +881,10 @@ def _validate_claim_ledger_json(cl_json: str, draft_body: str) -> dict:
     return data
 
 
-_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
-
-
 def _extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
-    """Authoritatively split the draft body into stable, audit-able sentences.
-
-    Reuses the exact same paragraph + sentence tokenizer that
-    ``_validate_claim_ledger_json`` uses to build ``normalized_draft``,
-    so a ``sentence_id`` issued here is always acceptable to the strict
-    fact-check gate.  Returns a list of dicts ordered by appearance:
-
-    ``{"sentence_id": "S001", "text": <original sentence text>, "norm": <normalized>}``
-
-    Sentences whose normalized form is empty are skipped.  Markdown
-    headings, code fences, frontmatter, and very short fragments are
-    naturally excluded because the paragraph splitter keeps only blocks
-    separated by blank lines and the tokenizer splits on ``[.!?]\\s``.
-    The frontmatter strip (``---``) is applied first for parity with
-    ``_validate_claim_ledger_json``.
-    """
-    body_for_sentences = draft_md
-    if draft_md.startswith("---"):
-        parts = draft_md.split("---", 2)
-        if len(parts) >= 3:
-            body_for_sentences = parts[2]
-    sentences: list[dict[str, str]] = []
-    for para in re.split(r"\n\n+", body_for_sentences):
-        for sent in _SENTENCE_SPLIT_RE.split(para):
-            norm = _normalize_claim(sent)
-            if not norm:
-                continue
-            sentences.append({
-                "sentence_id": f"S{len(sentences) + 1:03d}",
-                "text": sent.strip(),
-                "norm": norm,
-            })
-    return sentences
+    """Wrap the shared ``extract_draft_sentences`` from ``seo_common``."""
+    from data_sources.modules.seo_common import extract_draft_sentences as _eds
+    return _eds(draft_md)
 
 
 _CANONICAL_KEYS = frozenset({"version", "claims"})
