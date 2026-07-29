@@ -1,5 +1,23 @@
 # 工作日志
 
+## 2026-07-28 — 证据驱动事实校验第三轮修订 (1 项 fail-closed)
+
+### 背景
+第三轮复测发现一处 fail-closed 漏洞：`source_url` / `quote` / `key_finding` 字段类型校验只在 claim 引用 evidence 时执行，未被引用的 evidence 若字段为 `int` / `null` / 其他非法类型，W1b 会错误通过。
+
+### 完成
+- **第三轮 Fix evidence-ledger 预校验**：`_run_fact_check` 在 evidence index 构建循环中、加入 `ev_map` 之前，先校验每条 evidence 的 `source_url` / `quote` / `key_finding` 类型与内容：`source_url` 必须 str 且非空；`quote` / `key_finding` 类型必须 str（None 允许）；二者至少一项非空。任一非法即产生结构化 blocking（即使没有 claim 引用该 evidence_id）。
+- **第三轮测试**（3 个）：`test_unreferenced_evidence_bad_source_url_blocked` / `..._bad_quote_blocked` / `..._bad_key_finding_blocked`，每个用一份干净且被引用的 `ev_001` + 一个未引用的 `ev_002` 携带 `123` 类型字段，断言 W1b 全部 blocking。
+
+### 验证
+- `pytest tests/ -q`：285 passed（较前次 +3）
+- `ruff check` 6 个 pre-existing F841，无新增
+- HEAD: `c40b823b6853984af2daf08b3670461784352b17`
+
+### 未完成 / 遗留
+- 未在 action-2 生产数据上验证（按要求）
+- W2 revise 备份路径使用原 draft 后缀；与 `_today_str()` 自动滚动后可能错位，需在 UI 提示
+
 ## 2026-07-28 — 证据驱动事实校验第二轮修订 (2 项必修)
 
 ### 背景

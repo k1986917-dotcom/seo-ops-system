@@ -4,7 +4,12 @@
 
 ## 一句话状态
 
-源码 `0.11.3`（uncommitted）、SQLite v13。证据驱动事实校验第二轮复测 2 项全部修完：原子写回滚处理旧文件缺失场景（rollback 后永远「两个旧版本（含都不存在）」或「两个新版本」）；`_run_fact_check` 全部 ledger 字段在 strip/slice 前先做 `isinstance(..., str)` 类型校验，非 str 产生结构化 blocking 绝不 AttributeError。旧文章制作通道不变。
+源码 `0.11.4`（uncommitted）、SQLite v13。证据驱动事实校验第三轮复测 1 项 fail-closed 修完：`_run_fact_check` 在 evidence index 构建时即校验 `source_url` / `quote` / `key_finding` 类型与内容，未被引用的 evidence 若字段非法也必须 blocking。旧文章制作通道不变。
+
+## 2026-07-28 — 证据驱动事实校验第三轮修订 (0.11.4)
+
+- **evidence-ledger 预校验 fail-closed**：构建 evidence index 时即校验每条 evidence 的 `source_url` / `quote` / `key_finding`：`source_url` 必须 str 且非空；`quote` / `key_finding` 必须 str（None 允许）；二者至少一项非空。任一非法即产生结构化 blocking，即使该 evidence 未被任何 claim 引用。
+- 完整 `pytest -q` 285 passed（新增 3 个测试），`ruff check` 6 个 pre-existing F841 无新增。
 
 ## 2026-07-28 — 证据驱动事实校验第二轮修订 (0.11.3)
 

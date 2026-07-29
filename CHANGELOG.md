@@ -2,6 +2,17 @@
 
 所有用户可见变化记录在此。版本遵循语义化版本。
 
+## [0.11.4] - 2026-07-28
+
+### Fixed
+
+- **evidence-ledger 预校验 fail-closed**：`_run_fact_check` 在构建 evidence index 时即校验每条 evidence 的 `source_url` / `quote` / `key_finding` 类型与内容——`source_url` 必须 str 且非空；`quote` / `key_finding` 类型必须 str（None 允许）；二者至少一项非空。任一非法即产生结构化 blocking，即使该 evidence 没有被任何 claim 引用，杜绝 W1b 错误通过脏 ledger。
+
+### 测试覆盖新增
+
+- 3 个测试覆盖「未引用的 evidence 字段类型错误」：clean `ev_001` + 被引用 + 脏 `ev_002`（`source_url=123` / `quote=123` / `key_finding=123`）且不被任何 claim 引用，断言 W1b 全部 blocking。
+- 完整测试：285 passed；`ruff check` 6 个 pre-existing F841，无新增。
+
 ## [0.11.3] - 2026-07-28
 
 ### Fixed
