@@ -4475,6 +4475,46 @@ class TestUnifiedSentenceMatching:
         for bad in ("---", "Title: T", "Slug: s", "## Safety"):
             assert not any(bad in t for t in texts), f"frontmatter leaked: {bad}"
 
+    def test_fake_sentence_id_blocked_even_with_correct_claim_text(self, tmp_path):
+        """sentence_id=S999 (unknown ID) with correct draft claim_text
+        must still be blocked — claim_text alone is insufficient."""
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        ev_f = tmp_path / "ev.json"
+        cl_f = tmp_path / "cl.json"
+        mp_f = tmp_path / "mp.md"
+        dr_f = tmp_path / "draft.md"
+        mp_f.write_text("mp", encoding="utf-8")
+        mp_sha = hashlib.sha256(b"mp").hexdigest()
+        dr_text = "The 5mW green laser has a wavelength of 532nm.\n"
+        dr_f.write_text(dr_text, encoding="utf-8")
+        draft_body = dr_text.strip()
+        dr_sha = hashlib.sha256(draft_body.encode("utf-8")).hexdigest()
+        ev_f.write_text(
+            '{"version":1,"material_pack_sha256":"' + mp_sha + '",'
+            '"evidence":[{"evidence_id":"ev_001","source_url":"https://ex.com/a",'
+            '"quote":"data","canonical_concepts":["x"],"claim_types":["y"],"required":false}]}',
+            encoding="utf-8",
+        )
+        # sentence_id=S999 does NOT exist in the draft sentence table
+        # (which only has S001 for the one sentence).
+        cl_f.write_text(
+            '{"version":1,"claims":[{"sentence_id":"S999",'
+            '"claim_text":"The 5mW green laser has a wavelength of 532nm.",'
+            '"claim_type":"spec","evidence_ids":["ev_001"]}],'
+            '"draft_sha256":"' + dr_sha + '"}',
+            encoding="utf-8",
+        )
+        results = []
+        def grade(level, msg, detail=''):
+            results.append({'item': msg, 'level': level, 'pass': level != 'fail', 'detail': str(detail)})
+        _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
+        fact = [r for r in results if '事实校验' in r['item']]
+        joined = "\n".join(r['detail'] for r in fact)
+        assert "在当前草稿中不存在" in joined, (
+            f"Fake S999 sentence_id must be blocked: {joined[:300]}"
+        )
+
     def test_markdown_link_sentence_matches(self):
         """A claim_text that includes a Markdown link must be found by
         _claim_in_draft when the draft contains the identical link."""
@@ -4524,8 +4564,11 @@ class TestUnifiedSentenceMatching:
         _run_fact_check(results, grade, str(ev_f), str(cl_f), str(mp_f), str(dr_f))
         fact = [r for r in results if '事实校验' in r['item']]
         joined = "\n".join(r['detail'] for r in fact)
-        assert "claim_text 不在草稿正文中" in joined, (
-            f"Tampered claim_text must be blocked: {joined[:200]}"
+        assert any(
+            "claim_text 与草稿原句不一致" in x or "claim_text 不在草稿正文中" in x
+            for x in [r['detail'] for r in fact]
+        ), (
+            f"Tampered claim_text must be blocked: {joined[:300]}"
         )
 
     def test_draft_changed_after_ledger_blocks(self, tmp_path):

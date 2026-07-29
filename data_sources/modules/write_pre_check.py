@@ -411,18 +411,33 @@ def _draft_sentences_set(draft_body: str) -> set[str]:
     testing.  This is the single authoritative split for both
     ``_claim_in_draft`` and ``_extract_factual_sentences``.
     """
+    return {row["norm"] for row in _draft_sentence_table(draft_body).values()}
+
+
+def _draft_sentence_table(draft_body: str) -> dict[str, dict[str, str]]:
+    """Return ``{sentence_id: {"text": str, "norm": str}, ...}`` for every
+    sentence extracted from ``draft_body`` using the authoritative
+    paragraph-first, frontmatter-aware tokenizer.
+
+    Uses the same logic as ``_extract_draft_sentences`` in
+    ``legacy_workflow.py`` so that sentence_ids issued during W0 match
+    exactly the sentences the W1b fact-check reads back.
+    """
     if not draft_body:
-        return set()
+        return {}
     body = _strip_frontmatter(draft_body)
     import re as _re
     _SENTENCE_SPLIT = _re.compile(r'(?<=[.!?])\s+')
-    result: set[str] = set()
+    table: dict[str, dict[str, str]] = {}
     for para in _re.split(r'\n\n+', body):
         for sent in _SENTENCE_SPLIT.split(para):
-            norm = _normalize(sent)
-            if norm:
-                result.add(norm)
-    return result
+            text = sent.strip()
+            norm = _normalize(text)
+            if not norm:
+                continue
+            sid = f"S{len(table) + 1:03d}"
+            table[sid] = {"text": text, "norm": norm}
+    return table
 
 
 def _extract_factual_sentences(draft_body: str) -> list[dict]:
@@ -721,6 +736,11 @@ def _run_fact_check(
         seen_ids.add(eid)
         ev_map[eid] = ev
 
+    # Build authoritative sentence table from the current draft body.
+    # For claims with a ``sentence_id`` the fact-check must verify that
+    # the ID and its corresponding text match the draft exactly.
+    claim_sentence_table = _draft_sentence_table(draft_body)
+
     # 6. Validate each claim.
     for idx, claim in enumerate(claims):
         if not isinstance(claim, dict):
@@ -771,6 +791,38 @@ def _run_fact_check(
                 f"  • [blocking] claims[{idx}].evidence_ids 不是 list，而是 {type(eids).__name__}"
             )
             continue
+
+        # If the claim carries a sentence_id, verify it strictly against
+        # the current draft body: the ID must exist in the sentence table
+        # and the claim_text must match (both raw and normalized).
+        sid_raw = claim.get("sentence_id")
+        if sid_raw is not None:
+            if not isinstance(sid_raw, str) or not sid_raw:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id 类型错误或为空"
+                )
+                continue
+            sid = sid_raw
+            sent_info = claim_sentence_table.get(sid)
+            if sent_info is None:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
+                    f"在当前草稿中不存在"
+                )
+                continue
+            if sent_info["text"] != ct:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
+                    f"的 claim_text 与草稿原句不一致"
+                )
+                continue
+            # Also verify normalized match (belt-and-suspenders).
+            if _normalize(ct) != sent_info["norm"]:
+                blocking_items.append(
+                    f"  • [blocking] claims[{idx}].sentence_id '{sid}' "
+                    f"规范化后与草稿句子不匹配"
+                )
+                continue
 
         if not _claim_in_draft(ct, draft_body):
             blocking_items.append(
