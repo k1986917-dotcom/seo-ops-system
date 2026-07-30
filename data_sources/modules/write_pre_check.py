@@ -76,8 +76,8 @@ CTA_INDICATORS += r'explore|try|contact us|request|get yours|view|find your)'
 
 _FENCED_CODE_BLOCK_RE = re.compile(r'```[\s\S]*?```')
 _JSON_LD_SCRIPT_BLOCK_RE = re.compile(
-    r"<script\b[^>]*\btype\s*=\s*([\"'])application/ld\+json\1[^>]*>"
-    r"[\s\S]*?</script\s*>",
+    r"<script\b[^>]*\btype\s*=\s*([\"'])\s*application/ld\+json\s*\1[^>]*>"
+    r"(?P<payload>[\s\S]*?)</script\s*>",
     re.IGNORECASE,
 )
 
@@ -86,6 +86,53 @@ def _strip_non_prose_blocks(text: str) -> str:
     """Remove fenced code and JSON-LD before prose-only editorial checks."""
     without_code = _FENCED_CODE_BLOCK_RE.sub('', text or '')
     return _JSON_LD_SCRIPT_BLOCK_RE.sub('', without_code)
+
+
+def _jsonld_type_matches(value, expected: str) -> bool:
+    """Return True when a JSON-LD ``@type`` value contains ``expected``."""
+    if isinstance(value, str):
+        return value.casefold() == expected.casefold()
+    if isinstance(value, list):
+        return any(
+            isinstance(item, str)
+            and item.casefold() == expected.casefold()
+            for item in value
+        )
+    return False
+
+
+def _jsonld_contains_faqpage(value) -> bool:
+    """Recognize FAQPage at the root, in a root list, or in ``@graph``."""
+    if isinstance(value, list):
+        return any(_jsonld_contains_faqpage(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    if _jsonld_type_matches(value.get('@type'), 'FAQPage'):
+        return True
+    graph = value.get('@graph')
+    if isinstance(graph, (dict, list)):
+        return _jsonld_contains_faqpage(graph)
+    return False
+
+
+def _has_valid_faq_schema(raw: str) -> bool:
+    """Return True only for parseable JSON-LD containing a FAQPage object.
+
+    The script matcher accepts single/double quotes, extra attributes,
+    attribute-order differences, surrounding whitespace, and case differences.
+    Plain prose mentioning ``FAQPage`` or malformed JSON never passes.
+    """
+    for match in _JSON_LD_SCRIPT_BLOCK_RE.finditer(raw or ''):
+        payload = (match.group('payload') or '').strip()
+        if not payload:
+            continue
+        try:
+            data = json.loads(payload)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if _jsonld_contains_faqpage(data):
+            return True
+    return False
 
 
 def _strip_fact_audit_headings(text: str) -> str:
@@ -1059,7 +1106,7 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
     ok('FAQ ≥3个问题', faq_count >= 3, f'{faq_count}个')
 
     # 12. FAQ Schema present
-    has_schema = '<script type="application/ld+json">' in raw and 'FAQPage' in raw
+    has_schema = _has_valid_faq_schema(raw)
     ok('FAQ Schema 存在', has_schema, '✅' if has_schema else '缺失')
 
     # 13. Paragraph length (≤4 sentences)

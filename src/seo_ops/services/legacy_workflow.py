@@ -3130,6 +3130,107 @@ def _ensure_w1b_ctas(draft_md: str) -> str:
     return draft_md.rstrip() + suffix + "\n"
 
 
+_W1B_FAQ_H2_RE = re.compile(
+    r"(?im)^##\s*(?:FAQ|Frequently Asked[^\n]*)\s*$"
+)
+_W1B_FAQ_QUESTION_RE = re.compile(
+    r"(?im)^(?:###\s+(?P<h3>.+?)|\*\*(?P<bold>.+?\?)\*\*)\s*$"
+)
+
+
+def _clean_w1b_faq_text(markdown_text: str) -> str:
+    """Return reader-visible text without inventing or expanding content."""
+    text = re.sub(r"```[\s\S]*?```", "", markdown_text or "")
+    text = re.sub(
+        r"<script\b[^>]*\btype\s*=\s*([\"'])\s*application/ld\+json\s*\1[^>]*>"
+        r"[\s\S]*?</script\s*>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"</?[a-zA-Z][^>]*>", " ", text)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(
+        r"(?m)^\s*(?:>\s*)?(?:[-*+]\s+|\d+\.\s+)",
+        "",
+        text,
+    )
+    text = re.sub(r"[*_`]+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _ensure_w1b_faq_schema(draft_md: str) -> str:
+    """Append FAQPage JSON-LD derived only from reader-visible FAQ text.
+
+    Existing valid FAQPage JSON-LD is preserved. A new block is created only
+    when at least three question/answer pairs can be extracted from the FAQ
+    section, so this helper cannot fabricate missing content.
+    """
+    from data_sources.modules import write_pre_check
+
+    if write_pre_check._has_valid_faq_schema(draft_md):
+        return draft_md
+
+    frontmatter, body = _split_frontmatter_text(draft_md)
+    faq_heading = _W1B_FAQ_H2_RE.search(body)
+    if not faq_heading:
+        return draft_md
+
+    section_start = faq_heading.end()
+    following = body[section_start:]
+    next_h2 = re.search(r"(?m)^##\s+", following)
+    section_end = (
+        section_start + next_h2.start()
+        if next_h2
+        else len(body)
+    )
+    faq_section = body[section_start:section_end]
+    question_matches = list(_W1B_FAQ_QUESTION_RE.finditer(faq_section))
+    main_entity: list[dict[str, Any]] = []
+
+    for index, match in enumerate(question_matches):
+        raw_question = match.group("h3") or match.group("bold") or ""
+        question = _clean_w1b_faq_text(raw_question)
+        answer_start = match.end()
+        answer_end = (
+            question_matches[index + 1].start()
+            if index + 1 < len(question_matches)
+            else len(faq_section)
+        )
+        answer = _clean_w1b_faq_text(
+            faq_section[answer_start:answer_end]
+        )
+        if not question or not answer:
+            continue
+        main_entity.append({
+            "@type": "Question",
+            "name": question,
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": answer,
+            },
+        })
+        if len(main_entity) >= 4:
+            break
+
+    if len(main_entity) < 3:
+        return draft_md
+
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": main_entity,
+    }
+    schema_block = (
+        '<script type="application/ld+json">\n'
+        + json.dumps(schema, ensure_ascii=False, indent=2)
+        + "\n</script>"
+    )
+    normalized_body = body.rstrip() + "\n\n" + schema_block + "\n"
+    return frontmatter + normalized_body
+
+
 def _split_w1b_long_paragraphs(draft_md: str) -> str:
     """Split every checker-visible paragraph after each fourth sentence.
 
@@ -3203,6 +3304,7 @@ def _normalize_w1b_candidate(
     # second call would prefix the keyword and break idempotency.
     normalized = _ensure_w1b_ctas(normalized)
     normalized = _ensure_w1b_keyword_h2s(normalized, primary_keyword)
+    normalized = _ensure_w1b_faq_schema(normalized)
     normalized = _split_w1b_long_paragraphs(normalized)
     return normalized.strip()
 
@@ -3222,13 +3324,19 @@ Hard acceptance contract:
    > - first takeaway
    > - second takeaway
    > - third takeaway
-6. Every normal prose paragraph must contain at most four sentences.
-7. Do not introduce an externally verifiable fact unless one of the evidence
+6. When the article contains an FAQ, include a real FAQPage JSON-LD block at
+   the end of the article using this exact script type:
+   <script type="application/ld+json">
+   The schema questions and answers must come from the reader-visible FAQ.
+   Do not invent FAQ questions or answers, and do not use a fenced JSON example
+   in place of the real HTML script block.
+7. Every normal prose paragraph must contain at most four sentences.
+8. Do not introduce an externally verifiable fact unless one of the evidence
    cards below directly supports it. If a factual sentence is unsupported,
    remove it or rewrite it as clearly qualified analysis/recommendation.
-8. Do not invent numbers, specifications, regulations, quotations, URLs,
+9. Do not invent numbers, specifications, regulations, quotations, URLs,
    products, tests, or first-hand experience.
-9. Return the entire revised article, not a patch or explanation.
+10. Return the entire revised article, not a patch or explanation.
 
 Before returning, silently verify every item above."""
 
@@ -3318,9 +3426,10 @@ invent facts, numbers, quotes, or URLs.
 
 ## Server-side deterministic normalization
 After your response, the server will enforce SEO Description length, exact
-keyword placement in the first 100 words and two H2 headings, and the four-
-sentence paragraph cap without deleting content. Prioritize substantive edits
-for every structured `fact_issues` sentence: either remove or qualify an
+keyword placement in the first 100 words and two H2 headings, a FAQPage
+JSON-LD block derived only from the reader-visible FAQ, and the four-sentence
+paragraph cap without deleting content. Prioritize substantive edits for every
+structured `fact_issues` sentence: either remove or qualify an
 unsupported factual assertion, or preserve it only when an evidence card
 directly supports it. Do not leave a listed factual gap unchanged.
 
