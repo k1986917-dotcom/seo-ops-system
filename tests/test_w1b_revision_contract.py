@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import re
 
 
 def _card(index: int) -> dict:
@@ -47,6 +48,61 @@ class TestW1bRevisionContract:
         assert "> **Key Takeaways**" in contract
         assert "at most four sentences" in contract
         assert "unsupported" in contract
+
+
+    def test_candidate_normalizer_fixes_mechanical_rules_without_dropping_content(
+        self, tmp_path
+    ):
+        import re
+
+        from data_sources.modules import write_pre_check
+        from seo_ops.services import legacy_workflow as lw
+
+        keyword = "ceiling laser pointer"
+        original_sentences = [
+            "The first original sentence gives practical context for the reader.",
+            "The second original sentence keeps the existing discussion intact.",
+            "The third original sentence remains part of the same paragraph.",
+            "The fourth original sentence must still be present after normalization.",
+            "The fifth original sentence proves that paragraph splitting is lossless.",
+        ]
+        draft = (
+            "---\n"
+            "Title: Practical Ceiling Guide\n"
+            "SEO Title: Practical Ceiling Laser Pointer Planning Guide 2026\n"
+            f"SEO Description: {'D' * 184}\n"
+            f"SEO Keywords: {keyword}, green laser\n"
+            "---\n\n"
+            "# Practical Ceiling Guide\n\n"
+            "Opening guidance without the required phrase appears here.\n\n"
+            "## Selection Criteria\n\n"
+            + " ".join(original_sentences)
+            + "\n\n## Safe Setup\n\n"
+            "Use the checklist to organize the work.\n"
+        )
+
+        normalized = lw._normalize_w1b_candidate(draft, keyword)
+        path = tmp_path / "candidate.md"
+        path.write_text(normalized, encoding="utf-8")
+        meta, body, clean, _, _ = write_pre_check.parse_draft(str(path))
+
+        assert 150 <= len(meta["seo description"]) <= 160
+        assert keyword in write_pre_check.words_before_n(clean, 100)
+        h2s = re.findall(r"^## (.+)", body, re.MULTILINE)
+        assert sum(keyword in heading.lower() for heading in h2s) >= 2
+
+        paragraphs = [
+            paragraph.strip()
+            for paragraph in re.split(r"\n\n+", clean)
+            if len(paragraph.split()) > 20
+        ]
+        assert all(
+            write_pre_check.sentence_count(paragraph) <= 4
+            for paragraph in paragraphs
+        )
+        for sentence in original_sentences:
+            assert sentence in normalized
+        assert lw._normalize_w1b_candidate(normalized, keyword) == normalized
 
     def test_claim_ledger_uses_exact_revision_evidence_block(
         self, monkeypatch
@@ -307,6 +363,7 @@ class TestW1bRevisionContract:
             evidence_cards_text=None,
         ):
             captured["evidence_cards_text"] = evidence_cards_text
+            captured["ledger_draft"] = draft_md
             return {"version": 1, "claims": []}
 
         def fake_precheck_data(
@@ -360,6 +417,14 @@ class TestW1bRevisionContract:
         assert draft_backup.read_text(encoding="utf-8") == old_draft
         assert json.loads(claim_backup.read_text(encoding="utf-8")) == old_claim
         assert captured["evidence_cards_text"] == exact_cards
+        assert "This guide focuses on paired backup keyword." in captured["ledger_draft"]
+        description_match = re.search(
+            r"^SEO Description:\s*(.+)$",
+            captured["ledger_draft"],
+            re.MULTILINE,
+        )
+        assert description_match is not None
+        assert 150 <= len(description_match.group(1)) <= 160
 
 
 class TestCanonicalDraftSelection:

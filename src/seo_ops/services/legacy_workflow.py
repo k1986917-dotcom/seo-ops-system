@@ -2731,13 +2731,235 @@ def _candidate_w1b_precheck(
         )
 
 
-def _w1b_repair_contract(draft: Path, topic: str) -> str:
-    """Build the exact mechanical/evidence contract for a W1b repair."""
+def _w1b_primary_keyword(draft: Path, topic: str) -> str:
+    """Return the exact keyword the deterministic W1b rules will enforce."""
     raw_keywords = _primary_keywords(draft)
-    primary_keyword = next(
+    return next(
         (item.strip() for item in raw_keywords.split(",") if item.strip()),
         topic.strip(),
     )
+
+
+def _split_frontmatter_text(text: str) -> tuple[str, str]:
+    """Return (frontmatter_with_delimiters, body) without guessing malformed YAML."""
+    if not text.startswith("---"):
+        return "", text
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return "", text
+    return f"---{parts[1]}---", parts[2]
+
+
+def _fit_w1b_meta_description(value: str, primary_keyword: str) -> str:
+    """Fit an existing description to 150-160 chars without adding factual claims."""
+    text = re.sub(r"\s+", " ", (value or "")).strip().strip('"')
+    fillers = (
+        f" Practical guidance for {primary_keyword}.",
+        " Review the key considerations, options, and planning steps.",
+        " Use this guide to make an informed decision.",
+    )
+    filler_index = 0
+    while len(text) < 150:
+        text += fillers[filler_index % len(fillers)]
+        filler_index += 1
+    if len(text) <= 160:
+        return text
+
+    window = text[:160].rstrip()
+    boundary = window.rfind(" ")
+    if boundary >= 150:
+        window = window[:boundary].rstrip(" ,;:-")
+        if len(window) < 160 and not window.endswith((".", "!", "?")):
+            window += "."
+    if len(window) < 150:
+        window = text[:160].rstrip()
+    return window
+
+
+def _normalize_w1b_frontmatter(
+    draft_md: str,
+    primary_keyword: str,
+) -> str:
+    """Normalize only the deterministic SEO Description field."""
+    frontmatter, body = _split_frontmatter_text(draft_md)
+    if not frontmatter:
+        return draft_md
+
+    inner = frontmatter[3:-3]
+    lines = inner.strip("\n").splitlines()
+    description_index = next(
+        (
+            index for index, line in enumerate(lines)
+            if re.match(r"^\s*SEO Description\s*:", line, re.IGNORECASE)
+        ),
+        None,
+    )
+    current = ""
+    if description_index is not None:
+        current = lines[description_index].split(":", 1)[1].strip()
+    fitted = _fit_w1b_meta_description(current, primary_keyword)
+    replacement = f"SEO Description: {fitted}"
+    if description_index is None:
+        lines.append(replacement)
+    else:
+        lines[description_index] = replacement
+
+    normalized_frontmatter = "---\n" + "\n".join(lines) + "\n---"
+    return normalized_frontmatter + body
+
+
+def _w1b_keyword_in_first_100(draft_md: str, primary_keyword: str) -> bool:
+    """Mirror write_pre_check's first-100-word keyword calculation."""
+    _, body = _split_frontmatter_text(draft_md)
+    clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", body)
+    clean = re.sub(r"</?[a-zA-Z][^>]*>", "", clean)
+    first_100 = " ".join(
+        re.findall(r"\b[a-z0-9]+\b", clean.lower())[:100]
+    )
+    return bool(primary_keyword) and primary_keyword.lower() in first_100
+
+
+def _ensure_w1b_keyword_early(
+    draft_md: str,
+    primary_keyword: str,
+) -> str:
+    """Insert one non-factual editorial sentence after H1 when required."""
+    if _w1b_keyword_in_first_100(draft_md, primary_keyword):
+        return draft_md
+    intro = f"This guide focuses on {primary_keyword}."
+    h1 = re.search(r"^# .+$", draft_md, re.MULTILINE)
+    if h1:
+        return (
+            draft_md[:h1.end()]
+            + f"\n\n{intro}"
+            + draft_md[h1.end():]
+        )
+
+    frontmatter, body = _split_frontmatter_text(draft_md)
+    prefix = frontmatter
+    separator = "\n\n" if prefix else ""
+    return f"{prefix}{separator}{intro}\n\n{body.lstrip()}"
+
+
+def _ensure_w1b_keyword_h2s(
+    draft_md: str,
+    primary_keyword: str,
+) -> str:
+    """Add the exact keyword to existing H2s until two headings match."""
+    lines = draft_md.splitlines()
+    h2_indexes: list[int] = []
+    preferred_indexes: list[int] = []
+    in_fence = False
+    in_script = False
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if re.search(r"<script\b", stripped, re.IGNORECASE):
+            in_script = True
+        if in_fence or in_script:
+            if re.search(r"</script>", stripped, re.IGNORECASE):
+                in_script = False
+            continue
+        if not line.startswith("## "):
+            continue
+        h2_indexes.append(index)
+        heading = line[3:].strip()
+        if not re.match(r"^(?:FAQ|Frequently Asked)", heading, re.IGNORECASE):
+            preferred_indexes.append(index)
+
+    keyword_lower = primary_keyword.lower()
+    hits = sum(
+        1 for index in h2_indexes
+        if keyword_lower in lines[index][3:].lower()
+    )
+    candidates = preferred_indexes + [
+        index for index in h2_indexes if index not in preferred_indexes
+    ]
+    for index in candidates:
+        if hits >= 2:
+            break
+        heading = lines[index][3:].strip()
+        if keyword_lower in heading.lower():
+            continue
+        lines[index] = f"## {primary_keyword}: {heading}"
+        hits += 1
+
+    trailing_newline = "\n" if draft_md.endswith("\n") else ""
+    return "\n".join(lines) + trailing_newline
+
+
+def _split_w1b_long_paragraphs(draft_md: str) -> str:
+    """Split normal prose into groups of at most four checker-visible sentences."""
+    frontmatter, body = _split_frontmatter_text(draft_md)
+    protected: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"\x00W1BPROTECTED{len(protected) - 1}\x00"
+
+    masked = re.sub(
+        r"```[\s\S]*?```|"
+        r"<script[^>]*type=[\"']application/ld\+json[\"'][^>]*>"
+        r"[\s\S]*?</script>",
+        protect,
+        body,
+        flags=re.IGNORECASE,
+    )
+
+    def normalize_block(block: str) -> str:
+        stripped = block.strip()
+        if not stripped or "\x00W1BPROTECTED" in stripped:
+            return block
+        if any(
+            re.match(r"^\s*(?:#{1,6}\s|>|[-*+]\s|\d+\.\s|\||<)", line)
+            for line in stripped.splitlines()
+        ):
+            return block
+
+        compact = re.sub(r"\s*\n\s*", " ", stripped)
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", compact)
+            if sentence.strip()
+        ]
+        if len(sentences) <= 4:
+            return compact
+        return "\n\n".join(
+            " ".join(sentences[index:index + 4])
+            for index in range(0, len(sentences), 4)
+        )
+
+    blocks = re.split(r"\n{2,}", masked)
+    normalized_body = "\n\n".join(normalize_block(block) for block in blocks)
+    for index, original in enumerate(protected):
+        normalized_body = normalized_body.replace(
+            f"\x00W1BPROTECTED{index}\x00",
+            original,
+        )
+
+    if frontmatter:
+        return frontmatter + normalized_body
+    return normalized_body
+
+
+def _normalize_w1b_candidate(
+    draft_md: str,
+    primary_keyword: str,
+) -> str:
+    """Apply deterministic W1b mechanics before ledger generation/preflight."""
+    normalized = _normalize_w1b_frontmatter(draft_md, primary_keyword)
+    normalized = _ensure_w1b_keyword_early(normalized, primary_keyword)
+    normalized = _ensure_w1b_keyword_h2s(normalized, primary_keyword)
+    normalized = _split_w1b_long_paragraphs(normalized)
+    return normalized.strip()
+
+
+def _w1b_repair_contract(draft: Path, topic: str) -> str:
+    """Build the exact mechanical/evidence contract for a W1b repair."""
+    primary_keyword = _w1b_primary_keyword(draft, topic)
     return f"""The exact primary keyword is: {primary_keyword}
 
 Hard acceptance contract:
@@ -2821,6 +3043,12 @@ invent facts, numbers, quotes, or URLs.
 ## Hard repair contract (all items are mandatory)
 {repair_contract}
 
+## Server-side deterministic normalization
+After your response, the server will enforce SEO Description length, exact
+keyword placement in the first 100 words and two H2 headings, and the four-
+sentence paragraph cap without deleting content. Prioritize substantive edits
+for every structured `fact_issues` sentence and do not introduce new facts.
+
 ## Exact structured failures (fix every listed item and sentence)
 {structured_failures}
 
@@ -2855,6 +3083,14 @@ Return the revised article Markdown only."""
         return {"success": False, "error": "修订输出文章正文为空"}
     if "===CLAIM_LEDGER===" in new_draft_md:
         return {"success": False, "error": "修订正文任务错误包含 CLAIM_LEDGER"}
+
+    primary_keyword = _w1b_primary_keyword(draft, topic)
+    raw_candidate_md = new_draft_md
+    new_draft_md = _normalize_w1b_candidate(
+        new_draft_md,
+        primary_keyword,
+    )
+    deterministic_normalization_applied = new_draft_md != raw_candidate_md
 
     try:
         cl_data = await _generate_claim_ledger_for_draft(
@@ -2907,6 +3143,9 @@ Return the revised article Markdown only."""
             "candidate_fail_count": candidate_fail_count,
             "candidate_checks": failure_payload["failed_checks"],
             "retry_feedback": retry_feedback,
+            "deterministic_normalization_applied": (
+                deterministic_normalization_applied
+            ),
             "error": (
                 f"候选稿预检仍有 {candidate_fail_count} 项未通过；"
                 "未写入正式 draft/ledger"
@@ -2964,6 +3203,9 @@ Return the revised article Markdown only."""
         "backup": str(backup),
         "claim_backup": str(claim_backup) if claim_backup else None,
         "frontmatter_repaired": repair.get("repaired", False),
+        "deterministic_normalization_applied": (
+            deterministic_normalization_applied
+        ),
     }
 
 
