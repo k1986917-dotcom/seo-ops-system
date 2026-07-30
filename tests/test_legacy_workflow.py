@@ -1237,7 +1237,9 @@ class TestRevisionLoop:
         history = lw.load_w2_state(tmp_path, "test-topic")["revision_history"]
         assert [entry["phase"] for entry in history] == ["w1b", "w1b"]
 
-    def test_w2_batch_retries_once_then_stops_on_pass(self, tmp_path, monkeypatch):
+    def test_w2_batch_retries_once_then_stops_on_pass(
+        self, tmp_path, monkeypatch
+    ):
         from seo_ops.services import legacy_workflow as lw
 
         self._prepare(tmp_path)
@@ -1249,16 +1251,46 @@ class TestRevisionLoop:
                 "success": len(calls) == 2,
                 "gate_passed": len(calls) == 2,
                 "revised": True,
+                "precheck_failed": False,
                 "stage": "w1b_pre_check",
                 "revision_round": len(calls),
             }
 
         monkeypatch.setattr(lw, "stage_w2_revise", fake_revise)
-        result = asyncio.run(lw.stage_w2_revise_batch("test topic", tmp_path))
+        result = asyncio.run(
+            lw.stage_w2_revise_batch("test topic", tmp_path)
+        )
 
-        # A W2 revision that lands back at W1b must stop there; it may not
-        # bypass the pre-check just to use the second automatic attempt.
+        assert result["gate_passed"] is True
+        assert result["batch_attempts"] == 2
+        assert len(calls) == 2
+
+    def test_w2_batch_stops_only_on_real_precheck_failure(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        calls = []
+
+        async def fake_revise(*args, **kwargs):
+            calls.append(1)
+            return {
+                "success": False,
+                "gate_passed": False,
+                "revised": True,
+                "precheck_failed": True,
+                "stage": "w1b_pre_check",
+                "revision_round": 1,
+            }
+
+        monkeypatch.setattr(lw, "stage_w2_revise", fake_revise)
+        result = asyncio.run(
+            lw.stage_w2_revise_batch("test topic", tmp_path)
+        )
+
         assert result["gate_passed"] is False
+        assert result["precheck_failed"] is True
         assert result["batch_attempts"] == 1
         assert len(calls) == 1
 
@@ -1320,6 +1352,7 @@ class TestRevisionLoop:
 
         result = asyncio.run(lw.stage_w2_revise("test topic", tmp_path))
         assert result["gate_passed"] is True
+        assert result["precheck_failed"] is False
         assert result["revision_round"] == 1
         new_draft_text = new_draft.read_text(encoding="utf-8")
         assert "revised body" in new_draft_text
@@ -1374,6 +1407,7 @@ class TestRevisionLoop:
 
         assert result["success"] is False
         assert result["stage"] == "w1b_pre_check"
+        assert result["precheck_failed"] is True
         assert "预检仍有 1 项" in result["error"]
         assert scripts == ["write_pre_check.py"]
 

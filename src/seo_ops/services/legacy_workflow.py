@@ -3991,6 +3991,7 @@ Return the revised article Markdown only."""
             "stage": "w1b_pre_check",
             "gate_passed": False,
             "revised": True,
+            "precheck_failed": True,
             "revision_round": rounds + 1,
             "rounds_used": rounds + 1,
             "rounds_left": MAX_REVISION_ROUNDS,
@@ -4006,6 +4007,7 @@ Return the revised article Markdown only."""
 
     outcome = await stage_w2_post_process(topic, workspace)
     outcome["revised"] = True
+    outcome["precheck_failed"] = False
     outcome["revision_round"] = rounds + 1
     outcome["backup"] = str(backup)
     outcome["previous_metrics"] = metrics
@@ -4026,7 +4028,7 @@ async def stage_w2_revise_batch(topic: str, workspace: Path, settings=None) -> d
         attempts.append(outcome)
         if outcome.get("gate_passed"):
             return {**outcome, "batch_attempts": len(attempts), "batch_completed": True}
-        if not outcome.get("revised") or outcome.get("stage") == "w1b_pre_check":
+        if not outcome.get("revised") or outcome.get("precheck_failed"):
             break
     final = attempts[-1] if attempts else {"success": False, "error": "未执行修订"}
     return {**final, "batch_attempts": len(attempts), "batch_completed": True}
