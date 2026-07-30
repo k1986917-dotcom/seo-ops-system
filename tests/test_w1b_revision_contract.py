@@ -104,6 +104,103 @@ class TestW1bRevisionContract:
             assert sentence in normalized
         assert lw._normalize_w1b_candidate(normalized, keyword) == normalized
 
+
+    def test_candidate_normalizer_aligns_candidate_keyword_and_mixed_blocks(
+        self, tmp_path
+    ):
+        from data_sources.modules import write_pre_check
+        from seo_ops.services import legacy_workflow as lw
+
+        keyword = "ceiling laser pointer"
+        long_sentences = [
+            "Sentence one gives enough practical context for the reader.",
+            "Sentence two preserves the original discussion without deletion.",
+            "Sentence three remains inside the same markdown block.",
+            "Sentence four must stay visible after deterministic normalization.",
+            "Sentence five proves that a heading does not exempt a long paragraph.",
+        ]
+        draft = (
+            "---\n"
+            "Title: Practical Ceiling Guide\n"
+            "SEO Title: Practical Ceiling Laser Pointer Planning Guide 2026\n"
+            "SEO Description: Too short.\n"
+            "SEO Keywords: unrelated candidate phrase, green laser\n"
+            "---\n\n"
+            "# Practical Ceiling Guide\n\n"
+            "Opening guidance without the canonical phrase.\n\n"
+            "## Selection Criteria\n"
+            + " ".join(long_sentences)
+            + "\n\n## Safe Setup\n"
+            + " ".join(long_sentences)
+            + "\n"
+        )
+
+        normalized = lw._normalize_w1b_candidate(draft, keyword)
+        path = tmp_path / "candidate-mismatch.md"
+        path.write_text(normalized, encoding="utf-8")
+        meta, body, clean, _, _ = write_pre_check.parse_draft(str(path))
+
+        assert meta["seo keywords"].split(",", 1)[0].strip() == keyword
+        assert keyword in write_pre_check.words_before_n(clean, 100)
+        h2s = re.findall(r"^## (.+)", body, re.MULTILINE)
+        assert sum(keyword in heading.lower() for heading in h2s) >= 2
+        paragraphs = [
+            paragraph.strip()
+            for paragraph in re.split(r"\n\n+", clean)
+            if len(paragraph.split()) > 20
+        ]
+        assert all(
+            write_pre_check.sentence_count(paragraph) <= 4
+            for paragraph in paragraphs
+        )
+        for sentence in long_sentences:
+            assert normalized.count(sentence) == 2
+        assert lw._normalize_w1b_candidate(normalized, keyword) == normalized
+
+    def test_focused_fact_gap_audit_adds_only_validated_missing_ids(
+        self, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = (
+            "The device uses a 532 nm wavelength.\n\n"
+            "Qualified planning advice only."
+        )
+        sentences = lw._extract_draft_sentences(draft)
+        factual = sentences[0]
+        captured = {}
+
+        async def fake_ai(purpose, system_prompt, user_prompt, **kwargs):
+            captured["prompt"] = user_prompt
+            return json.dumps({
+                "version": 1,
+                "claims": [{
+                    "sentence_id": factual["sentence_id"],
+                    "claim_type": "technical_specification",
+                    "evidence_ids": ["ev_001"],
+                }],
+            })
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+
+        canonical, requested, added = asyncio.run(
+            lw._supplement_claim_ledger_fact_gaps(
+                draft,
+                {"version": 1, "claims": []},
+                [{
+                    "reason": "uncovered_factual_sentence",
+                    "sentence": factual["text"],
+                }],
+                "ev_001 evidence card",
+            )
+        )
+
+        assert requested == 1
+        assert added == 1
+        assert factual["sentence_id"] in captured["prompt"]
+        assert canonical["claims"][0]["sentence_id"] == factual["sentence_id"]
+        assert canonical["claims"][0]["claim_text"] == factual["text"]
+
     def test_claim_ledger_uses_exact_revision_evidence_block(
         self, monkeypatch
     ):

@@ -2731,6 +2731,106 @@ def _candidate_w1b_precheck(
         )
 
 
+def _fact_issues_from_precheck(
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return exact structured factual gaps from one candidate precheck."""
+    issues: list[dict[str, Any]] = []
+    for check in result.get("checks", []):
+        if not isinstance(check, dict):
+            continue
+        value = check.get("fact_issues")
+        if not isinstance(value, list):
+            continue
+        issues.extend(item for item in value if isinstance(item, dict))
+    return issues
+
+
+async def _supplement_claim_ledger_fact_gaps(
+    draft_md: str,
+    claim_data: dict[str, Any],
+    fact_issues: list[dict[str, Any]],
+    evidence_cards: str,
+    *,
+    settings=None,
+) -> tuple[dict[str, Any], int, int]:
+    """Run one focused ledger audit for factual sentences omitted earlier.
+
+    The same sentence-ID validator and evidence-ID rules remain authoritative.
+    Unsupported sentences may still be omitted; they remain blocking and are
+    sent back to the body-revision loop rather than being auto-approved.
+    """
+    sentence_table = {
+        sentence["text"]: sentence
+        for sentence in _extract_draft_sentences(draft_md)
+    }
+    claimed_ids = {
+        claim.get("sentence_id")
+        for claim in claim_data.get("claims", [])
+        if isinstance(claim, dict)
+        and isinstance(claim.get("sentence_id"), str)
+    }
+
+    missing_sentences: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for issue in fact_issues:
+        text = issue.get("sentence")
+        if not isinstance(text, str):
+            continue
+        sentence = sentence_table.get(text)
+        if not sentence:
+            continue
+        sentence_id = sentence["sentence_id"]
+        if sentence_id in claimed_ids or sentence_id in seen_ids:
+            continue
+        seen_ids.add(sentence_id)
+        missing_sentences.append(sentence)
+
+    requested = len(missing_sentences)
+    if not missing_sentences:
+        return claim_data, 0, 0
+
+    supplemental_claims = await _generate_claim_ledger_batch(
+        missing_sentences,
+        evidence_cards,
+        batch_label="fact-gap",
+        settings=settings,
+    )
+
+    merged_claims = [
+        claim
+        for claim in claim_data.get("claims", [])
+        if isinstance(claim, dict)
+    ]
+    seen_claims = {
+        (
+            claim.get("sentence_id"),
+            claim.get("claim_type"),
+            tuple(claim.get("evidence_ids") or []),
+        )
+        for claim in merged_claims
+    }
+    added = 0
+    for claim in supplemental_claims:
+        key = (
+            claim.get("sentence_id"),
+            claim.get("claim_type"),
+            tuple(claim.get("evidence_ids") or []),
+        )
+        if key in seen_claims:
+            continue
+        seen_claims.add(key)
+        merged_claims.append(claim)
+        added += 1
+
+    canonical_json = json.dumps(
+        {"version": 1, "claims": merged_claims},
+        ensure_ascii=False,
+    )
+    canonical = _validate_claim_ledger_json(canonical_json, draft_md)
+    return canonical, requested, added
+
+
 def _w1b_primary_keyword(draft: Path, topic: str) -> str:
     """Return the exact keyword the deterministic W1b rules will enforce."""
     raw_keywords = _primary_keywords(draft)
@@ -2803,6 +2903,28 @@ def _normalize_w1b_frontmatter(
         lines.append(replacement)
     else:
         lines[description_index] = replacement
+
+    keyword_index = next(
+        (
+            index for index, line in enumerate(lines)
+            if re.match(r"^\s*SEO Keywords\s*:", line, re.IGNORECASE)
+        ),
+        None,
+    )
+    current_keywords = ""
+    if keyword_index is not None:
+        current_keywords = lines[keyword_index].split(":", 1)[1].strip()
+    remaining_keywords = [
+        item.strip()
+        for item in current_keywords.split(",")
+        if item.strip() and item.strip().lower() != primary_keyword.lower()
+    ]
+    keyword_value = ", ".join([primary_keyword, *remaining_keywords])
+    keyword_replacement = f"SEO Keywords: {keyword_value}"
+    if keyword_index is None:
+        lines.append(keyword_replacement)
+    else:
+        lines[keyword_index] = keyword_replacement
 
     normalized_frontmatter = "---\n" + "\n".join(lines) + "\n---"
     return normalized_frontmatter + body
@@ -2892,13 +3014,19 @@ def _ensure_w1b_keyword_h2s(
 
 
 def _split_w1b_long_paragraphs(draft_md: str) -> str:
-    """Split normal prose into groups of at most four checker-visible sentences."""
+    """Split every checker-visible paragraph after each fourth sentence.
+
+    The W1b checker defines a paragraph only by blank-line boundaries. A
+    heading or list marker inside the same block does not exempt that block,
+    so this routine preserves every character while inserting blank lines at
+    the same sentence boundaries the checker counts.
+    """
     frontmatter, body = _split_frontmatter_text(draft_md)
     protected: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
         protected.append(match.group(0))
-        return f"\x00W1BPROTECTED{len(protected) - 1}\x00"
+        return f"\n\n\x00W1BPROTECTED{len(protected) - 1}\x00\n\n"
 
     masked = re.sub(
         r"```[\s\S]*?```|"
@@ -2910,27 +3038,28 @@ def _split_w1b_long_paragraphs(draft_md: str) -> str:
     )
 
     def normalize_block(block: str) -> str:
-        stripped = block.strip()
-        if not stripped or "\x00W1BPROTECTED" in stripped:
+        if not block.strip() or "\x00W1BPROTECTED" in block:
             return block
-        if any(
-            re.match(r"^\s*(?:#{1,6}\s|>|[-*+]\s|\d+\.\s|\||<)", line)
-            for line in stripped.splitlines()
-        ):
+        if len(block.split()) <= 20:
             return block
 
-        compact = re.sub(r"\s*\n\s*", " ", stripped)
-        sentences = [
-            sentence.strip()
-            for sentence in re.split(r"(?<=[.!?])\s+", compact)
-            if sentence.strip()
-        ]
-        if len(sentences) <= 4:
-            return compact
-        return "\n\n".join(
-            " ".join(sentences[index:index + 4])
-            for index in range(0, len(sentences), 4)
-        )
+        sentence_matches = list(re.finditer(r"([.!?]+)(\s+|$)", block))
+        if len(sentence_matches) <= 4:
+            return block
+
+        out: list[str] = []
+        cursor = 0
+        for sentence_index, match in enumerate(sentence_matches, start=1):
+            out.append(block[cursor:match.start()])
+            out.append(match.group(1))
+            whitespace = match.group(2)
+            if sentence_index % 4 == 0 and whitespace:
+                out.append("\n\n")
+            else:
+                out.append(whitespace)
+            cursor = match.end()
+        out.append(block[cursor:])
+        return "".join(out)
 
     blocks = re.split(r"\n{2,}", masked)
     normalized_body = "\n\n".join(normalize_block(block) for block in blocks)
@@ -3047,7 +3176,9 @@ invent facts, numbers, quotes, or URLs.
 After your response, the server will enforce SEO Description length, exact
 keyword placement in the first 100 words and two H2 headings, and the four-
 sentence paragraph cap without deleting content. Prioritize substantive edits
-for every structured `fact_issues` sentence and do not introduce new facts.
+for every structured `fact_issues` sentence: either remove or qualify an
+unsupported factual assertion, or preserve it only when an evidence card
+directly supports it. Do not leave a listed factual gap unchanged.
 
 ## Exact structured failures (fix every listed item and sentence)
 {structured_failures}
@@ -3104,10 +3235,14 @@ Return the revised article Markdown only."""
     except Exception as exc:
         return {"success": False, "error": f"修订 CLAIM_LEDGER 生成失败: {exc}"}
 
-    cl_data["draft_sha256"] = hashlib.sha256(
+    candidate_draft_sha256 = hashlib.sha256(
         new_draft_md.encode("utf-8")
     ).hexdigest()
+    cl_data["draft_sha256"] = candidate_draft_sha256
 
+    fact_gap_audit_requested = 0
+    fact_gap_claims_added = 0
+    fact_gap_audit_error = None
     try:
         candidate_precheck = _candidate_w1b_precheck(
             new_draft_md,
@@ -3123,6 +3258,31 @@ Return the revised article Markdown only."""
             "retryable": False,
             "error": f"候选稿 W1b 预检执行失败: {exc}",
         }
+
+    fact_issues = _fact_issues_from_precheck(candidate_precheck)
+    if fact_issues:
+        try:
+            cl_data, fact_gap_audit_requested, fact_gap_claims_added = (
+                await _supplement_claim_ledger_fact_gaps(
+                    new_draft_md,
+                    cl_data,
+                    fact_issues,
+                    evidence_cards,
+                    settings=settings,
+                )
+            )
+            cl_data["draft_sha256"] = candidate_draft_sha256
+            if fact_gap_claims_added:
+                candidate_precheck = _candidate_w1b_precheck(
+                    new_draft_md,
+                    cl_data,
+                    resolved_tier,
+                    workspace,
+                    slug,
+                )
+        except ValueError as exc:
+            fact_gap_audit_error = str(exc)
+
     candidate_fail_count = int(
         candidate_precheck.get("fail_count") or 0
     )
@@ -3146,6 +3306,9 @@ Return the revised article Markdown only."""
             "deterministic_normalization_applied": (
                 deterministic_normalization_applied
             ),
+            "fact_gap_audit_requested": fact_gap_audit_requested,
+            "fact_gap_claims_added": fact_gap_claims_added,
+            "fact_gap_audit_error": fact_gap_audit_error,
             "error": (
                 f"候选稿预检仍有 {candidate_fail_count} 项未通过；"
                 "未写入正式 draft/ledger"
@@ -3206,6 +3369,9 @@ Return the revised article Markdown only."""
         "deterministic_normalization_applied": (
             deterministic_normalization_applied
         ),
+        "fact_gap_audit_requested": fact_gap_audit_requested,
+        "fact_gap_claims_added": fact_gap_claims_added,
+        "fact_gap_audit_error": fact_gap_audit_error,
     }
 
 
