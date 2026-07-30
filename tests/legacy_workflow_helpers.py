@@ -7,6 +7,7 @@ Used by:
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -94,18 +95,24 @@ def _synthetic_ai_response(purpose: str, user: str = "") -> str:
             "</script>\n"
         )
     if purpose == "legacy_write_claim_ledger":
-        if "Article sentences" in user and "S001" in user:
-            # New prompt: model selects sentence_id; both drafts produce
-            # S001 = the first sentence the deterministic extractor emits.
+        sentence_ids = re.findall(r"(?m)^(S\d{3})  ", user)
+        if "Article sentences" in user and sentence_ids:
+            # Batched prompts contain only the sentence IDs valid for that
+            # batch. Select the first ID actually present instead of assuming
+            # every call contains S001.
+            sentence_id = sentence_ids[0]
             if "This is a revised synthetic draft." in user:
                 return (
                     '{"version":1,"claims":['
-                    '{"sentence_id":"S001","claim_type":"general","evidence_ids":["ev_revised001"]}'
+                    f'{{"sentence_id":"{sentence_id}","claim_type":"general",'
+                    '"evidence_ids":["ev_revised001"]}'
                     ']}\n'
                 )
             return (
                 '{"version":1,"claims":['
-                '{"sentence_id":"S001","claim_type":"technical_specification","evidence_ids":["ev_test001"]}'
+                f'{{"sentence_id":"{sentence_id}",'
+                '"claim_type":"technical_specification",'
+                '"evidence_ids":["ev_test001"]}'
                 ']}\n'
             )
         # Legacy (older) prompt path - keep for compatibility of any test

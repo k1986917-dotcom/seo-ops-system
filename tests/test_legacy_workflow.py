@@ -2424,7 +2424,7 @@ class TestW2ReviseEvidence闭环:
         monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
         result = asyncio.run(lw.stage_w2_revise("test topic", ws))
         assert result["success"] is False
-        assert "CLAIM_LEDGER JSON parse failed" in result["error"]
+        assert "CLAIM_LEDGER batch 1/1 JSON parse failed" in result["error"]
         assert draft_path.read_text(encoding="utf-8") == original_draft
 
     def test_w2_end_to_end_revise_and_precheck(self, tmp_path, monkeypatch):

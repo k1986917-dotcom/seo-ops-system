@@ -2166,57 +2166,95 @@ Rules:
   ``{"version":1,"claims":[]}``."""
 
 
+_CLAIM_LEDGER_SENTENCE_BATCH_SIZE = 60
+
+
 async def _generate_claim_ledger_for_draft(
     draft_md: str, cards: dict[str, Any], *, settings=None,
     evidence_cards_text: str | None = None,
 ) -> dict[str, Any]:
-    """Generate then validate a claim ledger as an independent AI task.
+    """Generate and validate one exhaustive ledger in bounded AI batches.
 
-    The model never authors ``claim_text``.  The server first extracts the
-    authoritative draft sentences (using the exact same tokenizer as
-    ``_validate_claim_ledger_json``), assigns stable ``sentence_id``s, and
-    asks the model only to pick IDs.  The server then fills ``claim_text``
-    from the original draft sentence.  The same strict downstream gate
-    (``_run_fact_check``, evidence_id validation, atomic write) remains
-    authoritative; this helper never repairs or invents a ledger.
+    Sentence IDs are assigned once for the complete draft, then sent to the
+    model in stable batches. Each response is validated only against the IDs
+    supplied in that batch; all canonical claims are merged and finally
+    validated against the complete draft. This bounds prompt size without
+    dropping later sentences or weakening the authoritative W1b gate.
     """
     sentences = _extract_draft_sentences(draft_md)
-    sentence_lines = "\n".join(
-        f"{s['sentence_id']}  {s['text']}" for s in sentences
-    ) or "(no selectable sentences were extracted from this draft)"
     evidence_cards = (
         evidence_cards_text or _format_evidence_cards(cards)
         or "(No usable evidence cards were supplied.)"
     )
-    user_prompt = f"""## Article sentences (use these S-IDs verbatim)
+    sentence_batches = [
+        sentences[index:index + _CLAIM_LEDGER_SENTENCE_BATCH_SIZE]
+        for index in range(0, len(sentences), _CLAIM_LEDGER_SENTENCE_BATCH_SIZE)
+    ] or [[]]
+    canonical_claims: list[dict[str, Any]] = []
+    batch_count = len(sentence_batches)
+
+    for batch_index, batch_sentences in enumerate(sentence_batches, start=1):
+        sentence_lines = "\n".join(
+            f"{sentence['sentence_id']}  {sentence['text']}"
+            for sentence in batch_sentences
+        ) or "(no selectable sentences were extracted from this draft)"
+        user_prompt = f"""## Claim-ledger sentence batch {batch_index}/{batch_count}
+
+Inspect every supplied sentence in this batch. Emit claims only for the exact
+S-IDs shown below. Other batches are handled separately and merged server-side.
+
+## Article sentences (use these S-IDs verbatim)
 {sentence_lines}
 
 ## Evidence cards (the only allowed evidence IDs)
 {evidence_cards}
 
 Return the JSON object only."""
-    raw = await _run_ai_text(
-        "legacy_write_claim_ledger", _CLAIM_LEDGER_AI_SYSTEM, user_prompt,
-        settings=settings, max_tokens=8000,
-    )
-    clean = _strip_code_fence(raw)
-    if "===CLAIM_LEDGER===" in clean:
-        raise ValueError(
-            "claim-ledger task must return JSON only, without ===CLAIM_LEDGER==="
-        )
-    if not clean or not clean.strip():
-        raise ValueError("claim-ledger AI response is empty")
-    try:
-        data = json.loads(clean)
-    except Exception as exc:
-        raise ValueError(f"CLAIM_LEDGER JSON parse failed: {exc}") from None
-    canonical = _validate_claim_ledger_with_sentence_ids(data, sentences)
-    # Re-validate the canonical output through the authoritative
-    # _validate_claim_ledger_json.  Both `_normalize_claim` and the
-    # belt-and-suspenders checks in the helper should already guarantee
-    # this passes, but re-running the canonical string serves as the
-    # final, single source-of-truth gate that every persisted ledger
-    # must satisfy.
+        try:
+            raw = await _run_ai_text(
+                "legacy_write_claim_ledger",
+                _CLAIM_LEDGER_AI_SYSTEM,
+                user_prompt,
+                settings=settings,
+                max_tokens=8000,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"claim-ledger batch {batch_index}/{batch_count} failed: {exc}"
+            ) from None
+
+        clean = _strip_code_fence(raw)
+        if "===CLAIM_LEDGER===" in clean:
+            raise ValueError(
+                f"claim-ledger batch {batch_index}/{batch_count} must return "
+                "JSON only, without ===CLAIM_LEDGER==="
+            )
+        if not clean or not clean.strip():
+            raise ValueError(
+                f"claim-ledger batch {batch_index}/{batch_count} AI response is empty"
+            )
+        try:
+            data = json.loads(clean)
+        except Exception as exc:
+            raise ValueError(
+                f"CLAIM_LEDGER batch {batch_index}/{batch_count} JSON parse "
+                f"failed: {exc}"
+            ) from None
+        try:
+            canonical_batch = _validate_claim_ledger_with_sentence_ids(
+                data,
+                batch_sentences,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"CLAIM_LEDGER batch {batch_index}/{batch_count} validation "
+                f"failed: {exc}"
+            ) from None
+        canonical_claims.extend(canonical_batch["claims"])
+
+    canonical = {"version": 1, "claims": canonical_claims}
+    # Re-validate the merged canonical output through the authoritative
+    # full-draft validator. No batch can bypass exact claim_text binding.
     canonical_json = json.dumps(canonical, ensure_ascii=False, indent=2)
     return _validate_claim_ledger_json(canonical_json, draft_md)
 

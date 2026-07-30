@@ -75,6 +75,71 @@ class TestW1bRevisionContract:
         assert "EXACT_REVISION_EVIDENCE_BLOCK" in captured["user_prompt"]
         assert "supporting evidence 1" not in captured["user_prompt"]
 
+    def test_synthetic_claim_ledger_selects_id_from_current_batch(self):
+        from tests.legacy_workflow_helpers import _synthetic_ai_response
+
+        response = json.loads(
+            _synthetic_ai_response(
+                "legacy_write_claim_ledger",
+                "## Article sentences (use these S-IDs verbatim)\n"
+                "S061  Later sentence in the second batch.\n"
+                "S062  Another later sentence.\n",
+            )
+        )
+
+        assert response["claims"][0]["sentence_id"] == "S061"
+
+    def test_claim_ledger_batches_all_sentences_without_dropping_ids(
+        self, monkeypatch
+    ):
+        import re
+
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = "\n\n".join(
+            f"Sentence {index:03d} states verifiable fact {index:03d}."
+            for index in range(1, 118)
+        )
+        sentences = lw._extract_draft_sentences(draft)
+        assert len(sentences) == 117
+
+        seen_batches = []
+
+        async def fake_ai(purpose, system_prompt, user_prompt, **kwargs):
+            assert purpose == "legacy_write_claim_ledger"
+            assert "EXACT_BATCH_EVIDENCE" in user_prompt
+            ids = re.findall(r"^(S\d{3})  ", user_prompt, flags=re.MULTILINE)
+            seen_batches.append(ids)
+            return json.dumps({
+                "version": 1,
+                "claims": [
+                    {
+                        "sentence_id": sentence_id,
+                        "claim_type": "general",
+                        "evidence_ids": ["ev_001"],
+                    }
+                    for sentence_id in ids
+                ],
+            })
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+
+        result = asyncio.run(
+            lw._generate_claim_ledger_for_draft(
+                draft,
+                {"all_cards": [_card(1)], "sections": []},
+                evidence_cards_text="EXACT_BATCH_EVIDENCE",
+            )
+        )
+
+        expected_ids = [sentence["sentence_id"] for sentence in sentences]
+        assert [len(batch) for batch in seen_batches] == [60, 57]
+        assert [sid for batch in seen_batches for sid in batch] == expected_ids
+        assert [claim["sentence_id"] for claim in result["claims"]] == expected_ids
+        assert [
+            claim["claim_text"] for claim in result["claims"]
+        ] == [sentence["text"] for sentence in sentences]
+
     def test_w1b_revision_backs_up_draft_and_claim_ledger_together(
         self, tmp_path, monkeypatch
     ):
