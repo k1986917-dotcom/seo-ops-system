@@ -54,6 +54,8 @@ _WRITE_CONTEXT_TOTAL_CHAR_LIMIT = 5000
 _EVIDENCE_CARD_TEXT_LIMIT = 320
 _EVIDENCE_CARDS_PER_SECTION = 4
 _REVISION_LINKS_CHAR_LIMIT = 3000
+_W1B_REPAIR_REPORT_CHAR_LIMIT = 24000
+_W1B_REVISION_EVIDENCE_CARD_LIMIT = 64
 
 # write/SKILL.md 段2: "最多 2 轮"
 MAX_REVISION_ROUNDS = 2
@@ -1293,10 +1295,15 @@ def _load_write_context_contracts(workspace: Path, slug: str, topic: str, *,
 
 
 def _format_evidence_cards(cards: dict[str, Any], *, relevant_text: str = "",
-                           preserve_evidence_ids: set[str] | None = None) -> str:
-    """Render compact cards, optionally retaining cards used by the old draft."""
+                           preserve_evidence_ids: set[str] | None = None,
+                           max_cards: int = 16) -> str:
+    """Render compact cards without dropping evidence used by the old draft.
+
+    ``max_cards`` limits optional/recalled cards, never preserved cards.
+    """
     all_cards = [item for item in cards.get("all_cards", []) if isinstance(item, dict)]
-    selected_ids: set[str] = set(preserve_evidence_ids or set())
+    preserved_ids = set(preserve_evidence_ids or set())
+    selected_ids: set[str] = set(preserved_ids)
     relevant_tokens = _contract_tokens(relevant_text)
     if relevant_tokens:
         ranked: list[tuple[int, str]] = []
@@ -1315,11 +1322,23 @@ def _format_evidence_cards(cards: dict[str, Any], *, relevant_text: str = "",
                     str(card.get("evidence_id") or "")
                     for card in section.get("cards", []) if isinstance(card, dict)
                 )
-    shown = [card for card in all_cards if str(card.get("evidence_id") or "") in selected_ids]
+
+    preserved = [
+        card for card in all_cards
+        if str(card.get("evidence_id") or "") in preserved_ids
+    ]
+    selected = [
+        card for card in all_cards
+        if str(card.get("evidence_id") or "") in selected_ids
+        and str(card.get("evidence_id") or "") not in preserved_ids
+    ]
+    shown = preserved + selected
     if not shown:
-        shown = all_cards[:12]
+        shown = all_cards[:max_cards]
+    else:
+        shown = shown[:max(max_cards, len(preserved))]
     lines = []
-    for card in shown[:16]:
+    for card in shown:
         lines.append(
             f"- {card.get('evidence_id')}: {card.get('support')} "
             f"| {card.get('source_url')}"
@@ -1370,6 +1389,7 @@ def _revision_context_contracts(
         cards,
         relevant_text=relevant_text,
         preserve_evidence_ids=_current_claim_evidence_ids(workspace, slug),
+        max_cards=_W1B_REVISION_EVIDENCE_CARD_LIMIT,
     )
     return contracts, rendered
 
@@ -2108,6 +2128,10 @@ Rules:
   the sentence identified by ``sentence_id``.
 * The same ``sentence_id`` MAY appear in multiple claims if distinct
   evidence supports different aspects of the sentence.
+* Silently inspect EVERY supplied sentence ID before returning. Do not stop
+  after the first obvious claims.
+* Coverage must be exhaustive: omitting a supported factual sentence will
+  cause the downstream pre-check to fail.
 * Do not include a ``claim_text`` field in your response.  The server
   fills ``claim_text`` from the authoritative draft sentence, so any
   value you put there is silently ignored.
@@ -2119,6 +2143,7 @@ Rules:
 
 async def _generate_claim_ledger_for_draft(
     draft_md: str, cards: dict[str, Any], *, settings=None,
+    evidence_cards_text: str | None = None,
 ) -> dict[str, Any]:
     """Generate then validate a claim ledger as an independent AI task.
 
@@ -2134,7 +2159,10 @@ async def _generate_claim_ledger_for_draft(
     sentence_lines = "\n".join(
         f"{s['sentence_id']}  {s['text']}" for s in sentences
     ) or "(no selectable sentences were extracted from this draft)"
-    evidence_cards = _format_evidence_cards(cards) or "(No usable evidence cards were supplied.)"
+    evidence_cards = (
+        evidence_cards_text or _format_evidence_cards(cards)
+        or "(No usable evidence cards were supplied.)"
+    )
     user_prompt = f"""## Article sentences (use these S-IDs verbatim)
 {sentence_lines}
 
@@ -2489,6 +2517,36 @@ def _primary_keywords(draft: Path) -> str:
     return m.group(1).strip() if m else ""
 
 
+def _w1b_repair_contract(draft: Path, topic: str) -> str:
+    """Build the exact mechanical/evidence contract for a W1b repair."""
+    raw_keywords = _primary_keywords(draft)
+    primary_keyword = next(
+        (item.strip() for item in raw_keywords.split(",") if item.strip()),
+        topic.strip(),
+    )
+    return f"""The exact primary keyword is: {primary_keyword}
+
+Hard acceptance contract:
+1. Preserve valid YAML frontmatter. Keep SEO Title at 50-60 characters.
+2. Add one `SEO Description:` frontmatter line containing 150-160 characters.
+3. Use the exact primary keyword within the first 100 prose words.
+4. Use the exact primary keyword naturally in at least two `##` H2 headings.
+5. Add this exact block shape with 3-5 bullet lines:
+   > **Key Takeaways**
+   > - first takeaway
+   > - second takeaway
+   > - third takeaway
+6. Every normal prose paragraph must contain at most four sentences.
+7. Do not introduce an externally verifiable fact unless one of the evidence
+   cards below directly supports it. If a factual sentence is unsupported,
+   remove it or rewrite it as clearly qualified analysis/recommendation.
+8. Do not invent numbers, specifications, regulations, quotations, URLs,
+   products, tests, or first-hand experience.
+9. Return the entire revised article, not a patch or explanation.
+
+Before returning, silently verify every item above."""
+
+
 async def stage_w1b_revise(
     topic: str, tier: str, workspace: Path, settings=None
 ) -> dict:
@@ -2525,14 +2583,18 @@ async def stage_w1b_revise(
         workspace, slug, topic,
         relevant_text=f"{precheck_report}\n{retry_memory}",
     )
+    repair_contract = _w1b_repair_contract(draft, topic)
     user_prompt = f"""Revise the article for: "{topic}"
 
 The article failed the W1b pre-check. Fix the items listed below using
 ONLY information from the material pack and the current draft. Do not
 invent facts, numbers, quotes, or URLs.
 
+## Hard repair contract (all items are mandatory)
+{repair_contract}
+
 ## Pre-check report (what failed)
-{precheck_report[:_REPORT_CHAR_LIMIT]}
+{precheck_report[:_W1B_REPAIR_REPORT_CHAR_LIMIT]}
 {retry_section}
 
 ## Current draft (frontmatter may have been auto-repaired)
@@ -2565,7 +2627,10 @@ Return the revised article Markdown only."""
 
     try:
         cl_data = await _generate_claim_ledger_for_draft(
-            new_draft_md, contracts.get("cards") or {}, settings=settings,
+            new_draft_md,
+            contracts.get("cards") or {},
+            settings=settings,
+            evidence_cards_text=evidence_cards,
         )
     except ValueError as exc:
         return {"success": False, "error": f"修订 CLAIM_LEDGER 生成/校验失败: {exc}"}
@@ -2574,9 +2639,17 @@ Return the revised article Markdown only."""
 
     cl_data["draft_sha256"] = hashlib.sha256(new_draft_md.encode("utf-8")).hexdigest()
 
-    # Backup the original draft.
+    # Back up the matched draft + claim ledger as a pair. A draft-only
+    # backup cannot be safely restored because sentence IDs are draft-bound.
     backup = draft.with_suffix(f".precheck-rev{rounds + 1}.md")
-    backup.write_text(_read_text(draft), encoding="utf-8")
+    backup.write_bytes(draft.read_bytes())
+    claim_path = workspace / "research" / f"claim-ledger-{slug}.json"
+    claim_backup: Path | None = None
+    if claim_path.exists():
+        claim_backup = claim_path.with_name(
+            f"{claim_path.stem}.precheck-rev{rounds + 1}.json"
+        )
+        claim_backup.write_bytes(claim_path.read_bytes())
 
     # Write-ahead: temp files → rename.  On failure, old files survive.
     _write_ahead_draft_and_ledger(workspace, slug, new_draft_md, cl_data)
@@ -2597,6 +2670,7 @@ Return the revised article Markdown only."""
             "rounds_used": rounds + 1,
             "rounds_left": 0,
             "backup": str(backup),
+            "claim_backup": str(claim_backup) if claim_backup else None,
             "frontmatter_repaired": repair.get("repaired", False),
             "precheck_report": precheck.get("report", ""),
             "error": precheck.get("error")
@@ -2614,6 +2688,7 @@ Return the revised article Markdown only."""
         "rounds_used": rounds + 1,
         "rounds_left": 0,
         "backup": str(backup),
+        "claim_backup": str(claim_backup) if claim_backup else None,
         "frontmatter_repaired": repair.get("repaired", False),
     }
 
