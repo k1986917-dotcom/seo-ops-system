@@ -3016,6 +3016,20 @@ def _normalize_w1b_frontmatter(
         current_title = lines[title_index].split(":", 1)[1].strip()
         fitted_title = _fit_w1b_seo_title(current_title, primary_keyword)
         lines[title_index] = f"SEO Title: {fitted_title}"
+    else:
+        # SEO metadata remains independent: copy ordinary Title only as the
+        # source value, and never modify ordinary Title or the H1.
+        plain_title_index = next(
+            (
+                index for index, line in enumerate(lines)
+                if re.match(r"^\s*Title\s*:", line, re.IGNORECASE)
+            ),
+            None,
+        )
+        if plain_title_index is not None:
+            current_title = lines[plain_title_index].split(":", 1)[1].strip()
+            fitted_title = _fit_w1b_seo_title(current_title, primary_keyword)
+            lines.insert(plain_title_index + 1, f"SEO Title: {fitted_title}")
 
     description_index = next(
         (
@@ -3383,7 +3397,7 @@ def _w1b_repair_contract(draft: Path, topic: str) -> str:
     return f"""The exact primary keyword is: {primary_keyword}
 
 Hard acceptance contract:
-1. Preserve valid YAML frontmatter. Keep SEO Title at 50-60 characters.
+1. Preserve valid YAML frontmatter. Include a separate `SEO Title:` line of 50-60 characters. Do not modify the ordinary `Title:` field or H1.
 2. Add one `SEO Description:` frontmatter line containing 150-160 characters.
 3. Use the exact primary keyword within the first 100 prose words.
 4. Use the exact primary keyword naturally in at least two `##` H2 headings.
@@ -3404,7 +3418,7 @@ Hard acceptance contract:
    remove it or rewrite it as clearly qualified analysis/recommendation.
 9. Do not invent numbers, specifications, regulations, quotations, URLs,
    products, tests, or first-hand experience.
-10. Return the entire revised article, not a patch or explanation.
+10. Return at least 1350 checker-visible body words. Preserve every existing paragraph except an exact unsupported factual sentence named in structured failures; add useful analysis, selection guidance, or a practical checklist instead of compressing prose.\n11. Return the entire revised article, not a patch or explanation.
 
 Before returning, silently verify every item above."""
 
@@ -3501,10 +3515,12 @@ structured `fact_issues` sentence: either remove or qualify an
 unsupported factual assertion, or preserve it only when an evidence card
 directly supports it. Do not leave a listed factual gap unchanged.
 
-If a failed check says the reader-visible prose is below the tier minimum,
-expand useful analysis, selection guidance, or a practical checklist by at
-least 100 words beyond the listed deficit. Do not pad with repeated wording,
-new measurements, new regulations, new product claims, or invented experience.
+The output must contain at least 1350 checker-visible body words,
+regardless of the listed deficit. Do not shorten, summarize, or omit any
+existing non-frontmatter prose unless the structured failures name that exact
+unsupported factual sentence. Add useful analysis, selection guidance, or a
+practical checklist; do not pad with repeated wording, new measurements, new
+regulations, new product claims, or invented experience.
 
 ## Exact structured failures (fix every listed item and sentence)
 {structured_failures}

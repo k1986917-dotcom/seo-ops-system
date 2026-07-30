@@ -176,3 +176,44 @@ def test_normalize_w1b_candidate_passes_real_seo_title_check(tmp_path):
     )
     assert seo_title_check is not None
     assert seo_title_check["pass"] is True, seo_title_check.get("detail")
+
+
+
+def test_missing_seo_title_is_derived_without_mutating_plain_title():
+    plain_title = "Laser Pointer for Pointing Above Ceilings in Commercial Construction"
+    assert len(plain_title) == 68
+    draft = (
+        "---\n"
+        f"Title: {plain_title}\n"
+        "SEO Description: " + "x" * 155 + "\n"
+        f"SEO Keywords: {_PRIMARY_KEYWORD}\n"
+        "---\n\n"
+        "# Laser Pointer Planning Guide\n"
+    )
+
+    normalized = lw._normalize_w1b_frontmatter(draft, _PRIMARY_KEYWORD)
+
+    assert f"Title: {plain_title}" in normalized
+    assert "# Laser Pointer Planning Guide" in normalized
+    seo_title_line = next(
+        line for line in normalized.splitlines()
+        if line.startswith("SEO Title:")
+    )
+    seo_title = seo_title_line.split(":", 1)[1].strip()
+    assert 50 <= len(seo_title) <= 60
+    assert "laser" in seo_title.lower()
+    assert "pointer" in seo_title.lower()
+
+
+def test_w1b_contract_requires_separate_title_and_1350_words(tmp_path):
+    draft = tmp_path / "draft.md"
+    draft.write_text(
+        _draft_with_seo_title("Laser Pointer Above Ceilings in Commercial Construction"),
+        encoding="utf-8",
+    )
+
+    contract = lw._w1b_repair_contract(draft, "Laser Pointer Planning Guide")
+
+    assert "separate " + chr(96) + "SEO Title:" + chr(96) in contract
+    assert "ordinary " + chr(96) + "Title:" + chr(96) in contract
+    assert "at least 1350 checker-visible body words" in contract
