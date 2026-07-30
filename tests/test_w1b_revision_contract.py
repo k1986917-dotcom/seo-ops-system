@@ -176,3 +176,68 @@ class TestW1bRevisionContract:
         assert draft_backup.read_text(encoding="utf-8") == old_draft
         assert json.loads(claim_backup.read_text(encoding="utf-8")) == old_claim
         assert captured["evidence_cards_text"] == exact_cards
+
+
+class TestCanonicalDraftSelection:
+    def test_latest_draft_ignores_revision_backups_even_when_newer(
+        self, tmp_path
+    ):
+        import os
+
+        from seo_ops.services import legacy_workflow as lw
+
+        topic = "canonical draft selector"
+        slug = lw._slugify(topic)
+        workspace = tmp_path / "ws"
+        drafts = workspace / "drafts"
+        drafts.mkdir(parents=True)
+
+        canonical = drafts / f"{slug}-2026-07-30.md"
+        precheck_backup = drafts / (
+            f"{slug}-2026-07-30.precheck-rev3.md"
+        )
+        w2_backup = drafts / f"{slug}-2026-07-30.rev4.md"
+
+        canonical.write_text("canonical", encoding="utf-8")
+        precheck_backup.write_text("precheck backup", encoding="utf-8")
+        w2_backup.write_text("w2 backup", encoding="utf-8")
+
+        base_ns = 1_800_000_000_000_000_000
+        os.utime(canonical, ns=(base_ns, base_ns))
+        os.utime(
+            precheck_backup,
+            ns=(base_ns + 2_000_000_000, base_ns + 2_000_000_000),
+        )
+        os.utime(
+            w2_backup,
+            ns=(base_ns + 3_000_000_000, base_ns + 3_000_000_000),
+        )
+
+        assert lw._latest_draft(workspace, slug) == canonical
+
+        collected = lw._collect_files(topic, workspace)
+        assert collected["draft"] == str(canonical)
+
+    def test_latest_draft_still_chooses_newest_canonical_file(
+        self, tmp_path
+    ):
+        import os
+
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = "canonical-dates"
+        workspace = tmp_path / "ws"
+        drafts = workspace / "drafts"
+        drafts.mkdir(parents=True)
+
+        older = drafts / f"{slug}-2026-07-29.md"
+        newer = drafts / f"{slug}-2026-07-30.md"
+        older.write_text("older", encoding="utf-8")
+        newer.write_text("newer", encoding="utf-8")
+
+        old_ns = 1_800_000_000_000_000_000
+        new_ns = old_ns + 1_000_000_000
+        os.utime(older, ns=(old_ns, old_ns))
+        os.utime(newer, ns=(new_ns, new_ns))
+
+        assert lw._latest_draft(workspace, slug) == newer

@@ -80,6 +80,23 @@ def _latest_file(glob_pattern: str, directory: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
+_DRAFT_BACKUP_RE = re.compile(r"\.(?:precheck-)?rev\d+\.md$")
+
+
+def _latest_draft(workspace: Path, slug: str) -> Path | None:
+    # Return the newest canonical draft, never a revision backup.
+    candidates = sorted(
+        (
+            path
+            for path in workspace.glob(f"drafts/{slug}-*.md")
+            if not _DRAFT_BACKUP_RE.search(path.name)
+        ),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
 def _read_text(path: Path | str | None, limit: int | None = None) -> str:
     if not path:
         return ""
@@ -285,7 +302,7 @@ def _record_revision_attempt(
 ) -> None:
     """Persist a concise failure memory for the next operator/AI attempt."""
     state = load_w2_state(workspace, slug)
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     history = state.get("revision_history")
     if not isinstance(history, list):
         history = []
@@ -360,7 +377,7 @@ _STAGE_REQUIRES = {
 
 def _collect_files(topic: str, workspace: Path) -> dict[str, Any]:
     slug = _slugify(topic)
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
     rd = _latest_file(f"research/research-data-{slug}-*.md", workspace)
     sr = _latest_file(f"research/search-results-{slug}-*.md", workspace)
@@ -2364,7 +2381,7 @@ def repair_draft_frontmatter(workspace: Path, slug: str) -> dict:
     Idempotent: if frontmatter is well-formed, returns repaired=False
     without writing the file.
     """
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     if not draft:
         return {"repaired": False, "draft": None, "reason": "no_draft"}
     text = draft.read_text(encoding="utf-8")
@@ -2396,7 +2413,7 @@ def repair_draft_frontmatter(workspace: Path, slug: str) -> dict:
 async def stage_w1b_pre_check(topic: str, tier: str, workspace: Path) -> dict:
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
 
@@ -2561,7 +2578,7 @@ async def stage_w1b_revise(
     draft and the re-run W1b sees the SEO Title/Description fields.
     """
     slug = _slugify(topic)
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
 
@@ -2771,7 +2788,7 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
 
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
     mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
@@ -2920,7 +2937,7 @@ async def stage_w2_revise(topic: str, workspace: Path, settings=None) -> dict:
     is an informed retry rather than an invisible loop.
     """
     slug = _slugify(topic)
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
 
@@ -3119,7 +3136,7 @@ async def stage_w3_register(topic: str, workspace: Path, settings=None) -> dict:
     runner = LegacyRunner(workspace)
     slug = _slugify(topic)
 
-    draft = _latest_file(f"drafts/{slug}-*.md", workspace)
+    draft = _latest_draft(workspace, slug)
     if not draft:
         return {"success": False, "error": "草稿不存在"}
 
