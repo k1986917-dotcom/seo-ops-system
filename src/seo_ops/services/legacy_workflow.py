@@ -308,7 +308,7 @@ def _record_revision_attempt(
         history = []
     error = str(
         result.get("retry_feedback") or result.get("error") or ""
-    )[:12000]
+    )
     history.append({
         "at": datetime.now(UTC).isoformat(),
         "phase": phase,
@@ -327,7 +327,7 @@ def _recent_revision_memory(state: dict[str, Any], phase: str) -> str:
     if not isinstance(history, list):
         return ""
     notes = [
-        str(item.get("error") or "")[:10000]
+        str(item.get("error") or "")
         for item in history
         if isinstance(item, dict)
         and item.get("phase") == phase

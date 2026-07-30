@@ -405,45 +405,70 @@ class TestW1bCandidateGate:
             result["retry_feedback"]
         )
 
-    def test_batch_retries_one_rejected_candidate(
+    def test_batch_retries_with_full_structured_feedback(
         self, tmp_path, monkeypatch
     ):
         from seo_ops.services import legacy_workflow as lw
 
-        outcomes = iter([
+        topic = "retryable topic"
+        slug = lw._slugify(topic)
+        long_sentence = (
+            "A factual sentence that must reach the second attempt: "
+            + ("x" * 15000)
+            + " FULL_STRUCTURED_TAIL"
+        )
+        retry_feedback = json.dumps(
             {
-                "success": False,
-                "revised": False,
-                "retryable": True,
-                "candidate_rejected": True,
-                "error": "candidate failed",
+                "fail_count": 1,
+                "failed_checks": [{
+                    "item": "事实校验",
+                    "detail": "candidate still uncovered",
+                    "fact_issues": [{
+                        "reason": "uncovered_factual_sentence",
+                        "sentence": long_sentence,
+                        "sentence_sha": "sha-full-feedback",
+                    }],
+                }],
             },
-            {
+            ensure_ascii=False,
+        )
+        calls = 0
+
+        async def fake_revise(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {
+                    "success": False,
+                    "revised": False,
+                    "retryable": True,
+                    "candidate_rejected": True,
+                    "retry_feedback": retry_feedback,
+                    "error": "candidate failed",
+                }
+
+            state = lw.load_w2_state(tmp_path, slug)
+            memory = lw._recent_revision_memory(state, "w1b")
+            assert retry_feedback in memory
+            assert long_sentence in memory
+            assert "FULL_STRUCTURED_TAIL" in memory
+            return {
                 "success": True,
                 "revised": True,
                 "gate_passed": True,
-            },
-        ])
-        calls = []
-
-        async def fake_revise(*args, **kwargs):
-            calls.append(1)
-            return next(outcomes)
+            }
 
         monkeypatch.setattr(lw, "stage_w1b_revise", fake_revise)
-        monkeypatch.setattr(
-            lw, "_record_revision_attempt", lambda *args, **kwargs: None
-        )
 
         result = asyncio.run(
             lw.stage_w1b_revise_batch(
-                "retryable topic",
+                topic,
                 "Cluster Content",
                 tmp_path,
             )
         )
 
-        assert len(calls) == 2
+        assert calls == 2
         assert result["gate_passed"] is True
         assert result["batch_attempts"] == 2
 
