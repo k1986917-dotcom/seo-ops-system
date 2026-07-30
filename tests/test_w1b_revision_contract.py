@@ -256,6 +256,125 @@ class TestW1bRevisionContract:
         assert all("650 nm" not in sentence for sentence in sentences)
         assert all("FDA Class 2" not in sentence for sentence in sentences)
 
+
+    def test_candidate_normalizer_adds_only_missing_reader_visible_ctas(
+        self, tmp_path
+    ):
+        from data_sources.modules import write_pre_check
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = (
+            "---\n"
+            "SEO Keywords: ceiling laser pointer\n"
+            "---\n\n"
+            "# Guide\n\n"
+            "Explore the available options before deciding.\n\n"
+            "```text\nContact us inside code must not count.\n```\n"
+        )
+
+        normalized = lw._normalize_w1b_candidate(
+            draft,
+            "ceiling laser pointer",
+        )
+        candidate = tmp_path / "candidate-with-ctas.md"
+        candidate.write_text(normalized, encoding="utf-8")
+        _, _, _, prose, _ = write_pre_check.parse_draft(str(candidate))
+
+        assert len(
+            list(re.finditer(write_pre_check.CTA_INDICATORS, prose))
+        ) >= 2
+        assert normalized.count(
+            "## ceiling laser pointer: Next Steps"
+        ) == 1
+        assert lw._normalize_w1b_candidate(
+            normalized,
+            "ceiling laser pointer",
+        ) == normalized
+
+    def test_fact_extraction_skips_headings_but_keeps_bullets_and_prose(
+        self
+    ):
+        from data_sources.modules import write_pre_check
+
+        draft = (
+            "## IEC 60825 Compliance Overview\n\n"
+            "- IEC 60825 applies to this documented requirement.\n\n"
+            "The device uses a documented 532 nm wavelength."
+        )
+
+        facts = write_pre_check._extract_factual_sentences(draft)
+        sentences = [item["sentence"] for item in facts]
+
+        assert all("Compliance Overview" not in item for item in sentences)
+        assert any("IEC 60825 applies" in item for item in sentences)
+        assert any("532 nm wavelength" in item for item in sentences)
+
+    def test_focused_fact_gap_audit_rechecks_valid_omissions(
+        self, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = (
+            "The device uses a documented 532 nm wavelength.\n\n"
+            "The second documented option uses a 650 nm wavelength."
+        )
+        sentences = lw._extract_draft_sentences(draft)
+        calls = []
+
+        async def fake_batch(
+            batch_sentences,
+            evidence_cards,
+            *,
+            batch_label,
+            settings=None,
+            split_depth=0,
+        ):
+            calls.append([
+                sentence["sentence_id"]
+                for sentence in batch_sentences
+            ])
+            selected = batch_sentences[:1]
+            return [
+                {
+                    "sentence_id": sentence["sentence_id"],
+                    "claim_text": sentence["text"],
+                    "claim_type": "technical_specification",
+                    "evidence_ids": ["ev_001"],
+                }
+                for sentence in selected
+            ]
+
+        monkeypatch.setattr(
+            lw,
+            "_generate_claim_ledger_batch",
+            fake_batch,
+        )
+
+        canonical, requested, added = asyncio.run(
+            lw._supplement_claim_ledger_fact_gaps(
+                draft,
+                {"version": 1, "claims": []},
+                [
+                    {
+                        "reason": "uncovered_factual_sentence",
+                        "sentence": sentence["text"],
+                    }
+                    for sentence in sentences
+                ],
+                "ev_001 evidence card",
+            )
+        )
+
+        assert [len(batch) for batch in calls] == [2, 1]
+        assert requested == 2
+        assert added == 2
+        assert {
+            claim["sentence_id"] for claim in canonical["claims"]
+        } == {
+            sentence["sentence_id"]
+            for sentence in sentences
+        }
+
     def test_claim_ledger_uses_exact_revision_evidence_block(
         self, monkeypatch
     ):

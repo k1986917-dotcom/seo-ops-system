@@ -2754,11 +2754,11 @@ async def _supplement_claim_ledger_fact_gaps(
     *,
     settings=None,
 ) -> tuple[dict[str, Any], int, int]:
-    """Run one focused ledger audit for factual sentences omitted earlier.
+    """Run up to two focused audits for factual sentences omitted earlier.
 
-    The same sentence-ID validator and evidence-ID rules remain authoritative.
-    Unsupported sentences may still be omitted; they remain blocking and are
-    sent back to the body-revision loop rather than being auto-approved.
+    Each pass uses the same strict sentence-ID and evidence-ID validators.
+    Unsupported sentences may still be omitted and remain blocking. The
+    second pass only rechecks IDs omitted by the first valid JSON response.
     """
     sentence_table = {
         sentence["text"]: sentence
@@ -2790,13 +2790,6 @@ async def _supplement_claim_ledger_fact_gaps(
     if not missing_sentences:
         return claim_data, 0, 0
 
-    supplemental_claims = await _generate_claim_ledger_batch(
-        missing_sentences,
-        evidence_cards,
-        batch_label="fact-gap",
-        settings=settings,
-    )
-
     merged_claims = [
         claim
         for claim in claim_data.get("claims", [])
@@ -2810,25 +2803,52 @@ async def _supplement_claim_ledger_fact_gaps(
         )
         for claim in merged_claims
     }
-    added = 0
-    for claim in supplemental_claims:
-        key = (
-            claim.get("sentence_id"),
-            claim.get("claim_type"),
-            tuple(claim.get("evidence_ids") or []),
+    total_added = 0
+    remaining = missing_sentences
+
+    for pass_index in range(1, 3):
+        supplemental_claims = await _generate_claim_ledger_batch(
+            remaining,
+            evidence_cards,
+            batch_label=f"fact-gap-{pass_index}",
+            settings=settings,
         )
-        if key in seen_claims:
-            continue
-        seen_claims.add(key)
-        merged_claims.append(claim)
-        added += 1
+
+        added_this_pass = 0
+        newly_claimed_ids: set[str] = set()
+        for claim in supplemental_claims:
+            key = (
+                claim.get("sentence_id"),
+                claim.get("claim_type"),
+                tuple(claim.get("evidence_ids") or []),
+            )
+            if key in seen_claims:
+                continue
+            seen_claims.add(key)
+            merged_claims.append(claim)
+            added_this_pass += 1
+            total_added += 1
+            sentence_id = claim.get("sentence_id")
+            if isinstance(sentence_id, str):
+                newly_claimed_ids.add(sentence_id)
+
+        remaining = [
+            sentence for sentence in remaining
+            if sentence["sentence_id"] not in newly_claimed_ids
+        ]
+        if not remaining:
+            break
+        # A second pass is intentionally allowed even when the first valid
+        # response omitted every ID; malformed-output retries are separate.
+        if pass_index == 2:
+            break
 
     canonical_json = json.dumps(
         {"version": 1, "claims": merged_claims},
         ensure_ascii=False,
     )
     canonical = _validate_claim_ledger_json(canonical_json, draft_md)
-    return canonical, requested, added
+    return canonical, requested, total_added
 
 
 def _w1b_primary_keyword(draft: Path, topic: str) -> str:
@@ -2860,7 +2880,8 @@ def _fit_w1b_meta_description(value: str, primary_keyword: str) -> str:
     )
     filler_index = 0
     while len(text) < 150:
-        text += fillers[filler_index % len(fillers)]
+        filler = fillers[filler_index % len(fillers)].strip()
+        text = f"{text} {filler}".strip()
         filler_index += 1
     if len(text) <= 160:
         return text
@@ -3013,6 +3034,61 @@ def _ensure_w1b_keyword_h2s(
     return "\n".join(lines) + trailing_newline
 
 
+def _ensure_w1b_ctas(draft_md: str) -> str:
+    """Ensure two reader-visible, non-factual soft CTAs.
+
+    The checker counts CTA phrases only in prose. This helper mirrors that
+    exact input and appends only the missing number of generic next-step
+    prompts. It introduces no measurements, regulations, or product claims.
+    """
+    from data_sources.modules import write_pre_check
+
+    _, body = _split_frontmatter_text(draft_md)
+    prose = write_pre_check._flatten_markdown_for_checks(
+        write_pre_check._strip_non_prose_blocks(body)
+    )
+    current_count = len(
+        list(re.finditer(write_pre_check.CTA_INDICATORS, prose))
+    )
+    if current_count >= 2:
+        return draft_md
+
+    templates = (
+        (
+            "explore",
+            "Explore the available options and compare them with your "
+            "project requirements.",
+        ),
+        (
+            "contact us",
+            "Contact us for help choosing an approach that fits your "
+            "intended use.",
+        ),
+        (
+            "learn more",
+            "Learn more about the available approaches before making your "
+            "final selection.",
+        ),
+    )
+    prose_lower = prose.lower()
+    additions: list[str] = []
+    needed = 2 - current_count
+    for marker, sentence in templates:
+        if marker in prose_lower:
+            continue
+        additions.append(sentence)
+        if len(additions) >= needed:
+            break
+
+    if len(additions) < needed:
+        additions.extend(
+            sentence for _, sentence in templates[:needed - len(additions)]
+        )
+
+    suffix = "\n\n## Next Steps\n\n" + "\n\n".join(additions)
+    return draft_md.rstrip() + suffix + "\n"
+
+
 def _split_w1b_long_paragraphs(draft_md: str) -> str:
     """Split every checker-visible paragraph after each fourth sentence.
 
@@ -3081,6 +3157,10 @@ def _normalize_w1b_candidate(
     """Apply deterministic W1b mechanics before ledger generation/preflight."""
     normalized = _normalize_w1b_frontmatter(draft_md, primary_keyword)
     normalized = _ensure_w1b_keyword_early(normalized, primary_keyword)
+    # Add any missing CTA section before H2 normalization so a newly inserted
+    # ``## Next Steps`` heading is normalized in the same pass. Otherwise the
+    # second call would prefix the keyword and break idempotency.
+    normalized = _ensure_w1b_ctas(normalized)
     normalized = _ensure_w1b_keyword_h2s(normalized, primary_keyword)
     normalized = _split_w1b_long_paragraphs(normalized)
     return normalized.strip()

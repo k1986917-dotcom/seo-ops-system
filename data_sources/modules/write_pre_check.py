@@ -88,6 +88,22 @@ def _strip_non_prose_blocks(text: str) -> str:
     return _JSON_LD_SCRIPT_BLOCK_RE.sub('', without_code)
 
 
+def _strip_fact_audit_headings(text: str) -> str:
+    """Remove Markdown headings from factual-sentence extraction.
+
+    A heading is a navigation label, not a prose sentence. Reader-visible
+    factual assertions in paragraphs, bullets, and blockquotes remain audited.
+    Blank replacements preserve paragraph boundaries.
+    """
+    lines = []
+    for line in (text or '').splitlines():
+        if re.match(r'^\s{0,3}#{1,6}\s+', line):
+            lines.append('')
+        else:
+            lines.append(line)
+    return '\n'.join(lines)
+
+
 def _flatten_markdown_for_checks(text: str) -> str:
     """Flatten links and HTML tags while preserving reader-visible text."""
     flattened = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text or '')
@@ -455,6 +471,7 @@ def _extract_factual_sentences(draft_body: str) -> list[dict]:
     if not draft_body:
         return []
     audit_body = _strip_non_prose_blocks(_strip_frontmatter(draft_body))
+    audit_body = _strip_fact_audit_headings(audit_body)
     out: list[dict] = []
     for entry in seo_common.extract_draft_sentences(audit_body):
         text = entry["text"]
@@ -1020,7 +1037,7 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
     # 9. CTA count 2-3, first soft CTA OK in first 500 words only if purchase context.
     #    Hard product push in first 40% is forbidden (SKILL rule). Pre-check only
     #    counts total CTAs; the 40% rule is enforced by content_scorer.
-    ctas = [m for m in re.finditer(CTA_INDICATORS, clean)]
+    ctas = [m for m in re.finditer(CTA_INDICATORS, prose)]
     ok('CTA ≥2个', len(ctas) >= 2, f'{len(ctas)}个')
 
     # 10. No "click here"/"read more" anchor
