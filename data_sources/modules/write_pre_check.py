@@ -74,6 +74,25 @@ EEAT_PATTERNS = [
 CTA_INDICATORS = r'(?i)(?:browse|shop|buy now|get started|learn more|see our|check out|'
 CTA_INDICATORS += r'explore|try|contact us|request|get yours|view|find your)'
 
+_FENCED_CODE_BLOCK_RE = re.compile(r'```[\s\S]*?```')
+_JSON_LD_SCRIPT_BLOCK_RE = re.compile(
+    r"<script\b[^>]*\btype\s*=\s*([\"'])application/ld\+json\1[^>]*>"
+    r"[\s\S]*?</script\s*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_non_prose_blocks(text: str) -> str:
+    """Remove fenced code and JSON-LD before prose-only editorial checks."""
+    without_code = _FENCED_CODE_BLOCK_RE.sub('', text or '')
+    return _JSON_LD_SCRIPT_BLOCK_RE.sub('', without_code)
+
+
+def _flatten_markdown_for_checks(text: str) -> str:
+    """Flatten links and HTML tags while preserving reader-visible text."""
+    flattened = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text or '')
+    return re.sub(r'<\/?[a-zA-Z][^>]*>', '', flattened)
+
 
 def parse_draft(path: str) -> tuple[dict, str, str, str, str]:
     """Return (meta, body, clean, prose, raw).
@@ -95,13 +114,11 @@ def parse_draft(path: str) -> tuple[dict, str, str, str, str]:
                 if m:
                     meta[m.group(1).strip().lower()] = m.group(2).strip()
             body = parts[2]
-    # Clean markdown for checks
-    clean = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', body)  # links → text
-    clean = re.sub(r'<\/?[a-zA-Z][^>]*>', '', clean)            # html tags (letter-started only, not <number)
-    # prose: clean minus fenced code blocks minus JSON-LD script bodies
-    prose = re.sub(r'```[\s\S]*?```', '', clean)
-    prose = re.sub(r'<script[^>]*type="application/ld\+json"[^>]*>[\s\S]*?</script>',
-                   '', prose, flags=re.IGNORECASE)
+    # Keep ``clean`` backward-compatible for checks that intentionally inspect
+    # the complete Markdown body. Build ``prose`` from the unflattened body so
+    # JSON-LD tags still exist when the full script block is removed.
+    clean = _flatten_markdown_for_checks(body)
+    prose = _flatten_markdown_for_checks(_strip_non_prose_blocks(body))
     return meta, body, clean, prose, content
 
 
@@ -428,11 +445,18 @@ def _draft_sentence_table(draft_body: str) -> dict[str, dict[str, str]]:
 
 
 def _extract_factual_sentences(draft_body: str) -> list[dict]:
-    """Filter factual assertions from the shared sentence inventory."""
+    """Filter reader-visible factual assertions from the shared inventory.
+
+    Fenced examples and FAQPage JSON-LD are delivery metadata, not article
+    prose. They must not create paragraph failures or evidence obligations.
+    Sentence IDs for actual draft claims remain unchanged because the
+    authoritative full-draft sentence table is still used for ledger binding.
+    """
     if not draft_body:
         return []
+    audit_body = _strip_non_prose_blocks(_strip_frontmatter(draft_body))
     out: list[dict] = []
-    for entry in seo_common.extract_draft_sentences(draft_body):
+    for entry in seo_common.extract_draft_sentences(audit_body):
         text = entry["text"]
         if len(text) < 15:
             continue
@@ -938,7 +962,12 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
     wc_prose = word_count(prose)
     h1 = re.search(r'^# (.+)', body, re.MULTILINE)
     h2s = re.findall(r'^## (.+)', body, re.MULTILINE)
-    paragraphs = [p.strip() for p in re.split(r'\n\n+', clean) if len(p.split()) > 20]
+    # Paragraph style applies to reader-visible prose, not fenced examples or
+    # JSON-LD delivery metadata.
+    paragraphs = [
+        p.strip() for p in re.split(r'\n\n+', prose)
+        if len(p.split()) > 20
+    ]
     first_100 = words_before_n(clean, 100)
 
     def ok(msg, cond, detail=''):

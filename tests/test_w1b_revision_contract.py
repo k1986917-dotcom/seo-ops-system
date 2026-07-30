@@ -201,6 +201,61 @@ class TestW1bRevisionContract:
         assert canonical["claims"][0]["sentence_id"] == factual["sentence_id"]
         assert canonical["claims"][0]["claim_text"] == factual["text"]
 
+
+    def test_non_prose_blocks_do_not_create_paragraph_or_fact_failures(
+        self, tmp_path
+    ):
+        from data_sources.modules import write_pre_check
+
+        draft = (
+            "---\n"
+            "Title: Ceiling Laser Pointer Guide\n"
+            "SEO Title: Ceiling Laser Pointer Planning and Safety Guide 2026\n"
+            "SEO Description: "
+            + ("Practical ceiling laser pointer planning guidance for safer "
+               "selection, setup, alignment, and everyday project decisions. "
+               "Review the key considerations before use.")
+            + "\n"
+            "SEO Keywords: ceiling laser pointer, alignment guide\n"
+            "---\n\n"
+            "# Ceiling Laser Pointer Guide\n\n"
+            "A 532 nm wavelength is one documented option for this example. "
+            "The surrounding explanation gives readers practical context. "
+            "The third sentence remains ordinary reader-facing prose. "
+            "The fourth sentence keeps this paragraph within the limit.\n\n"
+            "```text\n"
+            "A coded example says the beam uses 650 nm. "
+            "It has five sentences. It should not count. "
+            "It remains metadata. It is not article prose.\n"
+            "```\n\n"
+            "<script type='application/ld+json'>\n"
+            '{"@context":"https://schema.org","@type":"FAQPage",'
+            '"text":"FDA Class 2 appears here. Sentence two. Sentence three. '
+            'Sentence four. Sentence five. Sentence six."}\n'
+            "</script>\n"
+        )
+        path = tmp_path / "non-prose-blocks.md"
+        path.write_text(draft, encoding="utf-8")
+
+        _, _, clean, prose, _ = write_pre_check.parse_draft(str(path))
+        assert "FAQPage" in clean
+        assert "650 nm" in clean
+        assert "FAQPage" not in prose
+        assert "650 nm" not in prose
+
+        result = write_pre_check.run(str(path), tier="Cluster Content")
+        paragraph_check = next(
+            check for check in result["checks"]
+            if check["item"].startswith("段落≤4句")
+        )
+        assert paragraph_check["pass"] is True
+
+        facts = write_pre_check._extract_factual_sentences(draft)
+        sentences = [item["sentence"] for item in facts]
+        assert any("532 nm" in sentence for sentence in sentences)
+        assert all("650 nm" not in sentence for sentence in sentences)
+        assert all("FDA Class 2" not in sentence for sentence in sentences)
+
     def test_claim_ledger_uses_exact_revision_evidence_block(
         self, monkeypatch
     ):
