@@ -2851,6 +2851,47 @@ async def _supplement_claim_ledger_fact_gaps(
     return canonical, requested, total_added
 
 
+def _remove_uncovered_fact_sentences(
+    draft_md: str,
+    fact_issues: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Conservatively remove exact factual sentences that remain uncovered.
+
+    This is the final fail-closed fallback after the body revision and focused
+    ledger audits have both run. Only exact ``uncovered_factual_sentence``
+    strings from the structured pre-check payload are removed. Frontmatter,
+    unrelated prose, headings, code fences, and JSON-LD remain untouched.
+    """
+    frontmatter, body = _split_frontmatter_text(draft_md)
+    removed = 0
+    seen: set[str] = set()
+
+    for issue in fact_issues:
+        if issue.get("reason") != "uncovered_factual_sentence":
+            continue
+        sentence = issue.get("sentence")
+        if not isinstance(sentence, str):
+            continue
+        sentence = sentence.strip()
+        if not sentence or sentence in seen:
+            continue
+        seen.add(sentence)
+        if sentence not in body:
+            continue
+        body = body.replace(sentence, "", 1)
+        removed += 1
+
+    if not removed:
+        return draft_md, 0
+
+    # Remove whitespace left by exact sentence deletion without rewriting any
+    # surviving prose or touching the frontmatter contract.
+    body = re.sub(r"[ \t]+\n", "\n", body)
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    cleaned = (frontmatter + body).strip()
+    return cleaned, removed
+
+
 def _w1b_primary_keyword(draft: Path, topic: str) -> str:
     """Return the exact keyword the deterministic W1b rules will enforce."""
     raw_keywords = _primary_keywords(draft)
@@ -3391,6 +3432,87 @@ Return the revised article Markdown only."""
         except ValueError as exc:
             fact_gap_audit_error = str(exc)
 
+    unsupported_fact_cleanup_requested = 0
+    unsupported_fact_cleanup_removed = 0
+    unsupported_fact_cleanup_error = None
+
+    remaining_fact_issues = _fact_issues_from_precheck(candidate_precheck)
+    failure_snapshot = _w1b_failure_payload(candidate_precheck)
+    failed_checks = failure_snapshot.get("failed_checks") or []
+    only_fact_failure = (
+        bool(remaining_fact_issues)
+        and len(failed_checks) == 1
+        and str(failed_checks[0].get("item") or "").startswith("事实校验")
+    )
+
+    if only_fact_failure:
+        unsupported_fact_cleanup_requested = len(remaining_fact_issues)
+        cleanup_candidate_md, unsupported_fact_cleanup_removed = (
+            _remove_uncovered_fact_sentences(
+                new_draft_md,
+                remaining_fact_issues,
+            )
+        )
+        if unsupported_fact_cleanup_removed:
+            cleanup_candidate_md = _normalize_w1b_candidate(
+                cleanup_candidate_md,
+                primary_keyword,
+            )
+            try:
+                cleanup_cl_data = await _generate_claim_ledger_for_draft(
+                    cleanup_candidate_md,
+                    contracts.get("cards") or {},
+                    settings=settings,
+                    evidence_cards_text=evidence_cards,
+                )
+                cleanup_sha256 = hashlib.sha256(
+                    cleanup_candidate_md.encode("utf-8")
+                ).hexdigest()
+                cleanup_cl_data["draft_sha256"] = cleanup_sha256
+                cleanup_precheck = _candidate_w1b_precheck(
+                    cleanup_candidate_md,
+                    cleanup_cl_data,
+                    resolved_tier,
+                    workspace,
+                    slug,
+                )
+
+                cleanup_fact_issues = _fact_issues_from_precheck(
+                    cleanup_precheck
+                )
+                if cleanup_fact_issues:
+                    (
+                        cleanup_cl_data,
+                        cleanup_requested,
+                        cleanup_added,
+                    ) = await _supplement_claim_ledger_fact_gaps(
+                        cleanup_candidate_md,
+                        cleanup_cl_data,
+                        cleanup_fact_issues,
+                        evidence_cards,
+                        settings=settings,
+                    )
+                    fact_gap_audit_requested += cleanup_requested
+                    fact_gap_claims_added += cleanup_added
+                    cleanup_cl_data["draft_sha256"] = cleanup_sha256
+                    if cleanup_added:
+                        cleanup_precheck = _candidate_w1b_precheck(
+                            cleanup_candidate_md,
+                            cleanup_cl_data,
+                            resolved_tier,
+                            workspace,
+                            slug,
+                        )
+
+                new_draft_md = cleanup_candidate_md
+                cl_data = cleanup_cl_data
+                candidate_draft_sha256 = cleanup_sha256
+                candidate_precheck = cleanup_precheck
+            except (ValueError, OSError) as exc:
+                unsupported_fact_cleanup_error = str(exc)
+            except Exception as exc:
+                unsupported_fact_cleanup_error = str(exc)
+
     candidate_fail_count = int(
         candidate_precheck.get("fail_count") or 0
     )
@@ -3417,6 +3539,15 @@ Return the revised article Markdown only."""
             "fact_gap_audit_requested": fact_gap_audit_requested,
             "fact_gap_claims_added": fact_gap_claims_added,
             "fact_gap_audit_error": fact_gap_audit_error,
+            "unsupported_fact_cleanup_requested": (
+                unsupported_fact_cleanup_requested
+            ),
+            "unsupported_fact_cleanup_removed": (
+                unsupported_fact_cleanup_removed
+            ),
+            "unsupported_fact_cleanup_error": (
+                unsupported_fact_cleanup_error
+            ),
             "error": (
                 f"候选稿预检仍有 {candidate_fail_count} 项未通过；"
                 "未写入正式 draft/ledger"
@@ -3486,6 +3617,15 @@ Return the revised article Markdown only."""
         "fact_gap_audit_requested": fact_gap_audit_requested,
         "fact_gap_claims_added": fact_gap_claims_added,
         "fact_gap_audit_error": fact_gap_audit_error,
+        "unsupported_fact_cleanup_requested": (
+            unsupported_fact_cleanup_requested
+        ),
+        "unsupported_fact_cleanup_removed": (
+            unsupported_fact_cleanup_removed
+        ),
+        "unsupported_fact_cleanup_error": (
+            unsupported_fact_cleanup_error
+        ),
     }
 
 

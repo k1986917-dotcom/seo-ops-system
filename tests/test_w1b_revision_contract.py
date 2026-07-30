@@ -375,6 +375,68 @@ class TestW1bRevisionContract:
             for sentence in sentences
         }
 
+
+    def test_remove_uncovered_fact_sentences_is_exact_and_conservative(
+        self
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = (
+            "---\n"
+            "SEO Keywords: ceiling laser pointer\n"
+            "---\n\n"
+            "# Guide\n\n"
+            "Keep this qualified recommendation.\n\n"
+            "The device uses a documented 532 nm wavelength.\n\n"
+            "- The second option uses a documented 650 nm wavelength.\n\n"
+            "Keep this closing advice.\n"
+        )
+        issues = [
+            {
+                "reason": "uncovered_factual_sentence",
+                "sentence": (
+                    "The device uses a documented 532 nm wavelength."
+                ),
+            },
+            {
+                "reason": "uncovered_factual_sentence",
+                "sentence": (
+                    "- The second option uses a documented 650 nm wavelength."
+                ),
+            },
+            {
+                "reason": "other_problem",
+                "sentence": "Keep this qualified recommendation.",
+            },
+        ]
+
+        cleaned, removed = lw._remove_uncovered_fact_sentences(
+            draft,
+            issues,
+        )
+
+        assert removed == 2
+        assert cleaned.startswith("---\nSEO Keywords:")
+        assert "532 nm wavelength" not in cleaned
+        assert "650 nm wavelength" not in cleaned
+        assert "Keep this qualified recommendation." in cleaned
+        assert "Keep this closing advice." in cleaned
+
+    def test_remove_uncovered_fact_sentences_no_match_is_noop(self):
+        from seo_ops.services import legacy_workflow as lw
+
+        draft = "# Guide\n\nQualified recommendation only.\n"
+        cleaned, removed = lw._remove_uncovered_fact_sentences(
+            draft,
+            [{
+                "reason": "uncovered_factual_sentence",
+                "sentence": "A sentence that is not present.",
+            }],
+        )
+
+        assert removed == 0
+        assert cleaned == draft
+
     def test_claim_ledger_uses_exact_revision_evidence_block(
         self, monkeypatch
     ):
