@@ -2938,17 +2938,85 @@ def _fit_w1b_meta_description(value: str, primary_keyword: str) -> str:
     return window
 
 
+def _fit_w1b_seo_title(value: str, primary_keyword: str) -> str:
+    """Fit an SEO title to 50-60 chars without cutting words or adding claims."""
+    text = re.sub(r"\s+", " ", (value or "")).strip().strip('"').strip("'")
+    if 50 <= len(text) <= 60:
+        return text
+    if len(text) < 50:
+        return text
+
+    stop_words = ("for", "the", "a", "an", "of", "in", "on", "to")
+    keyword_content_words = {
+        word.lower()
+        for word in re.findall(r"\b[a-zA-Z0-9]+\b", primary_keyword or "")
+        if word.lower() not in stop_words
+    }
+
+    def _without_stop_word(words: list[str], stop_word: str) -> list[str]:
+        for index, word in enumerate(words):
+            if word.lower() == stop_word:
+                candidate = words[:index] + words[index + 1 :]
+                candidate_text = " ".join(candidate).strip()
+                if len(candidate_text) >= 50:
+                    return candidate
+        return words
+
+    words = text.split(" ")
+    for stop_word in stop_words:
+        if len(" ".join(words)) <= 60:
+            break
+        words = _without_stop_word(words, stop_word)
+
+    result = " ".join(words).strip()
+
+    while len(result) > 60:
+        split_words = result.split(" ")
+        shortened = False
+        for index in range(len(split_words) - 1, -1, -1):
+            if split_words[index].lower() not in keyword_content_words:
+                candidate = " ".join(
+                    split_words[:index] + split_words[index + 1 :]
+                ).strip()
+                if len(candidate) >= 50:
+                    result = candidate
+                    shortened = True
+                    break
+        if not shortened:
+            if len(split_words) <= 2:
+                break
+            result = " ".join(split_words[:-1]).strip()
+        result = re.sub(r"\s+", " ", result).strip()
+        result = result.rstrip(":|-,").strip()
+
+    result = re.sub(r"\s+", " ", result).strip()
+    result = result.rstrip(":|-,").strip()
+    return result
+
+
 def _normalize_w1b_frontmatter(
     draft_md: str,
     primary_keyword: str,
 ) -> str:
-    """Normalize only the deterministic SEO Description field."""
+    """Normalize deterministic SEO Title and Description fields."""
     frontmatter, body = _split_frontmatter_text(draft_md)
     if not frontmatter:
         return draft_md
 
     inner = frontmatter[3:-3]
     lines = inner.strip("\n").splitlines()
+    title_index = next(
+        (
+            index for index, line in enumerate(lines)
+            if re.match(r"^\s*SEO Title\s*:", line, re.IGNORECASE)
+        ),
+        None,
+    )
+    if title_index is not None:
+        current_title = lines[title_index].split(":", 1)[1].strip()
+        fitted_title = _fit_w1b_seo_title(current_title, primary_keyword)
+        lines[title_index] = f"SEO Title: {fitted_title}"
+
     description_index = next(
         (
             index for index, line in enumerate(lines)
