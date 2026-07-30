@@ -3546,20 +3546,24 @@ Return the revised article Markdown only."""
     unsupported_fact_cleanup_error = None
 
     remaining_fact_issues = _fact_issues_from_precheck(candidate_precheck)
-    failure_snapshot = _w1b_failure_payload(candidate_precheck)
-    failed_checks = failure_snapshot.get("failed_checks") or []
-    only_fact_failure = (
-        bool(remaining_fact_issues)
-        and len(failed_checks) == 1
-        and str(failed_checks[0].get("item") or "").startswith("事实校验")
-    )
+    removable_fact_issues = [
+        issue
+        for issue in remaining_fact_issues
+        if issue.get("reason") == "uncovered_factual_sentence"
+    ]
 
-    if only_fact_failure:
-        unsupported_fact_cleanup_requested = len(remaining_fact_issues)
+    # Exact uncovered factual sentences are safe to remove even when another
+    # deterministic check (for example the tier word floor) also fails. Keeping
+    # them until "事实校验" is the only failure traps the next batch attempt:
+    # the retry must both rediscover the same unsupported claims and expand the
+    # article. Clean the exact structured gaps first, then carry the cleaned
+    # candidate and its remaining failures into the next bounded attempt.
+    if removable_fact_issues:
+        unsupported_fact_cleanup_requested = len(removable_fact_issues)
         cleanup_candidate_md, unsupported_fact_cleanup_removed = (
             _remove_uncovered_fact_sentences(
                 new_draft_md,
-                remaining_fact_issues,
+                removable_fact_issues,
             )
         )
         if unsupported_fact_cleanup_removed:
