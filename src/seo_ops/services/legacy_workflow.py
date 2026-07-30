@@ -306,7 +306,9 @@ def _record_revision_attempt(
     history = state.get("revision_history")
     if not isinstance(history, list):
         history = []
-    error = str(result.get("error") or "")[:1000]
+    error = str(
+        result.get("retry_feedback") or result.get("error") or ""
+    )[:12000]
     history.append({
         "at": datetime.now(UTC).isoformat(),
         "phase": phase,
@@ -325,13 +327,19 @@ def _recent_revision_memory(state: dict[str, Any], phase: str) -> str:
     if not isinstance(history, list):
         return ""
     notes = [
-        str(item.get("error") or "")[:500]
+        str(item.get("error") or "")[:10000]
         for item in history
-        if isinstance(item, dict) and item.get("phase") == phase and not item.get("passed")
+        if isinstance(item, dict)
+        and item.get("phase") == phase
+        and not item.get("passed")
     ]
     if not notes:
         return ""
-    return "\n".join(f"- Earlier failed attempt: {note}" for note in notes[-3:] if note)
+    return "\n".join(
+        f"- Earlier failed attempt: {note}"
+        for note in notes[-1:]
+        if note
+    )
 
 
 # ── Stage Detection ────────────────────────────────────────────────────
@@ -2534,6 +2542,85 @@ def _primary_keywords(draft: Path) -> str:
     return m.group(1).strip() if m else ""
 
 
+def _w1b_precheck_data(
+    draft: Path,
+    tier: str,
+    workspace: Path,
+    slug: str,
+    *,
+    claim_path: Path | None = None,
+) -> dict[str, Any]:
+    """Run deterministic W1b and return the complete structured result."""
+    from data_sources.modules import write_pre_check
+
+    mp = _latest_file(f"material-packs/{slug}-*.md", workspace)
+    ev_path = workspace / "research" / f"evidence-ledger-{slug}.json"
+    cl_path = claim_path or (
+        workspace / "research" / f"claim-ledger-{slug}.json"
+    )
+    return write_pre_check.run(
+        str(draft),
+        tier=tier,
+        keywords=_primary_keywords(draft),
+        pack=str(mp) if mp else "",
+        evidence_ledger=str(ev_path),
+        claim_ledger=str(cl_path),
+        material_pack=str(mp) if mp else "",
+    )
+
+
+def _w1b_failure_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Retain exact failed checks and structured sentence/entity data."""
+    failed: list[dict[str, Any]] = []
+    for check in result.get("checks", []):
+        if not isinstance(check, dict) or check.get("pass"):
+            continue
+        item: dict[str, Any] = {
+            "item": str(check.get("item") or "unnamed"),
+            "detail": str(check.get("detail") or ""),
+        }
+        for key in ("fact_issues", "missing_entities"):
+            value = check.get(key)
+            if isinstance(value, list):
+                item[key] = value
+        failed.append(item)
+    return {
+        "fail_count": int(result.get("fail_count") or len(failed)),
+        "failed_checks": failed,
+    }
+
+
+def _candidate_w1b_precheck(
+    draft_md: str,
+    claim_data: dict[str, Any],
+    tier: str,
+    workspace: Path,
+    slug: str,
+) -> dict[str, Any]:
+    """Validate a candidate draft/ledger pair before live files change."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(
+        prefix="w1b-candidate-",
+        dir=str(_reports_dir(workspace)),
+    ) as temp_dir:
+        temp_root = Path(temp_dir)
+        temp_draft = temp_root / "candidate.md"
+        temp_claim = temp_root / "claim-ledger.json"
+        temp_draft.write_text(draft_md, encoding="utf-8")
+        temp_claim.write_text(
+            json.dumps(claim_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return _w1b_precheck_data(
+            temp_draft,
+            tier,
+            workspace,
+            slug,
+            claim_path=temp_claim,
+        )
+
+
 def _w1b_repair_contract(draft: Path, topic: str) -> str:
     """Build the exact mechanical/evidence contract for a W1b repair."""
     raw_keywords = _primary_keywords(draft)
@@ -2590,6 +2677,20 @@ async def stage_w1b_revise(
         return {"success": False, "error": "没有预检报告，请先运行 W1b"}
 
     resolved_tier = resolve_tier(topic, workspace, tier)
+    try:
+        current_precheck = _w1b_precheck_data(
+            draft, resolved_tier, workspace, slug
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"无法读取当前结构化 W1b 失败项: {exc}",
+        }
+    structured_failures = json.dumps(
+        _w1b_failure_payload(current_precheck),
+        ensure_ascii=False,
+        indent=2,
+    )
     retry_memory = _recent_revision_memory(state, "w1b")
     retry_section = (
         f"\n## Earlier failed attempts (do not repeat these mistakes)\n{retry_memory}\n"
@@ -2610,7 +2711,10 @@ invent facts, numbers, quotes, or URLs.
 ## Hard repair contract (all items are mandatory)
 {repair_contract}
 
-## Pre-check report (what failed)
+## Exact structured failures (fix every listed item and sentence)
+{structured_failures}
+
+## Pre-check report (human-readable context)
 {precheck_report[:_W1B_REPAIR_REPORT_CHAR_LIMIT]}
 {retry_section}
 
@@ -2654,7 +2758,50 @@ Return the revised article Markdown only."""
     except Exception as exc:
         return {"success": False, "error": f"修订 CLAIM_LEDGER 生成失败: {exc}"}
 
-    cl_data["draft_sha256"] = hashlib.sha256(new_draft_md.encode("utf-8")).hexdigest()
+    cl_data["draft_sha256"] = hashlib.sha256(
+        new_draft_md.encode("utf-8")
+    ).hexdigest()
+
+    try:
+        candidate_precheck = _candidate_w1b_precheck(
+            new_draft_md,
+            cl_data,
+            resolved_tier,
+            workspace,
+            slug,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "revised": False,
+            "retryable": False,
+            "error": f"候选稿 W1b 预检执行失败: {exc}",
+        }
+    candidate_fail_count = int(
+        candidate_precheck.get("fail_count") or 0
+    )
+    if candidate_fail_count:
+        failure_payload = _w1b_failure_payload(candidate_precheck)
+        retry_feedback = json.dumps(
+            failure_payload,
+            ensure_ascii=False,
+            indent=2,
+        )
+        return {
+            "success": False,
+            "stage": "w1b_pre_check",
+            "gate_passed": False,
+            "revised": False,
+            "retryable": True,
+            "candidate_rejected": True,
+            "candidate_fail_count": candidate_fail_count,
+            "candidate_checks": failure_payload["failed_checks"],
+            "retry_feedback": retry_feedback,
+            "error": (
+                f"候选稿预检仍有 {candidate_fail_count} 项未通过；"
+                "未写入正式 draft/ledger"
+            ),
+        }
 
     # Back up the matched draft + claim ledger as a pair. A draft-only
     # backup cannot be safely restored because sentence IDs are draft-bound.
@@ -2727,9 +2874,9 @@ async def stage_w1b_revise_batch(
         attempts.append(outcome)
         if outcome.get("gate_passed"):
             return {**outcome, "batch_attempts": len(attempts), "batch_completed": True}
-        # A failure before a draft revision cannot improve by simply repeating
-        # the identical request in the same click.
-        if not outcome.get("revised"):
+        # A rejected candidate carries exact structured feedback and may
+        # improve on the second attempt. Non-retryable failures still stop.
+        if not outcome.get("revised") and not outcome.get("retryable"):
             break
     final = attempts[-1] if attempts else {"success": False, "error": "未执行修订"}
     return {**final, "batch_attempts": len(attempts), "batch_completed": True}

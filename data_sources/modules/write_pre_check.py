@@ -607,6 +607,7 @@ def _run_fact_check(
 
     # 5. Build evidence index and check for ID collisions.
     blocking_items: list[str] = []
+    fact_issues: list[dict[str, str]] = []
     ev_map: dict[str, dict] = {}
     seen_ids: set[str] = set()
     for idx, ev in enumerate(evidence_list):
@@ -901,6 +902,11 @@ def _run_fact_check(
     for cand in extracted:
         norm = _normalize(cand["sentence"])
         if norm and norm not in claimed_texts:
+            fact_issues.append({
+                "reason": "uncovered_factual_sentence",
+                "sentence": cand["sentence"],
+                "sentence_sha": cand["sentence_sha"],
+            })
             blocking_items.append(
                 f"  • [blocking] 文章含事实句但 ledger 未覆盖: "
                 f"'{cand['sentence'][:80]}'"
@@ -914,6 +920,8 @@ def _run_fact_check(
         detail_text = "\n".join(blocking_items)
         grade_detail("fail", "事实校验",
                      f"{len(blocking_items)} 个事实校验问题:\n{detail_text}")
+    if fact_issues:
+        results[-1]["fact_issues"] = fact_issues
 
 
 def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
@@ -928,11 +936,8 @@ def run(draft: str, tier: str = '', keywords: str = '', pack: str = '',
     primary = kws[0] if kws else meta.get('title', '').lower()
     wc = word_count(clean)
     wc_prose = word_count(prose)
-    sc = sentence_count(clean)
     h1 = re.search(r'^# (.+)', body, re.MULTILINE)
     h2s = re.findall(r'^## (.+)', body, re.MULTILINE)
-    h3s = re.findall(r'^### (.+)', body, re.MULTILINE)
-    h4s = re.findall(r'^#### (.+)', body, re.MULTILINE)
     paragraphs = [p.strip() for p in re.split(r'\n\n+', clean) if len(p.split()) > 20]
     first_100 = words_before_n(clean, 100)
 

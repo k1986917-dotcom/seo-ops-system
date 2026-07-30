@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 
 
@@ -145,6 +146,25 @@ class TestW1bRevisionContract:
             captured["evidence_cards_text"] = evidence_cards_text
             return {"version": 1, "claims": []}
 
+        def fake_precheck_data(
+            draft,
+            tier,
+            workspace,
+            slug,
+            *,
+            claim_path=None,
+        ):
+            if claim_path is None:
+                return {
+                    "fail_count": 1,
+                    "checks": [{
+                        "item": "current failure",
+                        "pass": False,
+                        "detail": "repair this",
+                    }],
+                }
+            return {"fail_count": 0, "checks": []}
+
         async def fake_precheck(topic, tier, workspace):
             return {
                 "success": True,
@@ -154,6 +174,7 @@ class TestW1bRevisionContract:
 
         monkeypatch.setattr(lw, "_run_ai_text", fake_body_ai)
         monkeypatch.setattr(lw, "_generate_claim_ledger_for_draft", fake_ledger)
+        monkeypatch.setattr(lw, "_w1b_precheck_data", fake_precheck_data)
         monkeypatch.setattr(lw, "stage_w1b_pre_check", fake_precheck)
 
         result = asyncio.run(
@@ -241,3 +262,249 @@ class TestCanonicalDraftSelection:
         os.utime(newer, ns=(new_ns, new_ns))
 
         assert lw._latest_draft(workspace, slug) == newer
+
+
+class TestW1bCandidateGate:
+    def _workspace(self, tmp_path, topic):
+        from seo_ops.services import legacy_workflow as lw
+
+        slug = lw._slugify(topic)
+        workspace = tmp_path / "ws"
+        for name in (
+            "drafts",
+            "research",
+            "reports",
+            "context",
+            "material-packs",
+        ):
+            (workspace / name).mkdir(parents=True, exist_ok=True)
+        draft_text = (
+            "---\n"
+            "SEO Keywords: candidate gate keyword\n"
+            "---\n\n"
+            "# Existing article\n\nExisting analysis.\n"
+        )
+        draft = workspace / "drafts" / f"{slug}-2026-07-30.md"
+        draft.write_text(draft_text, encoding="utf-8")
+        claim = workspace / "research" / f"claim-ledger-{slug}.json"
+        claim.write_text(
+            json.dumps({
+                "version": 1,
+                "claims": [],
+                "draft_sha256": hashlib.sha256(
+                    draft_text.encode("utf-8")
+                ).hexdigest(),
+            }),
+            encoding="utf-8",
+        )
+        lw.save_report(workspace, "pre-check", slug, "# failed")
+        lw.save_w2_state(
+            workspace,
+            slug,
+            {"w1b_rounds": 0, "gate_passed": False},
+        )
+        return lw, workspace, slug, draft, claim
+
+    def test_rejected_candidate_never_replaces_live_pair(
+        self, tmp_path, monkeypatch
+    ):
+        topic = "candidate rejection"
+        lw, workspace, slug, draft, claim = self._workspace(
+            tmp_path, topic
+        )
+        old_draft = draft.read_bytes()
+        old_claim = claim.read_bytes()
+
+        monkeypatch.setattr(
+            lw,
+            "resolve_tier",
+            lambda *args, **kwargs: "Cluster Content",
+        )
+        monkeypatch.setattr(
+            lw,
+            "_revision_context_contracts",
+            lambda *args, **kwargs: (
+                {"brief": {}, "coverage": {}, "cards": {}},
+                "ev_001: support | https://example.com",
+            ),
+        )
+
+        async def fake_ai(*args, **kwargs):
+            return (
+                "---\nSEO Keywords: candidate gate keyword\n---\n\n"
+                "# Candidate\n\nA 5mW laser is a factual sentence.\n"
+            )
+
+        async def fake_ledger(*args, **kwargs):
+            return {"version": 1, "claims": []}
+
+        def fake_precheck_data(
+            draft_path,
+            tier,
+            workspace,
+            slug,
+            *,
+            claim_path=None,
+        ):
+            if claim_path is None:
+                return {
+                    "fail_count": 1,
+                    "checks": [{
+                        "item": "事实校验",
+                        "pass": False,
+                        "detail": "old failure",
+                        "fact_issues": [{
+                            "reason": "uncovered_factual_sentence",
+                            "sentence": "Old factual sentence.",
+                            "sentence_sha": "old",
+                        }],
+                    }],
+                }
+            return {
+                "fail_count": 1,
+                "checks": [{
+                    "item": "事实校验",
+                    "pass": False,
+                    "detail": "candidate still uncovered",
+                    "fact_issues": [{
+                        "reason": "uncovered_factual_sentence",
+                        "sentence": "A 5mW laser is a factual sentence.",
+                        "sentence_sha": "new",
+                    }],
+                }],
+            }
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(
+            lw, "_generate_claim_ledger_for_draft", fake_ledger
+        )
+        monkeypatch.setattr(
+            lw, "_w1b_precheck_data", fake_precheck_data
+        )
+
+        result = asyncio.run(
+            lw.stage_w1b_revise(
+                topic,
+                "Cluster Content",
+                workspace,
+            )
+        )
+
+        assert result["candidate_rejected"] is True
+        assert result["retryable"] is True
+        assert result["candidate_fail_count"] == 1
+        assert draft.read_bytes() == old_draft
+        assert claim.read_bytes() == old_claim
+        assert not list((workspace / "drafts").glob("*.precheck-rev*.md"))
+        assert not list(
+            (workspace / "research").glob(
+                "claim-ledger-*.precheck-rev*.json"
+            )
+        )
+        assert "A 5mW laser is a factual sentence." in (
+            result["retry_feedback"]
+        )
+
+    def test_batch_retries_one_rejected_candidate(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        outcomes = iter([
+            {
+                "success": False,
+                "revised": False,
+                "retryable": True,
+                "candidate_rejected": True,
+                "error": "candidate failed",
+            },
+            {
+                "success": True,
+                "revised": True,
+                "gate_passed": True,
+            },
+        ])
+        calls = []
+
+        async def fake_revise(*args, **kwargs):
+            calls.append(1)
+            return next(outcomes)
+
+        monkeypatch.setattr(lw, "stage_w1b_revise", fake_revise)
+        monkeypatch.setattr(
+            lw, "_record_revision_attempt", lambda *args, **kwargs: None
+        )
+
+        result = asyncio.run(
+            lw.stage_w1b_revise_batch(
+                "retryable topic",
+                "Cluster Content",
+                tmp_path,
+            )
+        )
+
+        assert len(calls) == 2
+        assert result["gate_passed"] is True
+        assert result["batch_attempts"] == 2
+
+    def test_fact_check_exposes_full_uncovered_sentence(
+        self, tmp_path
+    ):
+        from data_sources.modules.write_pre_check import _run_fact_check
+
+        sentence = (
+            "A 5mW green laser operating at 532nm can produce a visible "
+            "beam, and this deliberately long factual sentence must remain "
+            "complete in the structured repair payload."
+        )
+        draft = tmp_path / "draft.md"
+        draft.write_text(sentence, encoding="utf-8")
+        material = tmp_path / "material.md"
+        material.write_text("material", encoding="utf-8")
+        evidence = tmp_path / "evidence.json"
+        evidence.write_text(
+            json.dumps({
+                "version": 1,
+                "material_pack_sha256": hashlib.sha256(
+                    b"material"
+                ).hexdigest(),
+                "evidence": [],
+            }),
+            encoding="utf-8",
+        )
+        claim = tmp_path / "claim.json"
+        claim.write_text(
+            json.dumps({
+                "version": 1,
+                "claims": [],
+                "draft_sha256": hashlib.sha256(
+                    sentence.encode("utf-8")
+                ).hexdigest(),
+            }),
+            encoding="utf-8",
+        )
+
+        results = []
+
+        def grade(level, item, detail):
+            results.append({
+                "level": level,
+                "item": item,
+                "detail": detail,
+                "pass": level != "fail",
+            })
+
+        _run_fact_check(
+            results,
+            grade,
+            str(evidence),
+            str(claim),
+            str(material),
+            str(draft),
+        )
+
+        fact = next(
+            item for item in results if item["item"] == "事实校验"
+        )
+        assert fact["fact_issues"][0]["sentence"] == sentence
+        assert len(fact["fact_issues"][0]["sentence"]) > 80

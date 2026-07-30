@@ -4179,6 +4179,30 @@ class TestSentenceIdEntryPoints:
                 })
             raise AssertionError(purpose)
 
+        def fake_precheck_data(
+            draft_path,
+            tier,
+            workspace,
+            checked_slug,
+            *,
+            claim_path=None,
+        ):
+            # This test isolates the sentence_id pipeline. The full candidate
+            # gate is covered separately by TestW1bCandidateGate.
+            assert checked_slug == slug
+            assert Path(draft_path).exists()
+            if claim_path is not None:
+                assert Path(claim_path).exists()
+            return {
+                "fail_count": 0,
+                "checks": [{
+                    "item": "sentence_id fixture",
+                    "pass": True,
+                    "level": "ok",
+                    "detail": "candidate accepted by isolated fixture",
+                }],
+            }
+
         async def fake_run(self, script, args):
             return (json.dumps({
                 "word_count": 500, "warn_count": 0,
@@ -4186,6 +4210,7 @@ class TestSentenceIdEntryPoints:
             }), "", 0)
 
         monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw, "_w1b_precheck_data", fake_precheck_data)
         monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
 
         result = asyncio.run(lw.stage_w1b_revise("sid w1b topic", "", ws))
