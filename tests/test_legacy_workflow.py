@@ -1377,6 +1377,39 @@ class TestRevisionLoop:
         assert "预检仍有 1 项" in result["error"]
         assert scripts == ["write_pre_check.py"]
 
+    def test_post_process_flags_link_review_at_cap(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        self._prepare(tmp_path)
+        draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
+        lw.save_w2_state(
+            tmp_path,
+            "test-topic",
+            _state_for(draft, rounds=lw.MAX_REVISION_ROUNDS),
+        )
+
+        async def fake_run(self, script, args):
+            return (
+                "## 质量评分\n- 总分: 88.0 → ✅ 通过\n\n"
+                "## 🚦 总门控\n"
+                "- ❌ **不可进入段3**：链接检查有 3 项错误。",
+                "",
+                1,
+            )
+
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+        result = asyncio.run(
+            lw.stage_w2_post_process("test topic", tmp_path)
+        )
+
+        assert result["gate_passed"] is False
+        assert result["link_block"] is True
+        assert result["needs_link_review"] is True
+        assert result["needs_human_review"] is False
+        assert result["needs_force_confirmation"] is False
+
     def test_post_process_flags_human_review_at_cap(self, tmp_path, monkeypatch):
         from seo_ops.services import legacy_workflow as lw
         self._prepare(tmp_path)
@@ -1524,7 +1557,21 @@ class TestPostProcessFileSafety:
         assert instance.load_published("testsite") == 1
         assert "article" in instance.documents
 
-    def test_check_only_does_not_change_draft(self, tmp_path, monkeypatch):
+    def test_link_block_is_parsed_for_w2_diagnostics(self):
+        from seo_ops.services.legacy_workflow import _parse_post_process
+
+        metrics = _parse_post_process(
+            "## 🚦 总门控\n"
+            "- ❌ **不可进入段3**：链接检查有 3 项错误。"
+        )
+
+        assert metrics["link_block"] is True
+        assert metrics["score_block"] is False
+        assert metrics["cannibal_block"] is False
+
+    def test_check_only_link_failures_do_not_change_draft(
+        self, tmp_path, monkeypatch
+    ):
         from data_sources.modules import write_collector as wc
 
         _, draft = self._prepare(tmp_path)
@@ -1537,9 +1584,15 @@ class TestPostProcessFileSafety:
             lambda *args, **kwargs: {"max_sim": 0.1, "top": []},
         )
 
-        _, passed = wc.post_process("testsite", str(draft), apply=False)
+        report, passed = wc.post_process(
+            "testsite", str(draft), apply=False
+        )
 
-        assert passed is True
+        assert passed is False
+        assert "**不可进入段3**：链接检查有" in report
+        assert "too_few_blog_links" in report
+        assert "too_few_product_links" in report
+        assert "too_few_external_links" in report
         assert draft.read_bytes() == original
         assert not list(draft.parent.glob(".*-post-process-*.md"))
 

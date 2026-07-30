@@ -521,7 +521,7 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
         link_issues.append({'type': 'too_many_blog_links', 'current': blog_count,
                             'max': blog_ceil, 'severity': 'error',
                             'msg': f'{body_wc}词 → 博客内链上限{blog_ceil}'})
-    if blog_count > 0 and blog_count < blog_floor:
+    if blog_count < blog_floor:
         link_issues.append({'type': 'too_few_blog_links', 'current': blog_count,
                             'min': blog_floor, 'severity': 'error',
                             'msg': f'{body_wc}词 → 博客内链下限{blog_floor}'})
@@ -529,7 +529,7 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
         link_issues.append({'type': 'too_many_product_links', 'current': product_count,
                             'max': prod_ceil, 'severity': 'error',
                             'msg': f'{body_wc}词 → 产品内链上限{prod_ceil}'})
-    if product_count > 0 and product_count < prod_floor:
+    if product_count < prod_floor:
         link_issues.append({'type': 'too_few_product_links', 'current': product_count,
                             'min': prod_floor, 'severity': 'error',
                             'msg': f'{body_wc}词 → 产品内链下限{prod_floor}'})
@@ -709,16 +709,31 @@ def post_process(website: str, draft_path: str, pack_path: Optional[str] = None,
         lines.append('- ⚠️ 评分失败，请手动检查')
     lines.append('')
 
-    # Overall gate verdict (score + cannibalization both must pass)
+    # Overall gate verdict: score, cannibalization, and every error-level
+    # link check must pass. Warning-only placement advice remains non-blocking.
     lines.append('## 🚦 总门控')
     score_ok = (score is not None and score >= seo_config.PASS_SCORE)
-    gate_passed = score_ok and not cannibal_error and (not cannibal_block or force)
+    blocking_link_issues = [
+        issue for issue in link_issues
+        if issue.get('severity') == 'error'
+    ]
+    gate_passed = (
+        score_ok
+        and not cannibal_error
+        and (not cannibal_block or force)
+        and not blocking_link_issues
+    )
     if cannibal_error:
         lines.append('- ❌ **不可进入段3**：蚕食检查运行失败，必须修复检查器并重跑。')
     elif cannibal_block and not force:
         lines.append(f'- ❌ **不可进入段3**：蚕食 ≥{seo_config.CANNIBAL_THRESHOLD_HIGH}。修正正文差异化后重跑段2。')
     elif not score_ok:
         lines.append(f'- ❌ **不可进入段3**：评分 <{seo_config.PASS_SCORE}。')
+    elif blocking_link_issues:
+        lines.append(
+            f'- ❌ **不可进入段3**：链接检查有 '
+            f'{len(blocking_link_issues)} 项错误。'
+        )
     else:
         lines.append('- ✅ 通过，可进入段3 register。')
     lines.append('')

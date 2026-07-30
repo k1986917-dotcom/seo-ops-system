@@ -3732,6 +3732,7 @@ def _parse_post_process(report: str) -> dict[str, Any]:
             "**不可进入段3**：蚕食" in report and not cannibal_error
         ),
         "score_block": "**不可进入段3**：评分" in report,
+        "link_block": "**不可进入段3**：链接" in report,
         "cannibal_error": cannibal_error,
         "score_error": score_error,
         "fix_items": fix_items,
@@ -3806,6 +3807,7 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
     state["cannibal"] = metrics["cannibal"]
     state["cannibal_block"] = metrics["cannibal_block"]
     state["score_block"] = metrics["score_block"]
+    state["link_block"] = metrics["link_block"]
     state["cannibal_error"] = metrics["cannibal_error"]
     state["score_error"] = metrics["score_error"]
     if not gate_passed:
@@ -3833,10 +3835,12 @@ async def stage_w2_post_process(topic: str, workspace: Path, *,
     }
 
     if not gate_passed and _revision_rounds(state, "w2") >= MAX_REVISION_ROUNDS:
-        # write/SKILL.md 段2: after 2 rounds — link problems do not block
-        # publishing, but a score below the pass line stops the pipeline.
+        # After one bounded repair batch, surface the exact unresolved gate.
+        # Error-level link failures remain fail-closed; another explicit repair
+        # batch is allowed, but W3 never receives an implicit link waiver.
         result["needs_human_review"] = metrics["score_block"]
         result["needs_force_confirmation"] = metrics["cannibal_block"]
+        result["needs_link_review"] = metrics["link_block"]
     if metrics["cannibal_error"]:
         result["error"] = "蚕食检查器运行失败；系统已停止，不能把失败当作安全"
     elif metrics["score_error"]:

@@ -774,6 +774,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return "本批 2 轮修订后评分仍未达标 → 已暂停；可再试一批 AI 修订或从 R0 重来，不能进入注册"
         if result.get("needs_force_confirmation"):
             return "本批 2 轮修订后蚕食仍超阈值 → 可再试一批，或在评分正常时确认角度不同并跳过蚕食门控"
+        if result.get("needs_link_review"):
+            return "本批 2 轮修订后链接错误仍未解决 → 已暂停；可再试一批 AI 修订或从 R0 重来，不能进入注册"
         return "后处理未通过，可启动一批最多 2 轮的 AI 修订，或从 R0 重新开始"
 
     @app.post("/actions/{action_id}/legacy/stage/w2-revise")
