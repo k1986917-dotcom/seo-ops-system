@@ -3113,7 +3113,14 @@ Before returning, silently verify every item above."""
 
 
 async def stage_w1b_revise(
-    topic: str, tier: str, workspace: Path, settings=None
+    topic: str,
+    tier: str,
+    workspace: Path,
+    settings=None,
+    *,
+    candidate_seed_md: str | None = None,
+    candidate_seed_feedback: str | None = None,
+    carry_candidate: bool = False,
 ) -> dict:
     """AI revises a draft that failed W1b, then re-runs W1b.
 
@@ -3138,29 +3145,45 @@ async def stage_w1b_revise(
         return {"success": False, "error": "没有预检报告，请先运行 W1b"}
 
     resolved_tier = resolve_tier(topic, workspace, tier)
-    try:
-        current_precheck = _w1b_precheck_data(
-            draft, resolved_tier, workspace, slug
-        )
-    except Exception as exc:
-        return {
-            "success": False,
-            "error": f"无法读取当前结构化 W1b 失败项: {exc}",
-        }
-    structured_failures = json.dumps(
-        _w1b_failure_payload(current_precheck),
-        ensure_ascii=False,
-        indent=2,
+    has_candidate_seed = (
+        isinstance(candidate_seed_md, str)
+        and bool(candidate_seed_md.strip())
     )
+    source_draft_md = (
+        candidate_seed_md if has_candidate_seed else _read_text(draft)
+    )
+    seed_feedback = (
+        candidate_seed_feedback.strip()
+        if isinstance(candidate_seed_feedback, str)
+        else ""
+    )
+    if seed_feedback:
+        structured_failures = seed_feedback
+    else:
+        try:
+            current_precheck = _w1b_precheck_data(
+                draft, resolved_tier, workspace, slug
+            )
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": f"无法读取当前结构化 W1b 失败项: {exc}",
+            }
+        structured_failures = json.dumps(
+            _w1b_failure_payload(current_precheck),
+            ensure_ascii=False,
+            indent=2,
+        )
     retry_memory = _recent_revision_memory(state, "w1b")
     retry_section = (
         f"\n## Earlier failed attempts (do not repeat these mistakes)\n{retry_memory}\n"
         if retry_memory else "\n"
     )
 
+    active_precheck_context = seed_feedback or precheck_report
     contracts, evidence_cards = _revision_context_contracts(
         workspace, slug, topic,
-        relevant_text=f"{precheck_report}\n{retry_memory}",
+        relevant_text=f"{active_precheck_context}\n{retry_memory}",
     )
     repair_contract = _w1b_repair_contract(draft, topic)
     user_prompt = f"""Revise the article for: "{topic}"
@@ -3180,15 +3203,20 @@ for every structured `fact_issues` sentence: either remove or qualify an
 unsupported factual assertion, or preserve it only when an evidence card
 directly supports it. Do not leave a listed factual gap unchanged.
 
+If a failed check says the reader-visible prose is below the tier minimum,
+expand useful analysis, selection guidance, or a practical checklist by at
+least 100 words beyond the listed deficit. Do not pad with repeated wording,
+new measurements, new regulations, new product claims, or invented experience.
+
 ## Exact structured failures (fix every listed item and sentence)
 {structured_failures}
 
 ## Pre-check report (human-readable context)
-{precheck_report[:_W1B_REPAIR_REPORT_CHAR_LIMIT]}
+{active_precheck_context[:_W1B_REPAIR_REPORT_CHAR_LIMIT]}
 {retry_section}
 
-## Current draft (frontmatter may have been auto-repaired)
-{_read_text(draft)}
+## Current candidate draft
+{source_draft_md}
 
 ## Compact write brief and coverage contract
 {json.dumps(contracts.get('brief') or {}, ensure_ascii=False, indent=2)}
@@ -3293,7 +3321,7 @@ Return the revised article Markdown only."""
             ensure_ascii=False,
             indent=2,
         )
-        return {
+        outcome: dict[str, Any] = {
             "success": False,
             "stage": "w1b_pre_check",
             "gate_passed": False,
@@ -3314,6 +3342,12 @@ Return the revised article Markdown only."""
                 "未写入正式 draft/ledger"
             ),
         }
+        if carry_candidate:
+            # Batch-internal only. The caller removes these fields before
+            # persisting history or returning the public result.
+            outcome["_candidate_draft_md"] = new_draft_md
+            outcome["_candidate_retry_feedback"] = retry_feedback
+        return outcome
 
     # Back up the matched draft + claim ledger as a pair. A draft-only
     # backup cannot be safely restored because sentence IDs are draft-bound.
@@ -3378,26 +3412,64 @@ Return the revised article Markdown only."""
 async def stage_w1b_revise_batch(
     topic: str, tier: str, workspace: Path, settings=None
 ) -> dict:
-    """Run at most two W1b AI revisions from one explicit operator action.
+    """Run at most two cumulative W1b revisions from one operator action.
 
-    A batch stops immediately on a passing pre-check or on a non-revision
-    failure (for example malformed AI output).  Each completed attempt is
-    saved so a later batch can use the actual previous failure, not guess.
+    A rejected candidate never touches the live draft/ledger pair, but it is
+    carried in memory into the next attempt so the second revision improves
+    the first candidate instead of starting again from the old formal draft.
     """
     slug = _slugify(topic)
     attempts: list[dict[str, Any]] = []
+    candidate_seed_md: str | None = None
+    candidate_seed_feedback: str | None = None
+    candidate_chain_count = 0
+
     for _ in range(MAX_REVISION_ROUNDS):
-        outcome = await stage_w1b_revise(topic, tier, workspace, settings)
+        if candidate_seed_md is not None:
+            candidate_chain_count += 1
+
+        outcome = await stage_w1b_revise(
+            topic,
+            tier,
+            workspace,
+            settings,
+            candidate_seed_md=candidate_seed_md,
+            candidate_seed_feedback=candidate_seed_feedback,
+            carry_candidate=True,
+        )
+        next_candidate = outcome.pop("_candidate_draft_md", None)
+        next_feedback = outcome.pop("_candidate_retry_feedback", None)
+
         _record_revision_attempt(workspace, slug, "w1b", outcome)
         attempts.append(outcome)
         if outcome.get("gate_passed"):
-            return {**outcome, "batch_attempts": len(attempts), "batch_completed": True}
-        # A rejected candidate carries exact structured feedback and may
-        # improve on the second attempt. Non-retryable failures still stop.
+            return {
+                **outcome,
+                "batch_attempts": len(attempts),
+                "batch_completed": True,
+                "candidate_chain_count": candidate_chain_count,
+            }
+
         if not outcome.get("revised") and not outcome.get("retryable"):
             break
-    final = attempts[-1] if attempts else {"success": False, "error": "未执行修订"}
-    return {**final, "batch_attempts": len(attempts), "batch_completed": True}
+
+        if isinstance(next_candidate, str) and next_candidate.strip():
+            candidate_seed_md = next_candidate
+            candidate_seed_feedback = (
+                next_feedback
+                if isinstance(next_feedback, str) and next_feedback.strip()
+                else str(outcome.get("retry_feedback") or "")
+            )
+    final = attempts[-1] if attempts else {
+        "success": False,
+        "error": "未执行修订",
+    }
+    return {
+        **final,
+        "batch_attempts": len(attempts),
+        "batch_completed": True,
+        "candidate_chain_count": candidate_chain_count,
+    }
 
 
 # ── W2: Post-Process (+ revision loop) ──────────────────────────────────

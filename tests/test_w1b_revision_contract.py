@@ -852,6 +852,77 @@ class TestW1bCandidateGate:
         assert result["gate_passed"] is True
         assert result["batch_attempts"] == 2
 
+
+    def test_batch_second_attempt_uses_rejected_candidate_not_live_draft(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        topic = "cumulative candidate topic"
+        slug = lw._slugify(topic)
+        calls = []
+
+        async def fake_revise(
+            topic,
+            tier,
+            workspace,
+            settings=None,
+            *,
+            candidate_seed_md=None,
+            candidate_seed_feedback=None,
+            carry_candidate=False,
+        ):
+            calls.append({
+                "candidate_seed_md": candidate_seed_md,
+                "candidate_seed_feedback": candidate_seed_feedback,
+                "carry_candidate": carry_candidate,
+            })
+            if len(calls) == 1:
+                assert candidate_seed_md is None
+                assert candidate_seed_feedback is None
+                assert carry_candidate is True
+                return {
+                    "success": False,
+                    "revised": False,
+                    "retryable": True,
+                    "candidate_rejected": True,
+                    "retry_feedback": "EXACT_FIRST_FAILURE",
+                    "_candidate_draft_md": "FIRST_REJECTED_CANDIDATE",
+                    "_candidate_retry_feedback": "EXACT_FIRST_FAILURE",
+                    "error": "candidate failed",
+                }
+
+            assert candidate_seed_md == "FIRST_REJECTED_CANDIDATE"
+            assert candidate_seed_feedback == "EXACT_FIRST_FAILURE"
+            assert carry_candidate is True
+            return {
+                "success": True,
+                "revised": True,
+                "gate_passed": True,
+            }
+
+        monkeypatch.setattr(lw, "stage_w1b_revise", fake_revise)
+
+        result = asyncio.run(
+            lw.stage_w1b_revise_batch(
+                topic,
+                "Cluster Content",
+                tmp_path,
+            )
+        )
+
+        assert len(calls) == 2
+        assert result["gate_passed"] is True
+        assert result["batch_attempts"] == 2
+        assert result["candidate_chain_count"] == 1
+        assert "_candidate_draft_md" not in result
+        assert "_candidate_retry_feedback" not in result
+
+        state = lw.load_w2_state(tmp_path, slug)
+        serialized = json.dumps(state, ensure_ascii=False)
+        assert "FIRST_REJECTED_CANDIDATE" not in serialized
+        assert "EXACT_FIRST_FAILURE" in serialized
+
     def test_fact_check_exposes_full_uncovered_sentence(
         self, tmp_path
     ):
