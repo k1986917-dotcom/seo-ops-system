@@ -47,6 +47,8 @@ _VERIFY_TERMS = frozenset({
     "injury",
     "law",
     "legal",
+    "mistake",
+    "mistakes",
     "regulation",
     "safety",
     "warning",
@@ -118,19 +120,22 @@ def stable_section_id(position: int, heading: str) -> str:
 
 def infer_reader_stage(heading: str, position: int) -> str:
     """Conservatively infer a reader stage from a planned H2 heading."""
-    tokens = set(re.findall(r"[a-z0-9]+", _normalized_heading(heading).lower()))
+    normalized_heading = _normalized_heading(heading).lower()
+    tokens = set(re.findall(r"[a-z0-9]+", normalized_heading))
     if tokens & _STRONG_SELECT_TERMS:
+        return "select"
+    if "what to look for" in normalized_heading:
         return "select"
     if tokens & _COMPARE_TERMS:
         return "compare"
     if tokens & _VERIFY_TERMS:
         return "verify"
+    if position == 1:
+        return "discover"
     if tokens & _WEAK_SELECT_TERMS:
         return "select"
     if tokens & _APPLY_TERMS:
         return "apply"
-    if position == 1:
-        return "discover"
     return "understand"
 
 
@@ -326,11 +331,28 @@ def parse_brief_section_specs(brief_text: str) -> list[dict[str, Any]]:
     )
     source = outline_match.group(1) if outline_match else brief_text
     matches = list(re.finditer(r"(?mi)^\s*H2:\s*(.+?)\s*$", source))
+    numbered_matches: list[re.Match[str]] = []
     if not matches:
+        outline_section = re.search(
+            r"(?ms)^##\s+3\.\s+Recommended Outline\s*$\n(.*?)(?=^##\s+\d+\.|\Z)",
+            brief_text,
+        )
+        numbered_source = outline_section.group(1) if outline_section else brief_text
+        numbered_matches = list(
+            re.finditer(
+                r"(?mi)^\s*(?:\d+\.|[-*])\s+\*\*H2:\s*(.+?)\*\*"
+                r"(?:\s*(?:—|–|-)\s*(.*?))?\s*$",
+                numbered_source,
+            )
+        )
+        source = numbered_source
+    if not matches and not numbered_matches:
         raise ContractValidationError("brief contains no H2 outline entries")
 
+    active_matches = matches or numbered_matches
+
     specs: list[dict[str, Any]] = []
-    for index, match in enumerate(matches):
+    for index, match in enumerate(active_matches):
         raw_heading = _english_legacy_heading(match.group(1).strip())
         word_match = re.search(r"\((\d+)\s+words?\)\s*$", raw_heading, re.I)
         target_words = int(word_match.group(1)) if word_match else None
@@ -339,13 +361,29 @@ def parse_brief_section_specs(brief_text: str) -> list[dict[str, Any]]:
             if word_match
             else raw_heading
         )
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        end = (
+            active_matches[index + 1].start()
+            if index + 1 < len(active_matches)
+            else len(source)
+        )
         body = source[match.end():end]
-        bullets = [
-            _text(item, "brief bullet")
-            for item in re.findall(r"(?m)^\s*-\s+(.+?)\s*$", body)
-            if item.strip()
-        ]
+        bullets = (
+            []
+            if numbered_matches
+            else [
+                _text(item, "brief bullet")
+                for item in re.findall(r"(?m)^\s*-\s+(.+?)\s*$", body)
+                if item.strip()
+            ]
+        )
+        if numbered_matches and match.lastindex and match.lastindex >= 2:
+            trailing_note = _text(
+                match.group(2) or "",
+                "brief outline note",
+                allow_empty=True,
+            )
+            if trailing_note:
+                bullets.insert(0, trailing_note)
         specs.append({
             "heading": _normalized_heading(heading),
             "target_words": target_words,

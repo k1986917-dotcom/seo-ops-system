@@ -11,6 +11,10 @@ from seo_ops.services.sectional_context import (
     build_candidate_registry,
     resolve_shadow_opportunities,
 )
+from seo_ops.services.sectional_generation import (
+    build_section_generation_package,
+    build_section_generation_prompt,
+)
 from seo_ops.services.sectional_writing import build_contract_bundle_from_brief
 
 
@@ -34,6 +38,14 @@ def _parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="Print the complete shadow bundle instead of the concise summary.",
+    )
+    parser.add_argument(
+        "--generation-packages",
+        action="store_true",
+        help=(
+            "Also build read-only Phase 3 section packages and report compact "
+            "context sizes. No AI is called and no checkpoint is written."
+        ),
     )
     return parser
 
@@ -97,6 +109,50 @@ def _summary(shadow: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _generation_summary(
+    section_contracts: dict[str, Any],
+    shadow: dict[str, Any],
+) -> list[dict[str, Any]]:
+    summaries = []
+    for section_id in section_contracts["section_order"]:
+        package = build_section_generation_package(
+            section_contracts,
+            shadow["section_link_contracts"],
+            shadow["context_manifest"],
+            section_id,
+        )
+        prompt = build_section_generation_prompt(package)
+        summaries.append({
+            "section_id": section_id,
+            "heading": package["heading"],
+            "reader_stage": package["reader_stage"],
+            "brief_points": package["brief_points"],
+            "brief_points_rejected": package["brief_points_rejected"],
+            "article_ids": [
+                item["candidate_id"] for item in package["candidates"]["articles"]
+            ],
+            "product_ids": [
+                item["product_id"] for item in package["candidates"]["products"]
+            ],
+            "product_fits": [
+                {
+                    "product_id": item["product_id"],
+                    "fit_level": item["fit_level"],
+                    "fit_reason": item["fit_reason"],
+                }
+                for item in package["candidates"]["products"]
+            ],
+            "evidence_ids": [
+                item["evidence_id"] for item in package["candidates"]["evidence"]
+            ],
+            "candidate_context_chars": package["context_char_counts"],
+            "system_prompt_chars": len(prompt["system"]),
+            "user_prompt_chars": len(prompt["user"]),
+            "package_sha256": package["package_sha256"],
+        })
+    return summaries
+
+
 def main() -> int:
     args = _parser().parse_args()
     bundle = build_contract_bundle_from_brief(
@@ -118,6 +174,12 @@ def main() -> int:
         registry,
     )
     output = shadow if args.full else _summary(shadow)
+    if args.generation_packages:
+        output = dict(output)
+        output["generation_packages"] = _generation_summary(
+            bundle["section_contracts"],
+            shadow,
+        )
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

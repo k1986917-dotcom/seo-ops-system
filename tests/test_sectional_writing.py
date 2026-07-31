@@ -101,6 +101,27 @@ def test_reader_stages_control_initial_product_link_policy():
     assert safety_gate["reason_code"] == "section_role_prohibits_product_link"
 
 
+def test_reader_stage_inference_handles_real_outline_phrasing():
+    bundle = build_contract_bundle(
+        topic="Professional Tools",
+        tier="Cluster Content",
+        intent="Explain selection, use, and mistakes.",
+        outline=[
+            "Why This Professional Use Case Is Different",
+            "What to Look For in a Professional Tool",
+            "Common Mistakes When Using the Tool",
+        ],
+    )
+    stages = {
+        item["heading"]: item["reader_stage"]
+        for item in bundle["section_contracts"]["sections"]
+    }
+
+    assert stages["Why This Professional Use Case Is Different"] == "discover"
+    assert stages["What to Look For in a Professional Tool"] == "select"
+    assert stages["Common Mistakes When Using the Tool"] == "verify"
+
+
 def test_recommendation_heading_enters_product_selection_stage():
     bundle = build_contract_bundle(
         topic="Recommendations",
@@ -171,6 +192,48 @@ H2: Safety and Regulatory Compliance (300 words)
     assert recommendations["product_constraints"] == []
     assert safety["reader_stage"] == "verify"
     assert safety["product_link_allowed"] is False
+
+
+def test_numbered_bold_legacy_outline_rebuilds_english_h2_contracts():
+    brief = """# Research Brief
+
+## 3. Recommended Outline
+
+**Target word count:** 1800–2500 words
+
+**H2 Structure:**
+1. **H2: Why Ceiling Work Is Different** — 中文历史说明，不进入英文写作上下文
+2. **H2: Class 2 vs Class 3R — Which Option Fits the Task?** — Compare the options with evidence
+3. **H2: Frequently Asked Questions** — 嵌入历史问题
+
+## 4. Supporting Elements
+"""
+    specs = parse_brief_section_specs(brief)
+
+    assert [item["heading"] for item in specs] == [
+        "Why Ceiling Work Is Different",
+        "Class 2 vs Class 3R — Which Option Fits the Task?",
+        "Frequently Asked Questions",
+    ]
+    assert specs[0]["bullets"] == ["中文历史说明，不进入英文写作上下文"]
+    assert specs[1]["bullets"] == ["Compare the options with evidence"]
+
+    bundle = build_contract_bundle_from_brief(
+        topic="Ceiling Work",
+        tier="Cluster Content",
+        intent="Explain selection and use.",
+        brief_text=brief,
+    )
+    sections = bundle["section_contracts"]["sections"]
+
+    assert sections[0]["brief_points"] == []
+    assert sections[0]["brief_points_rejected"] == [
+        {
+            "text": "中文历史说明，不进入英文写作上下文",
+            "reason_code": "non_english_brief_point",
+        }
+    ]
+    assert sections[1]["brief_points"] == ["Compare the options with evidence"]
 
 
 def test_only_structured_approved_product_constraints_become_hard_rules():

@@ -36,6 +36,10 @@ LASER_PRODUCTS = """# Products
 | L200 | Blue Laser Pointer | https://example.com/p-L200 | 149 | 1600mW | 450nm blue |
 | L300 | Conflicting Laser | https://example.com/p-L300 | 99 | 1200mW | 650nm red |
 
+### L100 — High Power Green Laser Pointer
+- **URL**: https://example.com/p-L100
+- **Features**: Long-range green beam
+
 ### L300 — Conflicting Laser
 - **Wavelength**: 532nm green
 """
@@ -119,12 +123,53 @@ def test_article_registry_rejects_self_duplicate_and_invalid_urls():
     ]
 
 
+def test_common_site_topic_words_cannot_create_false_article_opportunity():
+    links = """# Internal Links
+
+| Title | URL | Primary Keyword |
+|---|---|---|
+| Laser Pointer Buying Guide | https://example.com/blog/buying | laser pointer |
+| Laser Pointer Battery Guide | https://example.com/blog/battery | laser pointer |
+| Laser Pointer Color Guide | https://example.com/blog/color | laser pointer |
+| Laser Pointer Range Guide | https://example.com/blog/range | laser pointer |
+| Laser Pointer Bird Deterrent Guide | https://example.com/blog/birds | laser pointer |
+"""
+    bundle = build_contract_bundle(
+        topic="Laser Pointer Guide",
+        tier="Cluster Content",
+        intent="Explain common worksite mistakes.",
+        outline=["Common Mistakes During Professional Installation"],
+    )
+    registry = build_candidate_registry(
+        internal_links_map=links,
+        product_report=LASER_PRODUCTS,
+        evidence_cards=EVIDENCE,
+    )
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        registry,
+    )
+    manifest = shadow["context_manifest"]["sections"][0]
+    gate = shadow["section_link_contracts"]["sections"][0]["article_links"]
+
+    assert {"laser", "pointer"} <= set(
+        registry["article_profile"]["common_article_tokens"]
+    )
+    assert manifest["article_candidates"] == []
+    assert gate["opportunity_state"] == "none"
+    assert gate["candidate_count"] == 0
+    assert gate["reason_code"] == "no_relevant_article_candidates"
+
+
 def test_laser_catalog_is_parsed_as_generic_attributes():
     registry = parse_product_registry(LASER_PRODUCTS)
     products = {item["product_id"]: item for item in registry["candidates"]}
 
     assert products["L100"]["attributes"]["table"]["power"] == "2000mW"
     assert products["L100"]["attributes"]["table"]["wavelength"] == "520nm green"
+    assert "url" not in products["L100"]["attributes"]["details"]
+    assert "https" not in products["L100"]["search_text"].casefold()
     assert products["L300"]["attribute_conflicts"] == [
         {
             "field": "wavelength",
@@ -233,9 +278,17 @@ H2: Top Recommendations (500 words)
             "missing_catalog_specs": ["5mw"],
         }
     ]
-    assert gate["opportunity_state"] == "recommended"
-    assert gate["reason_code"] == "brief_catalog_alignment_pending"
+    assert gate["opportunity_state"] == "required"
+    assert gate["reason_code"] == "catalog_truth_overrides_brief"
+    assert gate["min_required"] == 1
     assert gate["candidate_count"] >= 1
+    assert all(
+        item["fit_level"] == "related_catalog"
+        for item in manifest["product_candidates"]
+    )
+    assert {
+        item["product_id"] for item in manifest["product_rejections"]
+    } == {"L300"}
 
 
 def test_non_english_brief_point_is_audited_but_not_used_for_scoring():
@@ -302,7 +355,7 @@ def test_only_approved_generic_constraint_filters_catalog():
     assert gate["candidate_count"] == 2
 
 
-def test_compare_section_recommends_but_does_not_force_product():
+def test_compare_section_requires_one_related_product_when_available():
     bundle = _laser_bundle()
     shadow = resolve_shadow_opportunities(
         bundle["section_contracts"],
@@ -320,8 +373,8 @@ def test_compare_section_recommends_but_does_not_force_product():
         if item["section_id"] == compare["section_id"]
     )
 
-    assert gate["opportunity_state"] == "recommended"
-    assert gate["min_required"] == 0
+    assert gate["opportunity_state"] == "required"
+    assert gate["min_required"] == 1
     assert gate["candidate_count"] >= 1
 
 

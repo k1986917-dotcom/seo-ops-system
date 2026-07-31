@@ -6,6 +6,10 @@
 
 ### Changed
 
+- 章节化产品推荐改为“内容相关即可推荐”：`compare|select|apply` 中只要存在在售、数据
+  无冲突且与文章主题或章节相关的商品，就要求至少 1 个产品链接；不再要求小目录网站的
+  每个 SKU 都与细分用途完全匹配。弱匹配商品只能写成 related catalog option，不能
+  虚构专用场景、验证结果或合规属性。
 - 官方 DeepSeek V4 的 W0、W1b、W2 长正文任务现在显式使用 non-thinking 模式，
   避免复杂修订把输出预算消耗在 `reasoning_content` 后没有最终文章正文；其他
   OpenAI-compatible 服务不会收到 DeepSeek 专用参数。
@@ -27,6 +31,12 @@
 
 ### Added
 
+- 新增章节化写作 Phase 3 生成引擎：逐 H2 精简上下文、严格英文 Markdown/链接占位符
+  协议、条件最低链接门禁、章节级原子 checkpoint 和中断续跑。
+- 新增主体完成后的 Introduction、Key Takeaways、Conclusion、FAQ 独立短调用与
+  checkpoint；这些组件只能基于章节摘要生成，不得引入新事实、产品、链接或引用。
+- 新增旧编号加粗 H2 大纲兼容、站点高频品类词动态降权、产品匹配强度
+  `strong|contextual|related_catalog|approved_constraint` 和每节 prompt 大小预览。
 - 新增章节化写作 Phase 1 合同层：稳定 Article Blueprint、Section Contract 和 Section
   Link Contract，可严格校验、确定性重建并以三文件 bundle 带回滚保存；目前未接管正式
   W0。

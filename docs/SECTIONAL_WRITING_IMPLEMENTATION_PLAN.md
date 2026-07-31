@@ -110,7 +110,7 @@ Article Blueprint
 
 ### Phase 2 — 候选注册与链接机会评分（shadow mode）
 
-状态：**代码完成，待本机全量验证与提交**
+状态：**完成并推送**
 
 - [x] 文章候选来自 internal-links-map，过滤 self-link、重复 URL 和非法 URL；
 - [x] 产品候选来自任意包含 ID/SKU、Title/Name、URL 的 Markdown 产品表；核心解析器
@@ -141,19 +141,36 @@ Article Blueprint
   `catalog_attribute_conflict`，修正前不参与自动链接；
 - 未调用 AI，未写入任何正式或 shadow Action 文件。
 
-剩余验收：本机运行完整 pytest；通过后形成 Phase 2 原子提交并推送。
+最终验收：完整测试 `456 passed, 1 warning`；31 项 Phase 1+2 专项测试通过；
+提交 `666b3cd4a107ac8a3a3a5eed9b91a5eedfd831cc` 已推送，工作区干净，正式
+W0/W1b/W2 未改变。
 
 ### Phase 3 — 章节生成引擎与 checkpoint
 
-状态：**待实施**
+状态：**代码完成并通过本机全量验证，待形成提交**
 
-- 逐 H2 生成，每节包含完整段落而非逐自然段调用；
-- 输入仅包含精简全局 brief、当前合同、相关证据/链接、前后节提示；
-- 输出章节 Markdown、链接占位符和链接决策；
-- 每节独立 checkpoint，可中断恢复；
-- Introduction/Takeaways/Conclusion/FAQ 后生成。
+- [x] 逐 H2 生成，每节包含 2–5 个完整段落而非逐自然段调用；
+- [x] 输入仅包含当前合同、相关证据/链接、前一节短摘要和下一节提示；
+- [x] 输出精确 H2、章节 Markdown、ARTICLE/PRODUCT/CITE 占位符和链接决策；
+- [x] 原始 URL、越权 ID、非英文输出、重复标题、词数和链接门禁 fail-closed；
+- [x] 每节独立原子 checkpoint，可在 provider 中断后只续跑未完成章节；
+- [x] checkpoint 绑定 package SHA；损坏、过期或内容不一致时不得恢复；
+- [x] Introduction/Takeaways/Conclusion/FAQ 在主体完成后单独生成并 checkpoint；
+- [x] 兼容旧编号加粗 H2 大纲，不把后续链接策略误当 FAQ 要点；
+- [x] 产品推荐区分 `strong|contextual|related_catalog|approved_constraint`；
+- [x] `compare|select|apply` 有内容相关且数据有效商品时最低要求 1 个产品链接；
+- [x] `related_catalog` 只能称为相关目录选项，禁止虚构具体用途适配或合规；
+- [x] 只读 preview 可输出每节 prompt 大小和候选 ID，不调用 AI、不写 checkpoint。
 
 feature flag 默认关闭。旧 W0 仍为正式路径。
+
+专项验收：Phase 1–3 联合 `54 passed`；Ruff、compileall、`git diff --check` 通过。
+Action #3 只读构建 7 个 generation packages，单节 user prompt 约 3.6K–6.5K 字符；
+对比/选型章节产品最低 1，安全/错误/FAQ 产品 0，B303 继续被排除。
+
+本机完整 pytest：`479 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx 弃用提示。
+Phase 1–3 专项：`54 passed`；Ruff、compileall、`git diff --check` 全部通过。
+MCP 完整 pytest 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码失败。
 
 ### Phase 4 — 章节 claim ledger 与链接绑定
 
@@ -211,6 +228,5 @@ feature flag 默认关闭。旧 W0 仍为正式路径。
 
 ## 当前下一步
 
-1. 本机完整 pytest 验证 Phase 2 并提交推送。
-2. 进入 Phase 3：基于已验证 Context Manifest 构建逐章节生成引擎和 checkpoint；
-   继续保持 feature flag 关闭，不接管正式 W0。
+提交并推送 Phase 3；随后立即进入 Phase 4：章节 claim ledger、占位符服务端绑定和
+全文 ledger 合并。继续保持 feature flag 关闭，不接管正式 W0。

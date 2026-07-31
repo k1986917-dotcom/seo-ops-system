@@ -25,7 +25,41 @@
 
 ### 下一步
 
-实施 Phase 2：候选注册、机会评分和 Context Manifest，默认 shadow-only，不接管正式 W0。
+Phase 3 已完成本机全量验证；提交后立即进入 Phase 4。继续保持 shadow-only，
+不接管正式 W0。
+
+## 2026-07-31 — Phase 3 章节生成、断点恢复与相关产品推荐
+
+### 本次完成
+
+- 新增 `sectional_generation.py`：按 H2 生成完整章节，每次只发送当前合同、相关候选、
+  前一节短摘要和下一节提示，不发送全篇正文或全站候选。
+- 严格输出协议要求精确 H2、2–5 段正文、ARTICLE/PRODUCT/CITE 占位符和三类链接决策；
+  原始 URL、越权 ID、中文正文、词数越界、最低链接数不足和重复内部链接均阻塞。
+- 每节及最终 Introduction/Takeaways/Conclusion/FAQ 都有独立原子 checkpoint；上下文
+  SHA 变化、文件损坏或内容校验失败时自动失效，不会误恢复半成品。
+- 旧编号加粗 Research Brief 大纲可确定性重建；中文说明只进审计，后续链接策略不会被
+  最后一节错误吸收。
+- 产品推荐按运营要求放宽为“内容相关即可推荐”：商业章节中，在售且数据无冲突的
+  `strong|contextual|related_catalog|approved_constraint` 商品都可进入候选；存在候选时
+  最低要求 1 个。弱匹配商品只能表述为 related catalog option，禁止宣称专用或合规。
+- 文章内链继续要求章节具体相关；产品内链保留品类级 fallback，适配商品数量较少的网站。
+
+### 真实只读验收
+
+- Action #3 构建 7 个 generation packages，单节 user prompt 约 3.6K–6.5K 字符。
+- Class 对比和选型章节产品门禁为 `required + min_required=1`；开头、安全、常见错误和
+  FAQ 为 0。
+- B303 继续因标题 532nm、目录 650nm 冲突被排除；未调用 AI、未写 checkpoint、未改
+  draft/ledger/state/database/Action。
+
+### 验证
+
+- Phase 1–3 联合专项：54 passed。
+- Ruff、compileall、`git diff --check`：通过。
+- 本机完整 pytest：`479 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx
+  弃用提示。Phase 1–3 专项：`54 passed`；Ruff、compileall、`git diff --check` 通过。
+- MCP 完整 pytest 仍会被既有 Landlock 限制阻止读取 `/etc/mime.types`，不是代码回归。
 
 ## 2026-07-31 — Phase 2 跨行业候选注册、目录优先与数据质量报告
 
@@ -66,7 +100,9 @@
 - Phase 1+2 专项：31 passed。
 - Ruff、compileall、`git diff --check`：通过。
 - 跨行业 fixtures：激光产品、喷码机、园林工具全部通过。
-- 完整 pytest 仍需本机环境执行后才能提交。
+- 本机完整 pytest：`456 passed, 1 warning`。
+- 已提交并推送 `666b3cd4a107ac8a3a3a5eed9b91a5eedfd831cc`；本地与远端一致，
+  工作区干净。
 
 ### Phase 1 实施结果
 

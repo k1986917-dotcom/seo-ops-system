@@ -88,6 +88,15 @@ _PRODUCT_ID_ALIASES = {
 }
 _PRODUCT_TITLE_ALIASES = {"title", "name", "product", "product_name"}
 _PRODUCT_URL_ALIASES = {"url", "link", "product_url"}
+_PRODUCT_NARRATIVE_FIELDS = {
+    "description",
+    "details",
+    "features",
+    "summary",
+    "usage",
+    "usage_scenario",
+    "usage_scenarios",
+}
 
 _PRESCRIPTIVE_PATTERN = re.compile(
     r"(?i)\b(?:only|must|required|should only|recommend(?:ed|ation|ations)?)\b"
@@ -121,11 +130,25 @@ def _field_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().casefold()).strip("_")
 
 
+def _normalized_token(value: str) -> str:
+    token = value.casefold()
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if (
+        len(token) > 4
+        and token.endswith("s")
+        and not token.endswith(("ss", "us", "is"))
+    ):
+        return token[:-1]
+    return token
+
+
 def _tokens(value: str) -> set[str]:
     return {
-        token
+        normalized
         for token in re.findall(r"[a-z0-9]+", value.lower())
-        if len(token) >= 2 and token not in _GENERIC_TOKENS
+        if len(token) >= 2
+        if (normalized := _normalized_token(token)) not in _GENERIC_TOKENS
     }
 
 
@@ -347,7 +370,11 @@ def parse_product_registry(product_report: str) -> dict[str, Any]:
             and index not in {id_index, title_index, url_index}
             and _clean_text(row[index])
         }
-        detail_attributes = details.get(product_id, {})
+        detail_attributes = {
+            key: value
+            for key, value in details.get(product_id, {}).items()
+            if key not in _PRODUCT_URL_ALIASES
+        }
         conflicts = [
             {
                 "field": key,
@@ -359,6 +386,11 @@ def parse_product_registry(product_report: str) -> dict[str, Any]:
         ]
         merged = dict(table_attributes)
         merged.update(detail_attributes)
+        eligibility_attributes = {
+            key: value
+            for key, value in merged.items()
+            if key not in _PRODUCT_NARRATIVE_FIELDS
+        }
         title_specs = _specs_by_unit(title)
         for key, value in merged.items():
             attribute_specs = _specs_by_unit(value)
@@ -382,6 +414,9 @@ def parse_product_registry(product_report: str) -> dict[str, Any]:
                 "merged": merged,
             },
             "attribute_conflicts": conflicts,
+            "eligibility_text": _clean_text(
+                " ".join([title, product_id, *eligibility_attributes.values()])
+            ),
             "search_text": _clean_text(
                 " ".join([title, product_id, *table_attributes.values(), *detail_attributes.values()])
             ),
@@ -434,6 +469,23 @@ def parse_evidence_registry(evidence_cards: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _common_candidate_tokens(
+    candidates: list[dict[str, Any]],
+    *,
+    text_field: str = "search_text",
+) -> list[str]:
+    token_counts: dict[str, int] = {}
+    for candidate in candidates:
+        for token in _tokens(candidate.get(text_field, "")):
+            token_counts[token] = token_counts.get(token, 0) + 1
+    threshold = max(3, (len(candidates) * 3 + 4) // 5)
+    return sorted(
+        token
+        for token, count in token_counts.items()
+        if count >= threshold
+    )
+
+
 def build_catalog_profile(products: dict[str, Any]) -> dict[str, Any]:
     candidates = products.get("candidates", [])
     attribute_counts: dict[str, int] = {}
@@ -446,6 +498,10 @@ def build_catalog_profile(products: dict[str, Any]) -> dict[str, Any]:
         "product_count": len(candidates),
         "attribute_coverage": dict(sorted(attribute_counts.items())),
         "catalog_spec_tokens": sorted(catalog_specs),
+        "common_product_tokens": _common_candidate_tokens(
+            candidates,
+            text_field="eligibility_text",
+        ),
         "conflicted_product_count": sum(
             bool(candidate.get("attribute_conflicts")) for candidate in candidates
         ),
@@ -512,16 +568,23 @@ def build_candidate_registry(
     if catalog_text is None:
         raise ContractValidationError("product_report is required")
     products = parse_product_registry(catalog_text)
+    articles = parse_article_registry(
+        internal_links_map,
+        current_url=current_url,
+        current_slug=current_slug,
+    )
     catalog_data_issues = build_catalog_data_issues(products)
     registry = {
         "version": CONTRACT_VERSION,
         "current_url": _canonical_url(current_url) if _valid_url(current_url) else "",
         "current_slug": current_slug.strip("/ "),
-        "articles": parse_article_registry(
-            internal_links_map,
-            current_url=current_url,
-            current_slug=current_slug,
-        ),
+        "articles": articles,
+        "article_profile": {
+            "article_count": len(articles["candidates"]),
+            "common_article_tokens": _common_candidate_tokens(
+                articles["candidates"]
+            ),
+        },
         "products": products,
         "evidence": parse_evidence_registry(evidence_cards),
         "catalog_profile": build_catalog_profile(products),
@@ -535,6 +598,13 @@ def validate_candidate_registry(registry: Any) -> dict[str, Any]:
         raise ContractValidationError("candidate registry must be a version 1 object")
     if not isinstance(registry.get("catalog_profile"), dict):
         raise ContractValidationError("candidate registry catalog_profile is missing")
+    article_profile = registry.get("article_profile")
+    if (
+        not isinstance(article_profile, dict)
+        or not isinstance(article_profile.get("article_count"), int)
+        or not isinstance(article_profile.get("common_article_tokens"), list)
+    ):
+        raise ContractValidationError("candidate registry article_profile is invalid")
     catalog_data_issues = registry.get("catalog_data_issues")
     if not isinstance(catalog_data_issues, list) or any(
         not isinstance(item, dict)
@@ -580,12 +650,16 @@ def _rank(
     *,
     kind: str,
     topic: str = "",
+    ignored_section_tokens: set[str] | None = None,
+    text_field: str = "search_text",
 ) -> list[dict[str, Any]]:
-    section_tokens = _tokens(_section_text(section))
+    section_tokens = _tokens(_section_text(section)) - set(
+        ignored_section_tokens or set()
+    )
     topic_tokens = _tokens(topic)
     ranked: list[dict[str, Any]] = []
     for candidate in candidates:
-        haystack_tokens = _tokens(candidate.get("search_text", ""))
+        haystack_tokens = _tokens(candidate.get(text_field, ""))
         section_matches = sorted(section_tokens & haystack_tokens)
         topic_matches = sorted(topic_tokens & haystack_tokens)
         score = 3 * len(section_matches) + len(topic_matches)
@@ -710,6 +784,7 @@ def _resolved_gate(
     limit: int,
     state: str,
     reason_code: str,
+    empty_reason_code: str = "no_relevant_candidates",
     rejected: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     selected_ids = [item["candidate_id"] for item in ranked[:limit]]
@@ -719,7 +794,7 @@ def _resolved_gate(
             "candidate_count": 0,
             "min_required": 0,
             "max_allowed": 0,
-            "reason_code": reason_code or "no_relevant_candidates",
+            "reason_code": empty_reason_code,
             "selected_ids": [],
             "rejected": list(rejected or []),
         }
@@ -732,6 +807,21 @@ def _resolved_gate(
         "selected_ids": selected_ids,
         "rejected": list(rejected or []),
     }
+
+
+def _annotate_product_fit(
+    ranked: list[dict[str, Any]],
+    fit_level: str,
+    fit_reason: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **item,
+            "fit_level": fit_level,
+            "fit_reason": fit_reason,
+        }
+        for item in ranked
+    ]
 
 
 def resolve_shadow_opportunities(
@@ -753,7 +843,13 @@ def resolve_shadow_opportunities(
             section,
             kind="article",
             topic=sections["topic"],
+            ignored_section_tokens=set(
+                registry["article_profile"].get("common_article_tokens", [])
+            ),
         )
+        article_ranked = [
+            item for item in article_ranked if item["section_match_count"] >= 1
+        ]
         evidence_ranked = _rank(
             registry["evidence"]["candidates"],
             section,
@@ -781,12 +877,72 @@ def resolve_shadow_opportunities(
                 })
             else:
                 eligible_products.append(candidate)
-        product_ranked = _rank(
+        product_specific_ranked = _rank(
             eligible_products,
             section,
             kind="product",
             topic=sections["topic"],
+            ignored_section_tokens=set(
+                registry["catalog_profile"].get("common_product_tokens", [])
+            ),
+            text_field="eligibility_text",
         )
+        constraints = section.get("product_constraints", [])
+        strong_products = [
+            item
+            for item in product_specific_ranked
+            if item["section_match_count"] >= 2
+        ]
+        contextual_products = [
+            item
+            for item in product_specific_ranked
+            if item["section_match_count"] == 1
+        ]
+        fallback_products = [
+            item
+            for item in _rank(
+                eligible_products,
+                section,
+                kind="product",
+                topic=sections["topic"],
+                text_field="eligibility_text",
+            )
+            if item["topic_matches"]
+        ]
+        if constraints:
+            product_ranked = _annotate_product_fit(
+                fallback_products,
+                "approved_constraint",
+                "matches_approved_structured_product_constraints",
+            )
+        elif strong_products:
+            product_ranked = _annotate_product_fit(
+                strong_products,
+                "strong",
+                "matches_multiple_section_specific_terms",
+            )
+            seen_ids = {item["candidate_id"] for item in product_ranked}
+            product_ranked.extend(
+                item
+                for item in _annotate_product_fit(
+                    contextual_products,
+                    "contextual",
+                    "matches_one_section_specific_term",
+                )
+                if item["candidate_id"] not in seen_ids
+            )
+        elif contextual_products:
+            product_ranked = _annotate_product_fit(
+                contextual_products,
+                "contextual",
+                "matches_one_section_specific_term",
+            )
+        else:
+            product_ranked = _annotate_product_fit(
+                fallback_products,
+                "related_catalog",
+                "related_to_article_topic_without_exact_use_case_match",
+            )
         brief_conflicts = _brief_catalog_conflicts(section, registry["catalog_profile"])
 
         article_required = (
@@ -805,26 +961,33 @@ def resolve_shadow_opportunities(
                 else "relevant_article_candidate"
             ),
             rejected=registry["articles"]["rejected"],
+            empty_reason_code="no_relevant_article_candidates",
         )
 
         if not section["product_link_allowed"]:
             product_gate = link_by_id[section["section_id"]]["product_links"]
         else:
+            top_fit = product_ranked[0].get("fit_level") if product_ranked else ""
             product_required = (
                 bool(product_ranked)
-                and product_ranked[0]["score"] >= 6
-                and (
-                    product_ranked[0]["section_match_count"] >= 2
-                    or bool(section.get("product_constraints"))
-                )
-                and section["reader_stage"] in {"select", "apply"}
-                and not brief_conflicts
+                and top_fit
+                in {
+                    "strong",
+                    "approved_constraint",
+                    "contextual",
+                    "related_catalog",
+                }
+                and section["reader_stage"] in {"select", "compare", "apply"}
             )
             product_reason = (
                 "high_relevance_catalog_product"
-                if product_required
-                else "brief_catalog_alignment_pending"
-                if brief_conflicts and product_ranked
+                if product_required and top_fit in {"strong", "approved_constraint"}
+                else "catalog_truth_overrides_brief"
+                if product_required and brief_conflicts
+                else "related_catalog_product"
+                if product_required and top_fit == "related_catalog"
+                else "contextual_catalog_product"
+                if product_required and top_fit == "contextual"
                 else "relevant_catalog_product"
                 if product_ranked
                 else "no_relevant_catalog_products"
@@ -835,6 +998,7 @@ def resolve_shadow_opportunities(
                 state="required" if product_required else "recommended",
                 reason_code=product_reason,
                 rejected=constraint_rejections,
+                empty_reason_code="no_relevant_catalog_products",
             )
 
         evidence_required = bool(evidence_ranked) and (
@@ -857,6 +1021,7 @@ def resolve_shadow_opportunities(
                 else "relevant_evidence_candidate"
             ),
             rejected=registry["evidence"]["rejected"],
+            empty_reason_code="no_relevant_evidence_candidates",
         )
 
         resolved = {

@@ -10,8 +10,11 @@
 - 链接最低值不统一设为 0。服务端先输出 `required|recommended|none` 机会状态；
   `required` 最低 1，`recommended` 可为 0 但必须返回拒绝原因，`none` 才允许无决策地
   不放该类链接。产品和文章内链分别计算，不能互相替代。
-- 产品链接必须满足章节已进入选型/解决方案阶段、产品在售、属性匹配且正文已解释理由；
-  安全警告、法规和事故分析章节默认禁止具体产品链接。
+- 产品链接只要求章节已进入 `compare|select|apply` 等商业阶段、商品在售、数据无冲突且
+  与文章主题或本节内容相关；小目录网站不再要求每个商品都与细分用途完全匹配。
+  候选分为 `strong|contextual|related_catalog|approved_constraint`，匹配强度只决定
+  推荐措辞，不决定是否可链接。商业阶段存在有效候选时最低要求 1 个；安全警告、法规、
+  常见错误和 FAQ 章节默认禁止或不要求具体产品链接。
 - 写作模型只输出 ARTICLE/PRODUCT/CITE 占位符；URL、库存、ID、锚文本和重复目标由
   服务端验证和绑定。
 - 已撤回本会话未完成的 claim-ledger 试验补丁，恢复干净 `71e6c91`，避免在旧整篇架构
@@ -32,7 +35,7 @@
   被 Landlock 拒绝。这是已知执行环境限制，不是测试断言失败；提交前仍须由本机运行
   完整 `.venv/bin/python -m pytest -q`。
 
-### Phase 2 代码已完成，待本机全量验证
+### Phase 2 已完成、测试并推送
 
 - 新增 `src/seo_ops/services/sectional_context.py`：只读解析站内文章地图、产品目录和
   evidence cards，构建候选注册表、目录画像、章节候选评分、Link Opportunity Gate、
@@ -56,16 +59,48 @@
 - Phase 1+2 共 31 项专项测试通过；Ruff、compileall、`git diff --check` 通过。
   正式 W0/W1b/W2 仍未导入新模块，draft、claim ledger、w2-state、数据库和真实 Action
   未修改。
-- MCP 完整 `pytest -q` 再次在收集 Hermes integration 时被既有 Landlock 限制阻断：
-  `openpyxl -> mimetypes -> /etc/mime.types` 返回 `PermissionError`。这不是测试断言失败，
-  仍需本机环境完成全量测试后才能提交。
+- 本机完整 `pytest -q`：`456 passed, 1 warning`；Phase 1+2 专项 `31 passed`；Ruff、
+  compileall、`git diff --check` 全部通过。
+- Phase 2 已提交并推送：`666b3cd4a107ac8a3a3a5eed9b91a5eedfd831cc`
+  (`feat: add site-aware sectional context shadowing`)；本地与远端一致，工作区干净。
+
+### Phase 3 已完成全量验证，待形成提交
+
+- 新增 `src/seo_ops/services/sectional_generation.py`，提供完全独立、shadow-only、可注入
+  generator 的逐 H2 生成引擎；没有导入或替换正式 Legacy W0。
+- 每节只接收当前 Section Contract、相关 evidence/文章/产品候选、前一节短摘要和下一节
+  标题；真实 Action #3 的 7 个 user prompt 约为 3.6K–6.5K 字符，远小于整篇上下文。
+- AI 必须返回精确 H2、2–5 个完整段落、ARTICLE/PRODUCT/CITE 占位符和机器可读链接
+  决策；原始 URL、HTML/Markdown 链接、越权 ID、中文正文、重复 H2、词数越界和链接
+  最低值不足全部 fail-closed。
+- 产品候选支持 `strong`、`contextual`、`related_catalog` 和 `approved_constraint`。
+  `related_catalog` 允许作为相关商品推荐，但提示词明确禁止宣称其专为该用途设计、经过
+  该场景验证或符合未提供的法规。`compare|select|apply` 有有效产品时使用
+  `required + min_required=1`，避免模型长期输出 0 产品链接。
+- 每节生成后原子保存独立 checkpoint；重新运行会校验 package SHA、正文、链接决策、
+  语言、词数和摘要后续跑。上下文变化、损坏 checkpoint 或部分写失败都不会被误恢复。
+- Introduction、Key Takeaways、Conclusion 和 FAQ 在主体完成后通过独立短输入生成，并有
+  单独 checkpoint；不得引入新事实、链接、产品或引用。
+- 兼容旧 Action 的编号加粗格式 `1. **H2: ...** — note`；只提取英文 H2，中文历史说明
+  保留审计，不进入正式写作上下文。编号大纲最后一节不会再误吸收后续链接策略列表。
+- 文章和产品候选都动态识别站点高频品类词。文章链接仍要求章节具体相关，避免把鸟类
+  驱赶文章塞进“施工常见错误”；产品端则保留相关目录 fallback，适合产品数量较少的网站。
+- Action #3 只读预览结果：开头、安全、常见错误、FAQ 不放产品；Class 对比和选型章节
+  产品门禁为 `required + min_required=1`；B303 仍因 532nm/650nm 冲突被排除。未调用
+  AI，未写 checkpoint，未修改正式 Action。
+- Phase 1–3 联合专项：54 passed；Ruff、compileall、`git diff --check` 全部通过。
+- 本机完整 `pytest -q`：`479 passed, 1 warning`；唯一 warning 为既有
+  Starlette/httpx 弃用提示。Phase 1–3 专项 `54 passed`；Ruff、compileall、
+  `git diff --check` 全部通过。
+- MCP 完整 pytest 仍会在收集阶段被既有 Landlock 权限阻止：`openpyxl -> mimetypes`
+  读取 `/etc/mime.types` 返回 `PermissionError`；这不是代码回归。
 
 ### 当前下一步
 
-1. 本机运行完整 pytest；全绿后提交并推送 Phase 2 原子变更。
-2. 进入 Phase 3，构建逐章节生成与 checkpoint；feature flag 默认关闭，旧 W0 仍是正式路径。
+1. 提交并推送 Phase 3 原子变更。
+2. 立即进入 Phase 4：章节 claim ledger、ARTICLE/PRODUCT/CITE 服务端绑定与全文 ledger 合并。
 3. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
-4. 只有 Phase 3–6 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
+4. 只有 Phase 4–6 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 
