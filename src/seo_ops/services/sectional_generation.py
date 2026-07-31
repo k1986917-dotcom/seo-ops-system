@@ -47,12 +47,8 @@ _ARTICLE_FRAME_REQUIREMENTS = {
     "faq_count": {"min": 3, "max": 4},
     "faq_answer_words": {"min": 20, "max": 90},
 }
-_ARTICLE_PLACEHOLDER = re.compile(
-    r"\[\[ARTICLE:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]"
-)
-_PRODUCT_PLACEHOLDER = re.compile(
-    r"\[\[PRODUCT:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]"
-)
+_ARTICLE_PLACEHOLDER = re.compile(r"\[\[ARTICLE:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]")
+_PRODUCT_PLACEHOLDER = re.compile(r"\[\[PRODUCT:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]")
 _CITE_PLACEHOLDER = re.compile(r"\[\[CITE:([a-zA-Z0-9._-]+)\]\]")
 _CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _RAW_URL = re.compile(r"https?://", re.IGNORECASE)
@@ -115,10 +111,7 @@ def _compact_product_attributes(candidate: dict[str, Any]) -> dict[str, str]:
 def _registry_indexes(registry: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
     validated = validate_candidate_registry(registry)
     return {
-        kind: {
-            candidate["candidate_id"]: candidate
-            for candidate in validated[kind]["candidates"]
-        }
+        kind: {candidate["candidate_id"]: candidate for candidate in validated[kind]["candidates"]}
         for kind in ("articles", "products", "evidence")
     }
 
@@ -156,11 +149,13 @@ def _selected_candidates(
                 f"approved {kind} candidate is missing from registry: {candidate_id}"
             )
         if kind == "article":
-            result.append({
-                "candidate_id": candidate_id,
-                "title": candidate.get("title", ""),
-                "primary_keyword": candidate.get("primary_keyword", ""),
-            })
+            result.append(
+                {
+                    "candidate_id": candidate_id,
+                    "title": candidate.get("title", ""),
+                    "primary_keyword": candidate.get("primary_keyword", ""),
+                }
+            )
         elif kind == "product":
             if candidate.get("attribute_conflicts"):
                 raise SectionGenerationError(
@@ -172,23 +167,27 @@ def _selected_candidates(
                 raise SectionGenerationError(
                     f"product candidate fit_level is invalid: {candidate_id}"
                 )
-            result.append({
-                "candidate_id": candidate_id,
-                "product_id": candidate.get("product_id", ""),
-                "title": candidate.get("title", ""),
-                "attributes": _compact_product_attributes(candidate),
-                "fit_level": fit_level,
-                "fit_reason": metadata.get("fit_reason", "approved_candidate"),
-            })
+            result.append(
+                {
+                    "candidate_id": candidate_id,
+                    "product_id": candidate.get("product_id", ""),
+                    "title": candidate.get("title", ""),
+                    "attributes": _compact_product_attributes(candidate),
+                    "fit_level": fit_level,
+                    "fit_reason": metadata.get("fit_reason", "approved_candidate"),
+                }
+            )
         else:
-            result.append({
-                "candidate_id": candidate_id,
-                "evidence_id": candidate.get("evidence_id", candidate_id),
-                "support": _truncate(candidate.get("support", ""), 700),
-                "concepts": candidate.get("concepts", [])[:8],
-                "claim_types": candidate.get("claim_types", [])[:6],
-                "source_url": candidate.get("url", ""),
-            })
+            result.append(
+                {
+                    "candidate_id": candidate_id,
+                    "evidence_id": candidate.get("evidence_id", candidate_id),
+                    "support": _truncate(candidate.get("support", ""), 700),
+                    "concepts": candidate.get("concepts", [])[:8],
+                    "claim_types": candidate.get("claim_types", [])[:6],
+                    "source_url": candidate.get("url", ""),
+                }
+            )
     return result
 
 
@@ -271,10 +270,7 @@ def build_section_generation_package(
         "previous_heading": section["previous_section"],
         "previous_summary": previous,
         "next_heading": section["next_section"],
-        "link_gates": {
-            key: link[key]
-            for key in _LINK_TYPES
-        },
+        "link_gates": {key: link[key] for key in _LINK_TYPES},
         "candidates": {
             "articles": _selected_candidates(
                 link["article_links"],
@@ -288,8 +284,7 @@ def build_section_generation_package(
                 metadata_by_id={
                     item["candidate_id"]: item
                     for item in manifest_section.get("product_candidates", [])
-                    if isinstance(item, dict)
-                    and isinstance(item.get("candidate_id"), str)
+                    if isinstance(item, dict) and isinstance(item.get("candidate_id"), str)
                 },
             ),
             "evidence": _selected_candidates(
@@ -417,6 +412,50 @@ Return exactly two blocks and no other text:
     return {"system": system, "user": user}
 
 
+_SECTION_WORD_COUNT_ERROR = re.compile(
+    r"^section word count (?P<count>\d+) is outside "
+    r"(?P<minimum>\d+)-(?P<maximum>\d+)$"
+)
+
+
+def _build_word_count_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    """Build one constrained retry only for an otherwise parseable length miss."""
+    match = _SECTION_WORD_COUNT_ERROR.fullmatch(str(error))
+    if match is None:
+        return None
+    validated = validate_section_generation_package(package)
+    target = validated["target_words"]
+    count = int(match.group("count"))
+    span = target["max"] - target["min"]
+    buffer = max(10, min(40, span // 6))
+    preferred_min = min(target["max"], target["min"] + buffer)
+    preferred_max = max(preferred_min, target["max"] - buffer)
+    direction = "expand" if count < target["min"] else "trim"
+    base = build_section_generation_prompt(validated)
+    repair_system = (
+        base["system"]
+        + "\nThis is the only repair attempt for a section that missed its word-count "
+        "contract. Preserve the approved H2, factual meaning, placeholder IDs, "
+        "link decisions, and 2-5 paragraph structure. Do not introduce any new "
+        "claim, URL, product, specification, law, statistic, or evidence ID."
+    )
+    repair_user = (
+        base["user"]
+        + "\n\nWORD COUNT REPAIR\n"
+        + f"The previous section had {count} visible words and must be {target['min']}-"
+        + f"{target['max']}. {direction.capitalize()} only the existing approved "
+        + f"content and aim safely inside {preferred_min}-{preferred_max} visible words. "
+        + "Return the complete two-block response again.\n\n"
+        + "PREVIOUS RESPONSE\n"
+        + response_text
+    )
+    return {"system": repair_system, "user": repair_user}
+
+
 def _split_response(text: str, first: str, second: str) -> tuple[str, str]:
     if not isinstance(text, str):
         raise SectionGenerationError("generator response must be a string")
@@ -473,8 +512,7 @@ def parse_section_placeholders(markdown: str) -> dict[str, list[dict[str, str]]]
             for candidate_id, anchor in _PRODUCT_PLACEHOLDER.findall(markdown)
         ],
         "external_citations": [
-            {"candidate_id": candidate_id}
-            for candidate_id in _CITE_PLACEHOLDER.findall(markdown)
+            {"candidate_id": candidate_id} for candidate_id in _CITE_PLACEHOLDER.findall(markdown)
         ],
     }
 
@@ -493,9 +531,7 @@ def _paragraph_count(markdown: str) -> int:
 
 
 def _internal_placeholder_count(value: str) -> int:
-    return len(_ARTICLE_PLACEHOLDER.findall(value)) + len(
-        _PRODUCT_PLACEHOLDER.findall(value)
-    )
+    return len(_ARTICLE_PLACEHOLDER.findall(value)) + len(_PRODUCT_PLACEHOLDER.findall(value))
 
 
 def _plain_prose_block(value: str) -> bool:
@@ -658,9 +694,7 @@ def _validate_decisions(
         ):
             raise SectionGenerationError(f"{link_type}.used_ids must be unique strings")
         if used_ids != inventory[link_type]:
-            raise SectionGenerationError(
-                f"{link_type} decisions do not match section placeholders"
-            )
+            raise SectionGenerationError(f"{link_type} decisions do not match section placeholders")
         gate = package["link_gates"][link_type]
         allowed = gate["selected_ids"]
         if any(item not in allowed for item in used_ids):
@@ -673,16 +707,17 @@ def _validate_decisions(
         if state == "none" and used_ids:
             raise SectionGenerationError(f"{link_type} is prohibited for this section")
         if not used_ids and not reason:
-            raise SectionGenerationError(
-                f"{link_type} needs a reason_code when unused"
-            )
-        if state == "recommended" and not used_ids and reason in {
-            "used",
-            "used_approved_candidate",
-        }:
-            raise SectionGenerationError(
-                f"{link_type} needs a rejection reason when unused"
-            )
+            raise SectionGenerationError(f"{link_type} needs a reason_code when unused")
+        if (
+            state == "recommended"
+            and not used_ids
+            and reason
+            in {
+                "used",
+                "used_approved_candidate",
+            }
+        ):
+            raise SectionGenerationError(f"{link_type} needs a rejection reason when unused")
         if used_ids:
             reason = "used_approved_candidate"
         normalized[link_type] = {
@@ -738,9 +773,7 @@ def parse_section_generation_response(
     if len(internal_ids) != len(set(internal_ids)):
         raise SectionGenerationError("internal link candidates must not repeat in one section")
     for block in re.split(r"\n\s*\n", "\n".join(lines[1:])):
-        count = len(_ARTICLE_PLACEHOLDER.findall(block)) + len(
-            _PRODUCT_PLACEHOLDER.findall(block)
-        )
+        count = len(_ARTICLE_PLACEHOLDER.findall(block)) + len(_PRODUCT_PLACEHOLDER.findall(block))
         if count > 1:
             raise SectionGenerationError(
                 "a paragraph may contain at most one internal link placeholder"
@@ -821,9 +854,7 @@ def validate_section_generation_output(
     if len(internal_ids) != len(set(internal_ids)):
         raise SectionGenerationError("section output repeats an internal candidate")
     for block in re.split(r"\n\s*\n", "\n".join(lines[1:])):
-        count = len(_ARTICLE_PLACEHOLDER.findall(block)) + len(
-            _PRODUCT_PLACEHOLDER.findall(block)
-        )
+        count = len(_ARTICLE_PLACEHOLDER.findall(block)) + len(_PRODUCT_PLACEHOLDER.findall(block))
         if count > 1:
             raise SectionGenerationError(
                 "section output paragraph contains multiple internal links"
@@ -876,9 +907,9 @@ def _atomic_json_write(path: Path, data: dict[str, Any]) -> None:
             dir=path.parent,
         )
         temp_path = Path(temp_name)
-        payload = (
-            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
+        payload = (json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()
@@ -967,6 +998,7 @@ def run_section_generation_sequence(
     previous_summary = ""
     generated_count = 0
     resumed_count = 0
+    word_count_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
             sections,
@@ -975,15 +1007,26 @@ def run_section_generation_sequence(
             section_id,
             previous_summary=previous_summary,
         )
-        output = (
-            load_section_checkpoint(workspace, slug, package)
-            if resume
-            else None
-        )
+        output = load_section_checkpoint(workspace, slug, package) if resume else None
         if output is None:
             prompt = build_section_generation_prompt(package)
             response = generate_text(prompt["system"], prompt["user"])
-            output = parse_section_generation_response(response, package)
+            try:
+                output = parse_section_generation_response(response, package)
+            except SectionGenerationError as exc:
+                repair_prompt = _build_word_count_repair_prompt(
+                    package,
+                    response,
+                    exc,
+                )
+                if repair_prompt is None:
+                    raise
+                repaired_response = generate_text(
+                    repair_prompt["system"],
+                    repair_prompt["user"],
+                )
+                output = parse_section_generation_response(repaired_response, package)
+                word_count_retry_count += 1
             persist_section_checkpoint(workspace, slug, package, output)
             generated_count += 1
         else:
@@ -998,6 +1041,7 @@ def run_section_generation_sequence(
         "outputs": outputs,
         "generated_count": generated_count,
         "resumed_count": resumed_count,
+        "word_count_retry_count": word_count_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
 
@@ -1161,9 +1205,7 @@ def parse_article_frame_response(
     if not isinstance(faq, dict) or set(faq) != {"faqs"} or not isinstance(faq["faqs"], list):
         raise SectionGenerationError("FAQ JSON shape is invalid")
     if not (
-        requirements["faq_count"]["min"]
-        <= len(faq["faqs"])
-        <= requirements["faq_count"]["max"]
+        requirements["faq_count"]["min"] <= len(faq["faqs"]) <= requirements["faq_count"]["max"]
     ):
         raise SectionGenerationError("FAQ count is outside the contract")
     for item in faq["faqs"]:
@@ -1221,10 +1263,7 @@ def validate_article_frame_output(
         raise SectionGenerationError("article frame FAQ is invalid")
     combined = "\n".join(
         [introduction, *takeaways, conclusion]
-        + [
-            f"{item.get('question', '')} {item.get('answer', '')}"
-            for item in faq
-        ]
+        + [f"{item.get('question', '')} {item.get('answer', '')}" for item in faq]
     )
     if _CJK.search(combined):
         raise SectionGenerationError("article frame output must be English")
@@ -1255,11 +1294,7 @@ def validate_article_frame_output(
         <= requirements["takeaway_count"]["max"]
     ):
         raise SectionGenerationError("article frame takeaway count is invalid")
-    if not (
-        requirements["faq_count"]["min"]
-        <= len(faq)
-        <= requirements["faq_count"]["max"]
-    ):
+    if not (requirements["faq_count"]["min"] <= len(faq) <= requirements["faq_count"]["max"]):
         raise SectionGenerationError("article frame FAQ count is invalid")
     seen_questions: set[str] = set()
     for item in faq:
@@ -1288,12 +1323,7 @@ def article_frame_checkpoint_path(workspace: Path, slug: str) -> Path:
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", clean_slug):
         raise SectionGenerationError("slug must use lowercase letters, numbers and hyphens")
     return (
-        Path(workspace)
-        / "drafts"
-        / "sectional"
-        / clean_slug
-        / "checkpoints"
-        / "article-frame.json"
+        Path(workspace) / "drafts" / "sectional" / clean_slug / "checkpoints" / "article-frame.json"
     )
 
 
@@ -1352,11 +1382,7 @@ def run_article_frame_generation(
     if not callable(generate_text):
         raise SectionGenerationError("generate_text must be callable")
     package = build_article_frame_package(section_run)
-    output = (
-        load_article_frame_checkpoint(workspace, slug, package)
-        if resume
-        else None
-    )
+    output = load_article_frame_checkpoint(workspace, slug, package) if resume else None
     if output is not None:
         return {"output": output, "generated": False, "resumed": True}
     prompt = build_article_frame_prompt(package)

@@ -1,6 +1,27 @@
 # Handoff — 当前接手状态
 
-最后更新：2026-07-31（Europe/Paris）
+最后更新：2026-08-01（Europe/Paris）
+
+## 2026-08-01 — 第七次 shadow：章节仅差 4 词时受控修订
+
+- `8922636` 推送后，Action #3 在非沙箱主机只执行一次
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing`；正式 POST=1，未重试，
+  正式 draft、claim ledger、w2-state、`.env`、Action 和 Git 均保持不变。
+- `ai_runs 153→157`，四条均为成功返回的 `legacy_write_sectional_body`。前三节按新的
+  350–500 合同重新生成并保存为 372、413、426 词；第四节 “Why Green (532nm)…”
+  返回 346 词，被严格 350 下限拒绝，因此没有覆盖其旧 checkpoint，流程立即停止。
+- 本次失败发生在 Phase 3，尚未生成新的 resolved delivery、assembly 或 comparison。
+  目录中的 `resolved-delivery.json` 仍是上一次运行留下的旧文件；其中 2525 词、重复
+  内链和 0 个外部引用等统计不能用来判断 `8922636` 的全文链接协调是否生效。
+- 根因是模型对字数的近似计数反复落在下限外 2–4 词，而生成序列原先对任何字数偏差都
+  直接中止，没有局部修订机会。修复保留 350–500 严格门禁，只在唯一异常精确匹配
+  `section word count N is outside MIN-MAX` 时允许同一节一次受控 AI 修订；其他错误不重试，
+  第二次仍越界也立即失败。修订必须保留 H2、事实含义、占位符、链接决策和段落结构，
+  不得引入新事实、URL、产品、规格、法律、统计或 evidence ID。
+- 新增三项回归：一次修订成功并原子保存、非字数错误不重试、第二次字数失败不再重试。
+  Sectional generation 专项 34 项通过；Sectional 联合组排除已知 MCP
+  `/etc/mime.types` Landlock Web 导入限制后 173 项通过；Legacy/W1b 非 Web 兼容组通过。
+  尚未运行下一次真实 shadow，也未 promotion。
 
 ## 2026-07-31 — 第六次 shadow 全文链接协调与字数合同修复
 

@@ -39,6 +39,12 @@
 
 ### Fixed
 
+- Section generation now permits exactly one constrained AI repair when an
+  otherwise parseable section misses only its word-count contract. The retry
+  must preserve the approved H2, factual meaning, placeholder IDs, link
+  decisions, and 2-5 paragraph structure while aiming inside the existing
+  range; the 350-500 gate is not lowered. Non-length failures still stop
+  immediately, and a second length miss also fails closed.
 - Phase 4 now performs deterministic full-article link allocation before URL
   binding. Required section minima are allocated first; duplicate ARTICLE and
   PRODUCT targets keep one canonical link while later occurrences remain plain

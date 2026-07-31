@@ -104,9 +104,7 @@ def _setup():
 
 def _package_for_stage(stage: str, previous_summary: str = ""):
     sections, shadow = _setup()
-    section = next(
-        item for item in sections["sections"] if item["reader_stage"] == stage
-    )
+    section = next(item for item in sections["sections"] if item["reader_stage"] == stage)
     return build_section_generation_package(
         sections,
         shadow["section_link_contracts"],
@@ -124,10 +122,7 @@ def _response(package, *, omit_required=None, raw_url=False, cjk=False):
     paragraph_two_placeholders = []
 
     article_gate = gates["article_links"]
-    if (
-        article_gate["opportunity_state"] == "required"
-        and "article_links" not in omit_required
-    ):
+    if article_gate["opportunity_state"] == "required" and "article_links" not in omit_required:
         candidate_id = article_gate["selected_ids"][0]
         used["article_links"].append(candidate_id)
         paragraph_one_placeholders.append(
@@ -135,10 +130,7 @@ def _response(package, *, omit_required=None, raw_url=False, cjk=False):
         )
 
     product_gate = gates["product_links"]
-    if (
-        product_gate["opportunity_state"] == "required"
-        and "product_links" not in omit_required
-    ):
+    if product_gate["opportunity_state"] == "required" and "product_links" not in omit_required:
         candidate_id = product_gate["selected_ids"][0]
         used["product_links"].append(candidate_id)
         paragraph_two_placeholders.append(
@@ -194,7 +186,8 @@ def _response(package, *, omit_required=None, raw_url=False, cjk=False):
 
 
 def _package_from_prompt(user_prompt: str):
-    return json.loads(user_prompt.split("SECTION PACKAGE\n", 1)[1])
+    payload = user_prompt.split("SECTION PACKAGE\n", 1)[1]
+    return json.JSONDecoder().raw_decode(payload)[0]
 
 
 def test_generation_package_is_compact_scoped_and_deterministic():
@@ -259,10 +252,7 @@ def test_related_catalog_product_is_required_without_exact_use_case_claims():
     assert package["link_gates"]["product_links"]["opportunity_state"] == "required"
     assert package["link_gates"]["product_links"]["min_required"] == 1
     assert package["candidates"]["products"]
-    assert all(
-        item["fit_level"] == "related_catalog"
-        for item in package["candidates"]["products"]
-    )
+    assert all(item["fit_level"] == "related_catalog" for item in package["candidates"]["products"])
     assert "related catalog option" in prompt["system"]
     assert "never claim it was designed for" in prompt["system"]
 
@@ -324,9 +314,7 @@ def test_valid_section_response_passes_required_link_gates():
 
 def test_unknown_product_fit_level_is_rejected():
     sections, shadow = _setup()
-    section = next(
-        item for item in sections["sections"] if item["reader_stage"] == "select"
-    )
+    section = next(item for item in sections["sections"] if item["reader_stage"] == "select")
     manifest_section = next(
         item
         for item in shadow["context_manifest"]["sections"]
@@ -383,12 +371,8 @@ def test_used_reason_code_is_canonicalized_from_verified_placeholders():
     )
 
     output = parse_section_generation_response(response, package)
-    used_type = next(
-        key for key, value in output["used_ids"].items() if value
-    )
-    assert output["decisions"][used_type]["reason_code"] == (
-        "used_approved_candidate"
-    )
+    used_type = next(key for key, value in output["used_ids"].items() if value)
+    assert output["decisions"][used_type]["reason_code"] == ("used_approved_candidate")
 
 
 def test_blank_used_reason_code_is_canonicalized():
@@ -401,12 +385,8 @@ def test_blank_used_reason_code_is_canonicalized():
     )
 
     output = parse_section_generation_response(response, package)
-    used_type = next(
-        key for key, value in output["used_ids"].items() if value
-    )
-    assert output["decisions"][used_type]["reason_code"] == (
-        "used_approved_candidate"
-    )
+    used_type = next(key for key, value in output["used_ids"].items() if value)
+    assert output["decisions"][used_type]["reason_code"] == ("used_approved_candidate")
 
 
 def test_blank_unused_reason_code_is_rejected():
@@ -429,8 +409,7 @@ def test_internal_links_in_separate_sentences_are_split_into_paragraphs():
     blocks = markdown_text.split("\n\n")
     assert len(blocks) == 3
     dense_response = (
-        f"{blocks[0]}\n\n{blocks[1]} {blocks[2]}"
-        f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+        f"{blocks[0]}\n\n{blocks[1]} {blocks[2]}{SECTION_DECISIONS_MARKER}{decisions_text}"
     )
 
     output = parse_section_generation_response(dense_response, package)
@@ -465,8 +444,7 @@ def test_six_prose_paragraphs_are_compacted_without_losing_links():
         "Established site procedures remain part of a responsible selection process.",
     ]
     six_paragraph_response = (
-        f"{blocks[0]}\n\n" + "\n\n".join(paragraphs)
-        + f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+        f"{blocks[0]}\n\n" + "\n\n".join(paragraphs) + f"{SECTION_DECISIONS_MARKER}{decisions_text}"
     )
 
     output = parse_section_generation_response(six_paragraph_response, package)
@@ -511,8 +489,7 @@ def test_two_internal_links_in_one_sentence_still_fail_closed():
     article_end = first.index("]]", first.index("[[ARTICLE:")) + 2
     first = first[:article_end] + f" and {product_placeholder}" + first[article_end:]
     invalid_response = (
-        f"{blocks[0]}\n\n{first}\n\n{second}"
-        f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+        f"{blocks[0]}\n\n{first}\n\n{second}{SECTION_DECISIONS_MARKER}{decisions_text}"
     )
 
     with pytest.raises(SectionGenerationError, match="at most one internal link"):
@@ -557,12 +534,14 @@ def test_checkpoint_round_trip_and_stale_context_invalidation(tmp_path):
 def test_corrupted_section_checkpoint_is_not_resumed(tmp_path):
     package = _package_for_stage("select")
     output = parse_section_generation_response(_response(package), package)
-    path = Path(persist_section_checkpoint(
-        tmp_path,
-        "marking-guide",
-        package,
-        output,
-    ))
+    path = Path(
+        persist_section_checkpoint(
+            tmp_path,
+            "marking-guide",
+            package,
+            output,
+        )
+    )
     checkpoint = json.loads(path.read_text(encoding="utf-8"))
     checkpoint["output"]["summary"] = "Corrupted summary"
     path.write_text(json.dumps(checkpoint), encoding="utf-8")
@@ -575,12 +554,14 @@ def test_checkpoint_atomic_write_restores_previous_bytes(tmp_path, monkeypatch):
 
     package = _package_for_stage("select")
     output = parse_section_generation_response(_response(package), package)
-    path = Path(persist_section_checkpoint(
-        tmp_path,
-        "marking-guide",
-        package,
-        output,
-    ))
+    path = Path(
+        persist_section_checkpoint(
+            tmp_path,
+            "marking-guide",
+            package,
+            output,
+        )
+    )
     snapshot = path.read_bytes()
 
     def fail_replace(source, destination):
@@ -644,6 +625,139 @@ def test_sequence_stops_on_failure_then_resumes_valid_checkpoints(tmp_path):
     assert result["resumed_count"] == 1
     assert result["generated_count"] == 2
     assert resumed_calls == sections["section_order"][1:]
+
+
+def test_sequence_repairs_one_word_count_miss_then_persists_checkpoint(tmp_path):
+    sections, shadow = _setup()
+    first_id = sections["section_order"][0]
+    baseline_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        first_id,
+        previous_summary="",
+    )
+    baseline_count = parse_section_generation_response(
+        _response(baseline_package),
+        baseline_package,
+    )["word_count"]
+    first_contract = next(item for item in sections["sections"] if item["section_id"] == first_id)
+    first_contract["target_words"] = {
+        "min": baseline_count + 5,
+        "max": baseline_count + 80,
+    }
+    calls = []
+
+    def generate(system, user):
+        package = _package_from_prompt(user)
+        calls.append({"system": system, "user": user})
+        response = _response(package)
+        if len(calls) == 1:
+            return response
+        if "WORD COUNT REPAIR" in user:
+            extra = (
+                "The approved guidance also benefits from a little more practical "
+                "context so readers can apply the same supported factors consistently "
+                "without adding a new claim."
+            )
+            return response.replace(
+                f"\n{SECTION_DECISIONS_MARKER}",
+                f"\n\n{extra}\n{SECTION_DECISIONS_MARKER}",
+            )
+        return response
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    assert result["complete"] is True
+    assert result["word_count_retry_count"] == 1
+    assert len(calls) == len(sections["section_order"]) + 1
+    assert "WORD COUNT REPAIR" in calls[1]["user"]
+    assert "PREVIOUS RESPONSE" in calls[1]["user"]
+    first_output = result["outputs"][0]
+    assert first_output["word_count"] >= first_contract["target_words"]["min"]
+    assert (
+        load_section_checkpoint(
+            tmp_path,
+            "marking-guide",
+            build_section_generation_package(
+                sections,
+                shadow["section_link_contracts"],
+                shadow["context_manifest"],
+                first_id,
+                previous_summary="",
+            ),
+        )
+        == first_output
+    )
+
+
+def test_sequence_does_not_retry_non_length_generation_errors(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def generate(system, user):
+        package = _package_from_prompt(user)
+        calls.append(package["section_id"])
+        return _response(package, raw_url=True)
+
+    with pytest.raises(SectionGenerationError, match="raw links"):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=generate,
+        )
+
+    assert calls == [sections["section_order"][0]]
+
+
+def test_sequence_limits_word_count_repair_to_one_attempt(tmp_path):
+    sections, shadow = _setup()
+    first_id = sections["section_order"][0]
+    baseline_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        first_id,
+        previous_summary="",
+    )
+    baseline_count = parse_section_generation_response(
+        _response(baseline_package),
+        baseline_package,
+    )["word_count"]
+    first_contract = next(item for item in sections["sections"] if item["section_id"] == first_id)
+    first_contract["target_words"] = {
+        "min": baseline_count + 5,
+        "max": baseline_count + 80,
+    }
+    calls = []
+
+    def remain_short(system, user):
+        package = _package_from_prompt(user)
+        calls.append(user)
+        return _response(package)
+
+    with pytest.raises(SectionGenerationError, match="section word count"):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_short,
+        )
+
+    assert len(calls) == 2
+    assert "WORD COUNT REPAIR" in calls[1]
 
 
 def _completed_section_run():
@@ -752,24 +866,28 @@ def test_article_frame_rejects_six_takeaways_or_five_faqs():
     output = parse_article_frame_response(_frame_response(), package)
 
     too_many_takeaways = copy.deepcopy(output)
-    too_many_takeaways["key_takeaways"].extend([
-        "Keep catalog facts consistent.",
-        "Use only approved evidence.",
-    ])
+    too_many_takeaways["key_takeaways"].extend(
+        [
+            "Keep catalog facts consistent.",
+            "Use only approved evidence.",
+        ]
+    )
     with pytest.raises(SectionGenerationError, match="takeaway count"):
         validate_article_frame_output(too_many_takeaways, package)
 
     too_many_faqs = copy.deepcopy(output)
-    too_many_faqs["faq"].extend([
-        {
-            "question": "How should teams document the final selection?",
-            "answer": "Teams should record the task, chosen product, relevant catalog facts, and approved evidence so the recommendation remains traceable and maintainable.",
-        },
-        {
-            "question": "When should the selection be reviewed again?",
-            "answer": "The selection should be reviewed when the catalog, working conditions, product data, or applicable site procedures materially change.",
-        },
-    ])
+    too_many_faqs["faq"].extend(
+        [
+            {
+                "question": "How should teams document the final selection?",
+                "answer": "Teams should record the task, chosen product, relevant catalog facts, and approved evidence so the recommendation remains traceable and maintainable.",
+            },
+            {
+                "question": "When should the selection be reviewed again?",
+                "answer": "The selection should be reviewed when the catalog, working conditions, product data, or applicable site procedures materially change.",
+            },
+        ]
+    )
     with pytest.raises(SectionGenerationError, match="FAQ count"):
         validate_article_frame_output(too_many_faqs, package)
 
@@ -796,19 +914,24 @@ def test_article_frame_checkpoint_round_trip_and_resume(tmp_path):
     section_run = _completed_section_run()
     package = build_article_frame_package(section_run)
     output = parse_article_frame_response(_frame_response(), package)
-    path = Path(persist_article_frame_checkpoint(
-        tmp_path,
-        "marking-guide",
-        package,
-        output,
-    ))
+    path = Path(
+        persist_article_frame_checkpoint(
+            tmp_path,
+            "marking-guide",
+            package,
+            output,
+        )
+    )
 
     assert path == article_frame_checkpoint_path(tmp_path, "marking-guide")
-    assert load_article_frame_checkpoint(
-        tmp_path,
-        "marking-guide",
-        package,
-    ) == output
+    assert (
+        load_article_frame_checkpoint(
+            tmp_path,
+            "marking-guide",
+            package,
+        )
+        == output
+    )
 
     calls = []
 
@@ -831,21 +954,26 @@ def test_corrupted_article_frame_checkpoint_is_not_resumed(tmp_path):
     section_run = _completed_section_run()
     package = build_article_frame_package(section_run)
     output = parse_article_frame_response(_frame_response(), package)
-    path = Path(persist_article_frame_checkpoint(
-        tmp_path,
-        "marking-guide",
-        package,
-        output,
-    ))
+    path = Path(
+        persist_article_frame_checkpoint(
+            tmp_path,
+            "marking-guide",
+            package,
+            output,
+        )
+    )
     checkpoint = json.loads(path.read_text(encoding="utf-8"))
     checkpoint["output"]["introduction"] = "Too short."
     path.write_text(json.dumps(checkpoint), encoding="utf-8")
 
-    assert load_article_frame_checkpoint(
-        tmp_path,
-        "marking-guide",
-        package,
-    ) is None
+    assert (
+        load_article_frame_checkpoint(
+            tmp_path,
+            "marking-guide",
+            package,
+        )
+        is None
+    )
 
 
 def test_article_frame_generation_writes_checkpoint_once(tmp_path):

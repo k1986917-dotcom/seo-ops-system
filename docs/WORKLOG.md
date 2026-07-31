@@ -1,3 +1,34 @@
+## 2026-08-01 — Section word-count 单次受控修订
+
+### 第七次真实 shadow
+
+- 基线 `8922636e54cf0f5d825f4197ca66ad6e86d420c5`，Action #3 只运行一次
+  `--resume-existing`；POST=1，未重试，rollout 最终 off，promotion manifest 不存在。
+- 正式四个 SHA、Action `w1b_pre_check/in_progress` 和 Git 均未变化；数据库仅因合法
+  AI 审计由 153 增至 157。
+- AI runs #154–157 均为 `legacy_write_sectional_body / success`。前三节新 checkpoint
+  分别为 372、413、426 词；第四节返回 346 词，parser 以
+  `section word count 346 is outside 350-500` 停止，未写入该 checkpoint。
+- 由于流程尚未完成 body sequence，本次没有产生新的 resolved delivery、assembly 或
+  comparison。旧 `resolved-delivery.json` 的 2525 词和旧链接统计属于前一次候选。
+
+### 修复
+
+- `run_section_generation_sequence()` 只对精确的 section word-count 越界错误建立一次
+  repair prompt。修订目标位于原合同内部安全区，保留 H2、事实含义、approved
+  placeholders、link decisions 和 2–5 段结构，并禁止新事实、URL、产品、规格、法规、
+  统计或 evidence ID。
+- 350–500 合同不放宽；非字数错误不重试；第二次仍越界直接抛错；有效旧 checkpoint
+  继续 resume，成功修订后才原子保存新 checkpoint。
+- 新增 `word_count_retry_count` 运行指标，并覆盖成功修订、非长度错误、单次上限三条测试。
+
+### 验证
+
+- `tests/test_sectional_generation.py`：34 passed。
+- Sectional writing/context/generation/delivery/assembly/adapter/pipeline/repair/rollout/runner
+  联合组：173 passed（排除唯一已知 MCP Landlock Web 导入限制）。
+- Legacy/W1b 非 Web 兼容组通过；Ruff、format、compileall、`git diff --check` 全部通过。
+
 ## 2026-07-31 — 全文链接配额协调与 Cluster 字数合同
 
 ### 第六次真实 shadow 结果
