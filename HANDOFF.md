@@ -2,6 +2,43 @@
 
 最后更新：2026-07-31（Europe/Paris）
 
+## 2026-07-31 — 章节化写作与链接机会门禁正式规划
+
+- 已确认整体方向：全局 Article Blueprint 保证逻辑，H2 Section Contract 控制每节完整
+  上下文，Evidence Contract 绑定事实，Link Contract 分开处理文章内链、产品内链和外部
+  引用，最后由服务端确定性组装并运行全文门禁。
+- 链接最低值不统一设为 0。服务端先输出 `required|recommended|none` 机会状态；
+  `required` 最低 1，`recommended` 可为 0 但必须返回拒绝原因，`none` 才允许无决策地
+  不放该类链接。产品和文章内链分别计算，不能互相替代。
+- 产品链接必须满足章节已进入选型/解决方案阶段、产品在售、属性匹配且正文已解释理由；
+  安全警告、法规和事故分析章节默认禁止具体产品链接。
+- 写作模型只输出 ARTICLE/PRODUCT/CITE 占位符；URL、库存、ID、锚文本和重复目标由
+  服务端验证和绑定。
+- 已撤回本会话未完成的 claim-ledger 试验补丁，恢复干净 `71e6c91`，避免在旧整篇架构
+  上继续堆叠临时修复。
+- 新增 ADR-0026 和 `docs/SECTIONAL_WRITING_IMPLEMENTATION_PLAN.md`。正式实施按 Phase 1–7
+  原子推进，每步更新计划、Handoff、Worklog 和测试结果。
+
+### Phase 1 已完成
+
+- 新增 `src/seo_ops/services/sectional_writing.py`，提供 Article Blueprint、Section
+  Contract、Section Link Contract 的确定性构建、严格校验、加载和带回滚持久化。
+- Section ID 只取决于规范化标题，不因章节重排而变化；重复标题 fail-closed。
+- 未经 Phase 2 评估的链接机会只能是 `unassessed + min_required=null`，不能静默写成 0。
+- `required` 状态必须存在候选且最低值至少为 1；安全/法规章节产品链接为明确 `none`。
+- 10 项专项测试、Ruff、compileall 和 `git diff --check` 通过；新模块未被正式 Legacy
+  workflow 导入，W0/W1b/W2 行为不变。
+- MCP 沙箱无法完成全量 pytest：测试收集导入 `openpyxl` 时读取 `/etc/mime.types`
+  被 Landlock 拒绝。这是已知执行环境限制，不是测试断言失败；提交前仍须由本机运行
+  完整 `.venv/bin/python -m pytest -q`。
+
+### 当前下一步
+
+1. 本机运行完整 pytest；全绿后提交并推送 Phase 0+1 原子变更。
+2. Phase 2 以 shadow mode 读取站内文章、在售产品和 evidence cards，计算候选与机会状态。
+3. 保存 Context Manifest，评估“明显有机会却没有候选”与“有候选却输出 0”的比例。
+4. 只有 shadow 与测试通过后，才启用章节生成、章节 ledger 和局部修订。
+
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 
 - 真实 Action #3 在 `4b3c914` 上再次验收：一次 W1b 批次内部两次

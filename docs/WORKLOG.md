@@ -1,3 +1,49 @@
+## 2026-07-31 — 章节化写作架构与链接机会门禁规划
+
+### 背景
+
+- Action #3 的真实验收已证明正文修订能够在关闭 DeepSeek thinking 后成功，但全文
+  claim-ledger 仍可能把输出预算全部用于 reasoning。
+- 现有链接检查以字数比例和全文位置为主，不能区分自然链接机会与模型偷懒。
+
+### 本次完成
+
+- 撤回尚未完成、未测试的 claim-ledger 上下文试验修改，工作区恢复到干净
+  `71e6c91c42cf175ee0a94308c3c005c14b7a4f86` 后再开始正式设计。
+- 新增 ADR-0026，确定全局蓝图、H2 章节合同、证据合同、文章/产品链接合同、服务端
+  占位符绑定、章节 ledger、局部修订和全文最终门禁。
+- 新增 `docs/SECTIONAL_WRITING_IMPLEMENTATION_PLAN.md`，拆分 Phase 0–7，明确每阶段
+  行为边界、测试、feature flag、shadow mode 和回滚方式。
+- 设计条件最低值：只有机会状态为 `none` 才自然允许 0；`required` 最低 1；
+  `recommended` 可为 0 但必须提供拒绝原因。这样既不强塞链接，也不允许 AI 静默偷懒。
+
+### 安全状态
+
+- 未修改正式 W0/W1b/W2 行为。
+- 未运行真实 API 或真实 Action。
+- 未修改 draft、claim ledger、w2-state、数据库、evidence ledger 或 material pack。
+
+### 下一步
+
+实施 Phase 2：候选注册、机会评分和 Context Manifest，默认 shadow-only，不接管正式 W0。
+
+### Phase 1 实施结果
+
+- 新增 `src/seo_ops/services/sectional_writing.py`：构建、验证、持久化和加载 Article、
+  Section、Link 三类合同。
+- Section ID 不依赖章节位置；链接机会在未评估时强制为 `unassessed`，其
+  `min_required` 必须为 `null`，从数据结构上避免默认 0。
+- 比较、选型和使用章节允许进入产品候选评估；发现/理解章节默认不允许，安全/法规章节
+  明确禁止。是否最终放链接仍由 Phase 2 机会评分决定。
+- 新增 10 项专项测试，覆盖稳定 ID、顺序/主题对齐、机会状态约束、重复标题、确定性
+  round-trip 和部分替换回滚。
+- `.venv/bin/python -m pytest tests/test_sectional_writing.py -q`：10 passed。
+- Ruff、compileall、`git diff --check`：通过。
+- `.venv/bin/python -m pytest -q` 与排除 integration 后的广泛测试均在收集阶段被 MCP
+  Landlock 阻断：`openpyxl -> mimetypes` 读取 `/etc/mime.types` 触发
+  `PermissionError`。未出现代码断言失败；完整测试需由本机环境运行。
+- 正式 W0/W1b/W2 未导入新模块，未运行真实 API 或 Action。
+
 # 工作日志
 
 ## 2026-07-31 — W1b 正文 AI 空响应安全重试

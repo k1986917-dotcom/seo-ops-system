@@ -27,6 +27,11 @@
 
 ### Added
 
+- 新增章节化写作 Phase 1 合同层：稳定 Article Blueprint、Section Contract 和 Section
+  Link Contract，可严格校验、确定性重建并以三文件 bundle 带回滚保存；目前未接管正式
+  W0。
+- 新增链接机会四态合同。未评估机会必须使用 `unassessed + min_required=null`；只有经过
+  判断的 `none` 才允许最低值为 0，`required` 必须有候选且最低值至少为 1。
 - 新增 `POST /api/hermes/runs`、`GET /api/hermes/sites`、
   `GET /api/hermes/runs/{action_id}` 和 `/prompt`，支持 Hermes 以站点、
   选题和可选要求启动/恢复持久文章任务。
