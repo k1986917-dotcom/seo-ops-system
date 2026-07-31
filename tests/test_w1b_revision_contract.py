@@ -866,6 +866,70 @@ class TestW1bCandidateGate:
         )
         return lw, workspace, slug, draft, claim
 
+    def test_empty_revision_body_is_retryable_without_touching_live_pair(
+        self, tmp_path, monkeypatch
+    ):
+        topic = "empty revision response"
+        lw, workspace, _slug, draft, claim = self._workspace(
+            tmp_path, topic
+        )
+        old_draft = draft.read_bytes()
+        old_claim = claim.read_bytes()
+
+        monkeypatch.setattr(
+            lw,
+            "resolve_tier",
+            lambda *args, **kwargs: "Cluster Content",
+        )
+        monkeypatch.setattr(
+            lw,
+            "_revision_context_contracts",
+            lambda *args, **kwargs: (
+                {"brief": {}, "coverage": {}, "cards": {}},
+                "ev_001: support | https://example.com",
+            ),
+        )
+        monkeypatch.setattr(
+            lw,
+            "_w1b_precheck_data",
+            lambda *args, **kwargs: {
+                "fail_count": 1,
+                "checks": [{
+                    "item": "事实校验",
+                    "pass": False,
+                    "detail": "repair this",
+                }],
+            },
+        )
+
+        async def empty_ai(*args, **kwargs):
+            raise ValueError("AI 返回空文本")
+
+        monkeypatch.setattr(lw, "_run_ai_text", empty_ai)
+
+        result = asyncio.run(
+            lw.stage_w1b_revise(
+                topic,
+                "Cluster Content",
+                workspace,
+            )
+        )
+
+        assert result == {
+            "success": False,
+            "revised": False,
+            "retryable": True,
+            "error": "AI 返回空文本",
+        }
+        assert draft.read_bytes() == old_draft
+        assert claim.read_bytes() == old_claim
+        assert not list((workspace / "drafts").glob("*.precheck-rev*.md"))
+        assert not list(
+            (workspace / "research").glob(
+                "claim-ledger-*.precheck-rev*.json"
+            )
+        )
+
     def test_rejected_candidate_never_replaces_live_pair(
         self, tmp_path, monkeypatch
     ):

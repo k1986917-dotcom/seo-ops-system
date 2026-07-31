@@ -2,6 +2,23 @@
 
 最后更新：2026-07-31（Europe/Paris）
 
+## 2026-07-31 — W1b 正文 AI 空响应安全重试（待本机验证）
+
+- 真实 Action #3 在 `legacy_write_revise_body` 调用收到 HTTP 成功但正文为空，
+  状态正确记录 `AI 返回空文本`，正式 draft/claim-ledger SHA 未变化，W2/W3 未运行。
+- `stage_w1b_revise` 现在只把这一种明确的空文本错误标记为 `retryable`，让现有
+  两次上限批次安全使用第二次尝试；HTTP、鉴权、超时和其他供应商错误仍立即停止，
+  不隐藏故障或无限增加 API 调用。
+- 新增回归测试，要求空响应时不创建备份、不替换正式 draft/claim ledger，并返回
+  `revised=false`、`retryable=true`。
+- 当前仅完成代码审查、补丁和 `git diff --check`；本机专项/全量测试、提交和推送待执行。
+
+### 下一步
+
+1. 本机运行新增专项测试、W1b 合同回归、Ruff、compileall、全量 pytest。
+2. 全部通过后提交并推送；随后只运行一次真实 Action #3 W1b 批次。
+3. 若第二次仍为空或出现其他 AI/API 错误，保留正式产物并停止报告；不得运行 W2/W3。
+
 ## 2026-07-31 — W1b 事实清理安全加固
 
 - W1b 的无证据事实清理现在只作用于正文：代码围栏和 FAQ JSON-LD 会先被保护，

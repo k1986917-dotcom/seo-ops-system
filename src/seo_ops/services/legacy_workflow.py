@@ -3622,7 +3622,18 @@ Return the revised article Markdown only."""
             settings=settings, max_tokens=16000,
         ))
     except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        error = str(exc)
+        # Some OpenAI-compatible providers occasionally return a successful
+        # HTTP response with an empty assistant message.  No candidate exists
+        # in that case, so the bounded batch may safely spend its second
+        # attempt on the same live draft.  Other transport/provider failures
+        # remain fail-fast so we do not hide outages or multiply API calls.
+        return {
+            "success": False,
+            "revised": False,
+            "retryable": error == "AI 返回空文本",
+            "error": error,
+        }
 
     if not new_draft_md:
         return {"success": False, "error": "修订输出文章正文为空"}
