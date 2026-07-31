@@ -194,6 +194,47 @@ blocker 前不启用 promotion。
   `w1b_pre_check/in_progress`；四个正式 SHA 全部保持原值。
 - 完整项目 pytest 在 MCP 长会话完成前被执行器回收，未获得可靠终态，因此未计为通过。
 
+## 2026-07-31 — Section 2-5 段统一规范化
+
+### 第五次真实失败
+
+- `958332b` 推送后，Action #3 通过 `--resume-existing` 发送一次正式 shadow POST。
+- 原有第一节 checkpoint 保持有效；第二节成功生成并落盘
+  `checkpoints/section-04981e6fc7.json`，其正文为 4 段、291 词。
+- 数据库新增 `ai_runs #137/#138`，两条均为
+  `legacy_write_sectional_body / success / deepseek-v4-flash`。`#137` 对应已落盘第二节，
+  `#138` 对应第三节返回后校验失败。
+- 第三节因 `section must contain 2-5 coherent paragraphs` 停止。正式 draft、claim ledger、
+  w2-state、`.env` 与 Action 行均未改变；无 assembly/comparison/promotion 产物。
+- 当前 resumable root 只有两个已验证 checkpoint：
+  `section-901f779818.json`、`section-04981e6fc7.json`。
+
+### 修复
+
+- 原有规范化器只会按句界拆开同段多个 ARTICLE/PRODUCT，占位符较多时可能把正文拆成
+  6 段以上，再被 2-5 段门禁拒绝。
+- 新规范化器同时处理三个安全格式问题：
+  1. 同段多个内部链接位于不同句子时，按既有句界拆段；
+  2. 纯文本段超过 5 段时，只合并相邻段，并持续保证每段最多一个内部链接；
+  3. 只有 1 个纯文本段时，在最接近中点的既有句界拆成 2 段。
+- 可见文字、顺序、词数、candidate ID、placeholder inventory 和 decisions 不变。
+  structured Markdown 不重排；同一句双内链、超过 5 个无法分配的内部链接或其他不可能
+  布局继续 fail-closed。
+- 句界识别跳过常见缩写和 initialism，例如 `e.g.`、`i.e.`、`U.S.`，避免把缩写句点误判
+  为可拆分边界。
+- 段落数量错误现在包含实际计数，便于后续真实验收直接定位。
+
+### 验证
+
+- generation 专项：`31 passed`。
+- generation/repair/runner：`64 passed`。
+- Phase 1-7 sectional、版本和 runner：`173 passed`。
+- Legacy 主流程、W1b/FAQ、sentence-ID strict 合计：`264 passed, 1 warning`；唯一 warning
+  仍为既有 Starlette/httpx 弃用提示。
+- Ruff、compileall、`git diff --check` 通过。
+- 当前两个 checkpoint 已通过 runner 的 resumable-root 白名单复核。
+- 完整项目 pytest 的 MCP 长会话再次被回收，未获得可靠终态，因此未计为通过。
+
 ## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
 
 ### 核实结论

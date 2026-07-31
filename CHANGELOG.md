@@ -36,6 +36,13 @@
   split that paragraph only at existing sentence boundaries, preserving every
   visible word and placeholder. Multiple internal links in the same sentence
   still fail closed.
+- Section paragraph normalization now also keeps validated prose within the
+  canonical 2-5 paragraph range. It may merge adjacent prose paragraphs or
+  split one long prose paragraph at an existing sentence boundary while
+  preserving wording, order and placeholders. Structured Markdown and
+  impossible link layouts remain fail-closed, and paragraph-count errors now
+  report the observed count. Conservative sentence splitting protects common
+  abbreviations and initialisms such as `e.g.` and `U.S.`.
 - Section decisions no longer fail because the model repeats an inconsistent
   `reason_code` for a candidate that is visibly used. ARTICLE/PRODUCT/CITE
   placeholders and `used_ids` remain strictly matched and allowlisted; once

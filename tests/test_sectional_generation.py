@@ -442,6 +442,61 @@ def test_internal_links_in_separate_sentences_are_split_into_paragraphs():
         assert block.count("[[ARTICLE:") + block.count("[[PRODUCT:") <= 1
 
 
+def test_six_prose_paragraphs_are_compacted_without_losing_links():
+    package = _package_for_stage("select")
+    response = _response(package)
+    markdown_text, decisions_text = response.split(SECTION_DECISIONS_MARKER, 1)
+    blocks = markdown_text.split("\n\n")
+    article_start = blocks[1].index("[[ARTICLE:")
+    article_end = blocks[1].index("]]", article_start) + 2
+    article_placeholder = blocks[1][article_start:article_end]
+    product_start = blocks[2].index("[[PRODUCT:")
+    product_end = blocks[2].index("]]", product_start) + 2
+    product_placeholder = blocks[2][product_start:product_end]
+    cite_start = blocks[2].index("[[CITE:")
+    cite_end = blocks[2].index("]]", cite_start) + 2
+    cite_placeholder = blocks[2][cite_start:cite_end]
+    paragraphs = [
+        "Clear marking keeps the crew focused on the intended ceiling location.",
+        f"Teams can review {article_placeholder} before choosing the work method.",
+        "Working distance and ambient light both affect practical visibility.",
+        f"The approved {product_placeholder} should match the actual task conditions.",
+        f"Catalog evidence should support every product statement in the section {cite_placeholder}.",
+        "Established site procedures remain part of a responsible selection process.",
+    ]
+    six_paragraph_response = (
+        f"{blocks[0]}\n\n" + "\n\n".join(paragraphs)
+        + f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+    )
+
+    output = parse_section_generation_response(six_paragraph_response, package)
+
+    assert output["paragraph_count"] == 5
+    assert output["used_ids"]["article_links"]
+    assert output["used_ids"]["product_links"]
+    assert all(paragraph in output["markdown"] for paragraph in paragraphs[2:])
+    for block in output["markdown"].split("\n\n")[1:]:
+        assert block.count("[[ARTICLE:") + block.count("[[PRODUCT:") <= 1
+
+
+def test_single_prose_paragraph_is_split_at_an_existing_sentence_boundary():
+    package = _package_for_stage("discover")
+    response = _response(package)
+    markdown_text, decisions_text = response.split(SECTION_DECISIONS_MARKER, 1)
+    blocks = markdown_text.split("\n\n")
+    one_paragraph_response = (
+        f"{blocks[0]}\n\n{blocks[1]} "
+        f"U.S. safety guidance remains relevant for professional work. {blocks[2]}"
+        f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+    )
+
+    output = parse_section_generation_response(one_paragraph_response, package)
+
+    assert output["paragraph_count"] == 2
+    assert "U.S. safety guidance" in output["markdown"]
+    assert "U.S.\n\nsafety guidance" not in output["markdown"]
+
+
 def test_two_internal_links_in_one_sentence_still_fail_closed():
     package = _package_for_stage("select")
     response = _response(package)

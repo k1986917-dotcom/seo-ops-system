@@ -59,7 +59,12 @@ _RAW_URL = re.compile(r"https?://", re.IGNORECASE)
 _RAW_MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\((?:https?://|/)[^)]+\)")
 _HTML_LINK = re.compile(r"<a\s+[^>]*href\s*=", re.IGNORECASE)
 _WORD = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
-_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+_POTENTIAL_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+_COMMON_ABBREVIATION = re.compile(
+    r"\b(?:e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|sr|jr|st|no)\.$",
+    re.IGNORECASE,
+)
+_INITIALISM = re.compile(r"(?:[A-Za-z]\.){2,}$")
 
 
 class SectionGenerationError(ContractValidationError):
@@ -493,42 +498,136 @@ def _internal_placeholder_count(value: str) -> int:
     )
 
 
-def _split_dense_internal_link_paragraphs(markdown: str) -> str:
-    """Split prose only at existing sentence boundaries when links collide.
+def _plain_prose_block(value: str) -> bool:
+    return not any(
+        re.match(r"^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```|~~~|\|)", line.strip())
+        for line in value.splitlines()
+        if line.strip()
+    )
 
-    The visible wording and placeholder inventory stay byte-for-byte identical
-    apart from whitespace.  If two internal placeholders occur inside one
-    sentence, the function leaves that paragraph unchanged so the strict
-    validator still fails closed instead of guessing where a link belongs.
+
+def _split_prose_sentences(value: str) -> list[str]:
+    sentences: list[str] = []
+    cursor = 0
+    for match in _POTENTIAL_SENTENCE_BREAK.finditer(value):
+        candidate = value[cursor : match.start()].strip()
+        if not candidate:
+            cursor = match.end()
+            continue
+        if _COMMON_ABBREVIATION.search(candidate) or _INITIALISM.search(candidate):
+            continue
+        sentences.append(candidate)
+        cursor = match.end()
+    tail = value[cursor:].strip()
+    if tail:
+        sentences.append(tail)
+    return sentences
+
+
+def _link_safe_sentence_groups(block: str) -> list[str] | None:
+    sentences = _split_prose_sentences(block)
+    if not sentences or any(_internal_placeholder_count(item) > 1 for item in sentences):
+        return None
+    groups: list[list[str]] = []
+    current: list[str] = []
+    current_internal_count = 0
+    for sentence in sentences:
+        sentence_internal_count = _internal_placeholder_count(sentence)
+        if sentence_internal_count and current_internal_count:
+            groups.append(current)
+            current = [sentence]
+            current_internal_count = sentence_internal_count
+            continue
+        current.append(sentence)
+        current_internal_count += sentence_internal_count
+    if current:
+        groups.append(current)
+    return [" ".join(group) for group in groups]
+
+
+def _merge_paragraph_groups(groups: list[str], limit: int = 5) -> list[str] | None:
+    merged = list(groups)
+    while len(merged) > limit:
+        candidates: list[tuple[int, int, int]] = []
+        for index in range(len(merged) - 1):
+            combined_internal_count = _internal_placeholder_count(
+                merged[index] + " " + merged[index + 1]
+            )
+            if combined_internal_count <= 1:
+                candidates.append(
+                    (
+                        combined_internal_count,
+                        len(merged[index]) + len(merged[index + 1]),
+                        index,
+                    )
+                )
+        if not candidates:
+            return None
+        _, _, index = min(candidates)
+        merged[index : index + 2] = [merged[index] + " " + merged[index + 1]]
+    return merged
+
+
+def _split_single_paragraph(block: str) -> list[str] | None:
+    sentences = _split_prose_sentences(block)
+    if len(sentences) < 2:
+        return None
+    best: tuple[int, list[str]] | None = None
+    target = len(block) // 2
+    for index in range(1, len(sentences)):
+        left = " ".join(sentences[:index])
+        right = " ".join(sentences[index:])
+        if _internal_placeholder_count(left) > 1 or _internal_placeholder_count(right) > 1:
+            continue
+        score = abs(len(left) - target)
+        if best is None or score < best[0]:
+            best = (score, [left, right])
+    return best[1] if best is not None else None
+
+
+def _normalize_section_paragraphs(markdown: str) -> str:
+    """Repair formatting-only paragraph failures without changing content.
+
+    The normalizer preserves visible wording, placeholder inventory and order.
+    It may split only at existing sentence boundaries or merge adjacent prose
+    paragraphs.  Structured Markdown and same-sentence link collisions remain
+    fail-closed.
     """
     blocks = [block.strip() for block in re.split(r"\n\s*\n", markdown.strip())]
     if len(blocks) <= 1:
         return markdown
-    normalized = [blocks[0]]
-    for block in blocks[1:]:
+    heading, body = blocks[0], blocks[1:]
+    needs_normalization = (
+        len(body) < 2
+        or len(body) > 5
+        or any(_internal_placeholder_count(block) > 1 for block in body)
+    )
+    if not needs_normalization or any(not _plain_prose_block(block) for block in body):
+        return markdown
+
+    groups: list[str] = []
+    for block in body:
         if _internal_placeholder_count(block) <= 1:
-            normalized.append(block)
+            groups.append(" ".join(block.split()))
             continue
-        sentences = [item.strip() for item in _SENTENCE_BREAK.split(block) if item.strip()]
-        if not sentences or any(_internal_placeholder_count(item) > 1 for item in sentences):
-            normalized.append(block)
-            continue
-        groups: list[list[str]] = []
-        current: list[str] = []
-        current_has_internal = False
-        for sentence in sentences:
-            sentence_has_internal = _internal_placeholder_count(sentence) == 1
-            if sentence_has_internal and current_has_internal:
-                groups.append(current)
-                current = [sentence]
-                current_has_internal = True
-                continue
-            current.append(sentence)
-            current_has_internal = current_has_internal or sentence_has_internal
-        if current:
-            groups.append(current)
-        normalized.extend(" ".join(group) for group in groups)
-    return "\n\n".join(normalized)
+        split_groups = _link_safe_sentence_groups(block)
+        if split_groups is None:
+            return markdown
+        groups.extend(split_groups)
+
+    if len(groups) > 5:
+        compacted = _merge_paragraph_groups(groups)
+        if compacted is None:
+            return markdown
+        groups = compacted
+    if len(groups) == 1:
+        split_groups = _split_single_paragraph(groups[0])
+        if split_groups is None:
+            return markdown
+        groups = split_groups
+    if not 2 <= len(groups) <= 5:
+        return markdown
+    return "\n\n".join([heading, *groups])
 
 
 def _validate_decisions(
@@ -609,7 +708,7 @@ def parse_section_generation_response(
         SECTION_MARKDOWN_MARKER,
         SECTION_DECISIONS_MARKER,
     )
-    markdown = _split_dense_internal_link_paragraphs(markdown)
+    markdown = _normalize_section_paragraphs(markdown)
     if _CJK.search(markdown):
         raise SectionGenerationError("section markdown must be English")
     if _RAW_URL.search(markdown) or _RAW_MARKDOWN_LINK.search(markdown):
@@ -624,7 +723,9 @@ def parse_section_generation_response(
         raise SectionGenerationError("section must not contain another H1 or H2")
     paragraph_count = _paragraph_count(markdown)
     if not 2 <= paragraph_count <= 5:
-        raise SectionGenerationError("section must contain 2-5 coherent paragraphs")
+        raise SectionGenerationError(
+            f"section must contain 2-5 coherent paragraphs (got {paragraph_count})"
+        )
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
     target = validated_package["target_words"]

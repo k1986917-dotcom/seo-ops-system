@@ -271,10 +271,23 @@
   promotion 产物一律拒绝。真实 Action #3 只读预检确认当前 root 可恢复且只有上述 checkpoint。
 - 修复后 sectional 加版本及 runner `171 passed`；Legacy/W1b/sentence-ID/FAQ 仍为
   `264 passed, 1 warning`。完整项目 pytest 的 MCP 长会话结果再次丢失，未计为通过。
+- 第五次真实 resume shadow 成功恢复第一节并生成第二节有效 checkpoint
+  `checkpoints/section-04981e6fc7.json`；第三节 AI 正文返回后因
+  `section must contain 2-5 coherent paragraphs` 停止。`ai_runs` 从 136 增至 138；正式
+  pair/w2-state/`.env` 与 Action 行不变，无 assembly/comparison/promotion 产物。
+- 已把段落格式修复扩展为统一规范化：同段多内链仍只在既有句界拆分；拆分后超过 5 段时，
+  只合并相邻纯文本段且每段仍最多一个内部链接；AI 只返回 1 个纯文本段时，可在既有句界
+  拆成 2 段。全部可见文字、顺序、candidate ID、placeholder 和 decisions 保持不变。
+  structured Markdown、同一句双内链或无法满足 2-5 段的布局继续 fail-closed。
+- 句界识别已收紧：常见缩写和 initialism（例如 `e.g.`、`U.S.`）后不拆段，避免格式修复
+  破坏英文句子。
+- 本轮验证：generation/repair/runner `64 passed`；sectional、版本和 runner
+  `173 passed`；Legacy/W1b/sentence-ID/FAQ `264 passed, 1 warning`。完整项目 pytest
+  的 MCP 长会话再次丢失，未计为通过。
 
 ### 当前下一步
 
-1. 提交并推送段落规范化与安全 resume 修复。
+1. 提交并推送 2-5 段统一规范化修复。
 2. MCP 核验远端同步后，单独运行
    `.venv/bin/python tools/run_sectional_shadow.py --action-id 3 --resume-existing`；不得删除
    checkpoint、重跑 W0 或启用 promotion，也不得与 push 放进同一执行块。
