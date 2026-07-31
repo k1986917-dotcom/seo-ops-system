@@ -25,8 +25,45 @@
 
 ### 下一步
 
-Phase 6 已完成 shadow 代码和本机全量验证；Phase 5 已推送。下一步提交/推送 Phase 6，
-然后进入 Phase 7。继续保持 shadow-only，不接管正式 W0。
+Phase 7 代码、本机完整 pytest 与兼容回归已完成，Phase 6 已推送。下一步提交/推送
+Phase 7，然后先以 `shadow` 对 Action #3 运行真实候选。比较无 blocker 前不启用 promotion。
+
+## 2026-07-31 — Phase 7 controlled rollout、shadow 对比与事务回滚
+
+### 本次完成
+
+- 新增 `off|shadow|action` rollout policy，默认 `off`。`action` 必须显式 Action ID
+  白名单；Web 与 Hermes 传入数据库 Action ID，未白名单任务继续旧 W0。
+- W0 仍先完成 Legacy 正文、claim ledger 和原子写。sectional 后置运行；任何合同、目录、
+  AI、门禁、比较或提升异常都记录 `failed_keep_legacy`，不撤销旧 W0 成功结果。
+- 新增 `sectional_pipeline.py`，串联合同、候选、逐节正文、article frame、delivery、
+  分单元 ledger 和 assembly，复用已有 checkpoint；只写 sectional shadow 路径。
+- 新增 `sectional_rollout.py`，确定性比较旧/新字数、链接、claim 覆盖、重复句、AI 调用、
+  重试和空响应。覆盖下降、重复增加、出现空响应或重试超过两次时保持 Legacy。
+- promotion 绑定 policy、comparison、assembly 与正式 pair SHA；先写旧 pair 备份和
+  prepared manifest，再事务替换正式 pair，最后写 promoted manifest。任一步失败恢复旧 pair。
+- rollback 验证当前 promoted pair、备份和 manifest SHA；rollback manifest 写失败时恢复
+  promoted pair，保证文件状态和清单状态一致。
+- 新增独立调用预算 `SEO_OPS_SECTIONAL_AI_CALL_LIMIT`，默认 24、允许 8–40；达到上限前
+  fail-closed。同步记录真实调用、prompt 字符、请求 token 上限、重试和空响应。
+- 新增 `.env.example` 配置说明与 `tools/sectional_rollout_control.py`。运维命令可查看
+  Action 决策；回滚必须传 promotion manifest 和确认词 `ROLLBACK`。
+
+### 验证与安全状态
+
+- Phase 1–7 sectional 联合：`136 passed`。
+- W0/Phase 7 聚焦回归：`40 passed`。
+- 本机完整 pytest：`563 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx
+  弃用提示。
+- 本机 Legacy/W1b 完整兼容回归：`264 passed, 1 warning`，未排除
+  `TestPrecheckGateDisplay`；MCP 排除无法导入 Web app 的 5 项后为 `259 passed`。
+- Ruff、compileall、`git diff --check`：通过；旧 `test_legacy_workflow.py` 仅忽略既有 F841。
+- MCP 完整 pytest 仍在收集阶段被 `openpyxl -> mimetypes -> /etc/mime.types` Landlock
+  权限阻止；唯一 warning 为既有 Starlette/httpx 弃用提示。
+- 默认 rollout 为 `off`。未运行真实 AI/API 或 Action，未修改正式生产 draft、ledger、
+  w2-state、数据库或产品数据。
+- Phase 6 已推送；本地与远端 HEAD 均为
+  `358929afac5d4f420b0c288f3a75ad8095762c59`。Phase 7 工作区尚未提交。
 
 ## 2026-07-31 — Phase 6 W1b/W2 失败定位、局部修订与 claim 重映射
 
@@ -60,7 +97,7 @@ Phase 6 已完成 shadow 代码和本机全量验证；Phase 5 已推送。下�
 - Ruff、compileall、`git diff --check`：通过。
 - 正式 W0/W1b/W2 未导入新模块；未调用真实 AI/API，未运行真实 Action，未修改正式
   draft、claim ledger、w2-state、数据库或产品数据。
-- Phase 5 已本地提交为 `287235eb5e18f2bac47ab2164206b4f2fc5d178c`，插件环境无法
+- Phase 6 已本地提交为 `358929afac5d4f420b0c288f3a75ad8095762c59`，插件环境无法
   完成远端认证，当前分支相对远端 `ahead=1`。
 
 ## 2026-07-31 — Phase 5 canonical assembly、FAQ schema 与全局链接审计

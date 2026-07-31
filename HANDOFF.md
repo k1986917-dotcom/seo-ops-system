@@ -149,7 +149,7 @@
   `287235eb5e18f2bac47ab2164206b4f2fc5d178c`
   (`feat: add deterministic sectional assembly`)；本地与远端一致。
 
-### Phase 6 shadow 局部修订代码与全量验证已完成，待提交
+### Phase 6 shadow 局部修订已完成并本地提交，待推送
 
 - 新增 `src/seo_ops/services/sectional_repair.py`，把 W1b/W2 的 checks、fact issues、
   fix items、link issues 和布尔 gate/error 字段规范化为可审计 repair plan。
@@ -174,13 +174,43 @@
   沙箱限制，不是代码回归，本机完整套件已证明全部通过。
 - Ruff、compileall、`git diff --check` 全部通过。正式 W0/W1b/W2 尚未导入 Phase 6；
   未运行真实 AI/API 或 Action，未写正式 draft、ledger、state 或数据库。
+- Phase 6 已本地提交：`358929afac5d4f420b0c288f3a75ad8095762c59`
+  (`feat: add sectional repair workflow`)；插件环境无法完成远端认证，当前分支相对远端
+  `ahead=1`。
+
+### Phase 7 controlled rollout 代码与本机全量验证已完成，待提交
+
+- 新增 `off|shadow|action` 三态 feature flag，默认 `off`。`shadow` 只生成 sectional
+  候选和比较报告；`action` 只有显式 Action ID 白名单才能提升，其他 Action 继续旧 W0。
+- W0 仍先按原路径生成并原子写入 Legacy draft/claim ledger；sectional 在其后运行。
+  sectional 任何异常都返回 `failed_keep_legacy`，不撤销旧 W0 成功结果。
+- 新增完整 shadow pipeline：合同、候选、逐节正文、article frame、章节 ledger、
+  delivery 和 assembly 均使用原有 checkpoint 与全局门禁，正式 pair 仅在 promotion
+  协议通过后替换。
+- shadow comparison 对比字数、链接数、claim 覆盖、重复句、AI 调用、重试和空响应。
+  claim 覆盖退化、重复增加、出现空响应或重试超过两次时保持 Legacy。
+- promotion 要求 Action 白名单、比较报告批准、assembly SHA 匹配、正式 pair SHA 未变化。
+  旧 pair、prepared manifest 和 promoted manifest 均写入后才完成提升；任一步失败恢复旧 pair。
+- rollback 验证 promoted pair 和备份 SHA；最终 rollback manifest 写失败时恢复 promoted pair。
+- 独立 AI 调用预算 `SEO_OPS_SECTIONAL_AI_CALL_LIMIT` 默认 24、范围 8–40；耗尽时立即停止。
+- `tools/sectional_rollout_control.py` 可查看 Action 决策；回滚需要 manifest 和确认词
+  `ROLLBACK`。
+- Phase 1–7 sectional 专项 `136 passed`；W0/Phase 7 聚焦回归 `40 passed`；Ruff、
+  compileall、`git diff --check` 通过。
+- 本机完整 pytest：`563 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx
+  弃用提示，无其他 warning。
+- 本机 Legacy/W1b 完整兼容回归：`264 passed, 1 warning`，未排除
+  `TestPrecheckGateDisplay`。MCP 兼容回归排除无法导入 Web app 的 5 项后为 `259 passed`。
+- Phase 6 已推送：本地与远端 HEAD 均为
+  `358929afac5d4f420b0c288f3a75ad8095762c59`，不再 `ahead 1`。
+- 正式 rollout 仍默认 `off`；未运行真实 AI/API 或真实 Action，未修改正式生产产物。
 
 ### 当前下一步
 
-1. 提交并推送 Phase 6 原子变更。
-2. 进入 Phase 7：shadow 对比、feature flag、单 Action 切换和正式回滚路径。
-3. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
-4. 只有 Phase 7 的 shadow 对比与真实单 Action 验收通过后，才扩大正式启用范围。
+1. 提交并推送 Phase 7 原子变更。
+2. 以 `shadow` 对 Action #3 运行一次真实候选和比较，不允许 promotion。
+3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。
+4. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 

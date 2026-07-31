@@ -589,7 +589,13 @@ async def continue_hermes_run(
         stage = "r5_write_ready"
 
     if stage == "r5_write_ready":
-        w0 = await stage_w0_validate_and_draft(topic, author or "LaserPointerHub", workspace, active_settings)
+        w0 = await stage_w0_validate_and_draft(
+            topic,
+            author or "LaserPointerHub",
+            workspace,
+            active_settings,
+            action_id=action_id,
+        )
         record("w0", w0)
         _update_pipeline_stage(action_id, str(w0.get("stage") or "r5_write_ready"), active_settings)
         if not w0.get("success"):

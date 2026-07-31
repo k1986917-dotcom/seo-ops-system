@@ -19,6 +19,10 @@ CONTENT_AI_CALL_LIMIT_MIN = 3
 CONTENT_AI_CALL_LIMIT_MAX = 10
 CONTENT_AI_CALL_LIMIT_DEFAULT = 4
 GSC_TRUSTED_START_DATE_DEFAULT = "2026-06-22"
+SECTIONAL_WRITING_MODES = {"off", "shadow", "action"}
+SECTIONAL_AI_CALL_LIMIT_MIN = 8
+SECTIONAL_AI_CALL_LIMIT_MAX = 40
+SECTIONAL_AI_CALL_LIMIT_DEFAULT = 24
 
 
 def _bounded_env_int(name: str, default: int, maximum: int) -> int:
@@ -45,6 +49,27 @@ def _gsc_trusted_start_date() -> str:
         return date.fromisoformat(raw).isoformat()
     except ValueError:
         return GSC_TRUSTED_START_DATE_DEFAULT
+
+
+def _sectional_writing_mode() -> str:
+    raw = os.getenv("SEO_OPS_SECTIONAL_WRITING_MODE", "off").strip().casefold()
+    return raw if raw in SECTIONAL_WRITING_MODES else "off"
+
+
+def _sectional_action_allowlist() -> tuple[int, ...]:
+    raw = os.getenv("SEO_OPS_SECTIONAL_ACTION_ALLOWLIST", "")
+    values: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            continue
+        if value > 0:
+            values.add(value)
+    return tuple(sorted(values))
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +106,9 @@ class Settings:
     gsc_oauth_token_file: Path | None = None
     gsc_trusted_start_date: str = GSC_TRUSTED_START_DATE_DEFAULT
     gsc_redirect_uri: str = "http://127.0.0.1:8787"
+    sectional_writing_mode: str = "off"
+    sectional_action_allowlist: tuple[int, ...] = ()
+    sectional_ai_call_limit: int = SECTIONAL_AI_CALL_LIMIT_DEFAULT
 
     @property
     def ai_enabled(self) -> bool:
@@ -147,6 +175,16 @@ def get_settings() -> Settings:
         gsc_trusted_start_date=_gsc_trusted_start_date(),
         gsc_redirect_uri=os.getenv("SEO_OPS_GSC_REDIRECT_URI", f"http://127.0.0.1:{port}").rstrip(
             "/"
+        ),
+        sectional_writing_mode=_sectional_writing_mode(),
+        sectional_action_allowlist=_sectional_action_allowlist(),
+        sectional_ai_call_limit=max(
+            SECTIONAL_AI_CALL_LIMIT_MIN,
+            _bounded_env_int(
+                "SEO_OPS_SECTIONAL_AI_CALL_LIMIT",
+                SECTIONAL_AI_CALL_LIMIT_DEFAULT,
+                SECTIONAL_AI_CALL_LIMIT_MAX,
+            ),
         ),
     )
     settings.ensure_directories()

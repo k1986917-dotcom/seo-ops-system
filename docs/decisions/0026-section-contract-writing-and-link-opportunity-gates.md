@@ -187,6 +187,20 @@ sentence_id、claim_type 和 evidence_ids，claim_text 由服务端从最终 Mar
 W1b/W2 根据失败句定位章节，只重写失败章节；已通过章节保持不变。全文组装后必须重新
 执行全部正式门禁。
 
+### 8. 正式切换必须后置、白名单化并可逆
+
+Legacy W0 始终先按原协议生成并原子写入正式 draft/claim ledger。sectional candidate
+只能在旧 W0 成功后运行，且默认 feature flag 为 `off`。`shadow` 只生成独立候选与比较
+报告；`action` 也只有显式 Action ID 白名单可以进入 promotion。
+
+promotion 必须同时满足：比较报告无 blocker、assembly SHA 与报告一致、正式 pair 自
+shadow 开始后未变化、Action 仍在白名单。提升前保存旧 pair 和 prepared manifest；正式
+pair 与 promoted manifest 任一步失败都恢复旧 pair。rollback 同样验证当前 promoted pair、
+备份和 manifest SHA；rollback manifest 失败时恢复 promoted pair。
+
+首次 rollout 对空 AI 响应、超过两次重试、claim 覆盖下降或重复句增加采取 fail-closed。
+章节化调用使用独立硬预算，避免因逐节和逐单元 ledger 自然增加调用次数而无限消耗。
+
 ### 7.1 局部修订必须保留可证明的不变部分
 
 W1b/W2 failure adapter 必须先把 report 规范化为 SHA 绑定 repair plan，再决定动作：

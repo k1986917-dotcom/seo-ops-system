@@ -2862,6 +2862,88 @@ class TestW0AtomicWriteFailure:
         assert "sentence_id" in ledger_system
         assert "Article sentences (use these S-IDs verbatim)" in ledger_user
 
+    def test_w0_sectional_rollout_is_opt_in_and_failure_keeps_legacy_pair(
+        self,
+        tmp_path,
+        monkeypatch,
+        settings,
+    ):
+        """Default off is a no-op; shadow failure must preserve Legacy success."""
+        from dataclasses import replace
+        from datetime import UTC, datetime
+
+        from seo_ops.services import legacy_workflow as lw
+        from seo_ops.services import sectional_legacy_adapter as adapter
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+        async def fake_ai(purpose, system_prompt, user_prompt, **kwargs):
+            if purpose == "legacy_write_body":
+                return "# Draft\n\nLegacy W0 remains the authoritative fallback.\n"
+            assert purpose == "legacy_write_claim_ledger"
+            return '{"version":1,"claims":[]}'
+
+        async def fake_run(self, script, args):
+            return (json.dumps({"word_count": 500, "warn_count": 0, "checks": []}), "", 0)
+
+        rollout_calls = []
+
+        async def fail_rollout(**kwargs):
+            rollout_calls.append(kwargs)
+            raise RuntimeError("simulated sectional shadow failure")
+
+        monkeypatch.setattr(lw, "_run_ai_text", fake_ai)
+        monkeypatch.setattr(lw.LegacyRunner, "run", fake_run)
+        monkeypatch.setattr(adapter, "run_legacy_sectional_rollout", fail_rollout)
+
+        off_ws = tmp_path / "w0-rollout-off"
+        (off_ws / "material-packs").mkdir(parents=True)
+        (off_ws / "material-packs" / f"w0-rollout-off-{today}.md").write_text(
+            "Material pack content.", encoding="utf-8"
+        )
+        off_result = asyncio.run(
+            lw.stage_w0_validate_and_draft(
+                "w0 rollout off",
+                "Test",
+                off_ws,
+                settings,
+                action_id=3,
+            )
+        )
+        assert off_result["success"] is True
+        assert "sectional_rollout" not in off_result
+        assert rollout_calls == []
+
+        shadow_ws = tmp_path / "w0-rollout-shadow"
+        (shadow_ws / "material-packs").mkdir(parents=True)
+        (shadow_ws / "material-packs" / f"w0-rollout-shadow-{today}.md").write_text(
+            "Material pack content.", encoding="utf-8"
+        )
+        shadow_settings = replace(settings, sectional_writing_mode="shadow")
+        shadow_result = asyncio.run(
+            lw.stage_w0_validate_and_draft(
+                "w0 rollout shadow",
+                "Test",
+                shadow_ws,
+                shadow_settings,
+                action_id=3,
+            )
+        )
+        assert shadow_result["success"] is True
+        assert shadow_result["sectional_rollout"] == {
+            "status": "failed_keep_legacy",
+            "error": "simulated sectional shadow failure",
+        }
+        assert len(rollout_calls) == 1
+        draft_files = list((shadow_ws / "drafts").glob("w0-rollout-shadow-*.md"))
+        assert len(draft_files) == 1
+        claim_path = shadow_ws / "research" / "claim-ledger-w0-rollout-shadow.json"
+        assert claim_path.exists()
+        claim = json.loads(claim_path.read_text(encoding="utf-8"))
+        assert claim["draft_sha256"] == hashlib.sha256(
+            draft_files[0].read_text(encoding="utf-8").encode("utf-8")
+        ).hexdigest()
+
 
 class TestSentenceNormalizationUnified:
     """Fix3: W0/W1b must use the same sentence extraction logic."""

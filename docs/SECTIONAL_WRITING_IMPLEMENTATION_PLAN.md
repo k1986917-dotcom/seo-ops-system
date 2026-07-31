@@ -250,14 +250,28 @@ Phase 6。
 
 ### Phase 7 — Shadow 对比、正式切换与清理
 
-状态：**待实施**
+状态：**代码、本机全量验证与兼容回归完成，待真实单 Action shadow 验收**
 
-- 相同主题对比旧整篇路径与新章节路径；
-- 比较事实覆盖、链接自然度、产品匹配、重复率、AI 调用失败率和成本；
-- 全量测试通过；
-- 先对单一 Action 启用 feature flag；
-- 验收后逐步切换；
-- 稳定后再删除旧路径，不在同一提交完成。
+- [x] `off|shadow|action` 三态，默认 `off`；Action 模式必须显式 ID 白名单；
+- [x] 旧 W0 先成功，sectional 后置运行；失败保留旧 draft/ledger；
+- [x] 完整 shadow candidate 支持 checkpoint 续跑，不写正式 pair；
+- [x] 比较字数、链接、claim 覆盖、重复句、AI 调用、重试和空响应；
+- [x] 空响应、重试过多、claim 覆盖退化或重复增加时禁止 promotion；
+- [x] promotion 绑定 policy/comparison/assembly 和正式 pair SHA，并备份旧 pair；
+- [x] promotion 与 rollback 的最终 manifest 写失败均恢复操作前 pair；
+- [x] 独立 AI 调用硬预算，默认 24、可配置范围 8–40；
+- [x] Web 与 Hermes 将稳定 Action ID 传入 W0；非白名单 Action 保持旧路径；
+- [x] 提供显式 decision/rollback 运维命令；rollback 需要确认词；
+- [x] 本机完整 pytest；
+- [ ] Action #3 真实 shadow 对比；
+- [ ] shadow 无 blocker 后单 Action promotion/rollback 验收；
+- [ ] 稳定后逐步扩大，不在本阶段删除旧路径。
+
+专项验收：Phase 1–7 sectional 联合 `136 passed`；W0/Phase 7 聚焦回归 `40 passed`；
+Ruff、compileall、`git diff --check` 通过。本机完整 pytest 为 `563 passed, 1 warning`；
+Legacy/W1b 完整兼容回归为 `264 passed, 1 warning`，未排除 `TestPrecheckGateDisplay`。
+MCP 完整 pytest 仍在收集阶段被 `openpyxl -> mimetypes -> /etc/mime.types` 权限阻止。
+默认 rollout 为 `off`，尚未运行真实 AI/API 或 Action。
 
 ## 提交和文档规则
 
@@ -272,5 +286,5 @@ Phase 6。
 
 ## 当前下一步
 
-形成并推送 Phase 6 原子提交。随后进入 Phase 7：shadow 对比、feature flag、单 Action
-正式切换和回滚验收。
+本机完整 pytest 全绿后先推送 Phase 6，再提交/推送 Phase 7。随后以 `shadow` 对
+Action #3 运行真实候选；比较无 blocker 后才启用单 Action `action` 模式并验收回滚。

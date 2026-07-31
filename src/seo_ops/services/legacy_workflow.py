@@ -2423,8 +2423,14 @@ def _write_system_prompt(author: str) -> str:
     return _WRITE_AI_SYSTEM
 
 
-async def stage_w0_validate_and_draft(topic: str, author: str, workspace: Path,
-                                       settings=None) -> dict:
+async def stage_w0_validate_and_draft(
+    topic: str,
+    author: str,
+    workspace: Path,
+    settings=None,
+    *,
+    action_id: int | None = None,
+) -> dict:
     """Validate material pack (段0), then generate the draft (段1).
 
     Re-running W0 invalidates everything from W1b onward (pre-check,
@@ -2516,7 +2522,7 @@ article Markdown only."""
     # _write_ahead_draft_and_ledger snapshots existing files and rolls back on
     # failure, so old draft / claim-ledger remain untouched if anything fails.
     try:
-        _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
+        written = _write_ahead_draft_and_ledger(workspace, slug, draft_md, cl_data)
     except Exception as exc:
         return {
             "success": False,
@@ -2529,7 +2535,65 @@ article Markdown only."""
     clear_stage_artifacts(workspace, slug, "w1b")
     save_w2_state(workspace, slug, {"rounds": 0, "gate_passed": False, "applied": False})
 
-    return {"success": True, "stage": "w1_draft", "report": report}
+    result: dict[str, Any] = {
+        "success": True,
+        "stage": "w1_draft",
+        "report": report,
+    }
+    if action_id is None:
+        return result
+
+    from seo_ops.config import get_settings
+    from seo_ops.services.sectional_legacy_adapter import run_legacy_sectional_rollout
+
+    active_settings = settings or get_settings()
+    if getattr(active_settings, "sectional_writing_mode", "off") == "off":
+        return result
+
+    async def sectional_generate(system: str, user: str, **kwargs: Any) -> str:
+        if user.startswith("SECTION PACKAGE\n"):
+            purpose = "legacy_write_sectional_body"
+            max_tokens = 5000
+        elif user.startswith("ARTICLE FRAME PACKAGE\n"):
+            purpose = "legacy_write_sectional_frame"
+            max_tokens = 5000
+        elif user.startswith("SECTION CLAIM PACKAGE\n"):
+            purpose = "legacy_write_sectional_claim_ledger"
+            max_tokens = kwargs.get("max_tokens") or 4000
+        else:
+            raise ValueError("未知的 sectional AI prompt")
+        return await _run_ai_text(
+            purpose,
+            system,
+            user,
+            settings=active_settings,
+            max_tokens=max_tokens,
+            thinking_mode="disabled",
+        )
+
+    try:
+        sectional_brief = contracts.get("brief", {})
+        result["sectional_rollout"] = await run_legacy_sectional_rollout(
+            action_id=action_id,
+            topic=topic,
+            author=author.strip() or "LaserPointerHub",
+            tier=tier,
+            intent=str(sectional_brief.get("intent") or _detect_intent(topic)),
+            guidance=str(sectional_brief.get("guidance") or ""),
+            workspace=workspace,
+            slug=slug,
+            contracts=contracts,
+            formal_draft_path=Path(written["draft_path"]),
+            formal_claim_path=Path(written["claim_path"]),
+            settings=active_settings,
+            generate_text_async=sectional_generate,
+        )
+    except Exception as exc:
+        result["sectional_rollout"] = {
+            "status": "failed_keep_legacy",
+            "error": str(exc),
+        }
+    return result
 
 
 def _strip_code_fence(text: str) -> str:

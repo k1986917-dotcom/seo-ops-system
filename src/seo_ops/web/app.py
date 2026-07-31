@@ -695,7 +695,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         topic = _get_action_topic(action)
         run_workspace = _current_legacy_workspace(action_id, topic)
         result = await stage_w0_validate_and_draft(
-            topic, author, run_workspace, active_settings
+            topic,
+            author,
+            run_workspace,
+            active_settings,
+            action_id=action_id,
         )
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "草稿已生成，等待预检"

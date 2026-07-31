@@ -31,6 +31,12 @@
 
 ### Added
 
+- 新增章节化写作 Phase 7 controlled rollout：默认 `off`，支持只读 `shadow` 和显式
+  Action ID 白名单 `action`；旧 W0 始终先成功，sectional 失败保留 Legacy 正式 pair。
+- 新增完整 shadow candidate 与旧/新比较报告，覆盖 claim 覆盖、重复句、链接、AI 调用、
+  重试和空响应；退化或不稳定时禁止 promotion。
+- 新增 SHA 绑定 promotion/rollback 协议、prepared/promoted manifest、旧 pair 备份和
+  最终 manifest 失败恢复；新增独立 AI 调用预算及 decision/rollback 运维命令。
 - 新增章节化写作 Phase 6 局部修订层：将 W1b/W2 失败映射到正文 section、article frame、
   link-only 或 ledger-only 动作；不可定位的评分、蚕食和系统失败保持 global blocker。
 - 多章节修订按顺序传递新摘要；未目标正文保持不变。全局 S-ID 变化后，未改 claims 通过
