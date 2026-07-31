@@ -54,8 +54,9 @@ _WRITE_CONTEXT_TOTAL_CHAR_LIMIT = 5000
 _EVIDENCE_CARD_TEXT_LIMIT = 320
 _EVIDENCE_CARDS_PER_SECTION = 4
 _REVISION_LINKS_CHAR_LIMIT = 3000
-_W1B_REPAIR_REPORT_CHAR_LIMIT = 24000
-_W1B_REVISION_EVIDENCE_CARD_LIMIT = 64
+_W1B_REPAIR_FAILURE_SUMMARY_LIMIT = 24
+_W1B_REVISION_EVIDENCE_CARD_LIMIT = 24
+_W1B_REVISE_BODY_MAX_TOKENS = 8000
 
 # write/SKILL.md 段2: "最多 2 轮"
 MAX_REVISION_ROUNDS = 2
@@ -1417,6 +1418,70 @@ def _revision_context_contracts(
         max_cards=_W1B_REVISION_EVIDENCE_CARD_LIMIT,
     )
     return contracts, rendered
+
+
+def _w1b_failure_summary(payload: dict[str, Any] | None) -> str:
+    """Render a short repair checklist without repeating the full report."""
+    if not isinstance(payload, dict):
+        return "Structured failures are supplied below."
+    failed = [
+        item for item in payload.get("failed_checks", [])
+        if isinstance(item, dict)
+    ]
+    lines = [f"- fail_count: {payload.get('fail_count', len(failed))}"]
+    for item in failed[:_W1B_REPAIR_FAILURE_SUMMARY_LIMIT]:
+        label = str(item.get("item") or "unnamed")
+        detail = str(item.get("detail") or "").strip()
+        suffixes = []
+        fact_count = len(item.get("fact_issues") or [])
+        entity_count = len(item.get("missing_entities") or [])
+        if fact_count:
+            suffixes.append(f"fact_issues={fact_count}")
+        if entity_count:
+            suffixes.append(f"missing_entities={entity_count}")
+        suffix = f" ({', '.join(suffixes)})" if suffixes else ""
+        if detail:
+            lines.append(f"- {label}: {detail[:240]}{suffix}")
+        else:
+            lines.append(f"- {label}{suffix}")
+    if len(failed) > _W1B_REPAIR_FAILURE_SUMMARY_LIMIT:
+        lines.append(
+            f"- plus {len(failed) - _W1B_REPAIR_FAILURE_SUMMARY_LIMIT} "
+            "more structured failures below"
+        )
+    return "\n".join(lines)
+
+
+def _w1b_compact_revision_context(contracts: dict[str, Any]) -> str:
+    """Render the revision hand-off without full brief/material excerpts."""
+    brief = contracts.get("brief") if isinstance(contracts, dict) else {}
+    coverage = contracts.get("coverage") if isinstance(contracts, dict) else {}
+    if not isinstance(brief, dict):
+        brief = {}
+    if not isinstance(coverage, dict):
+        coverage = {}
+    compact_brief = {
+        key: brief.get(key)
+        for key in ("topic", "tier", "intent", "guidance", "outline")
+        if brief.get(key)
+    }
+    compact_sections = []
+    for section in coverage.get("sections", []):
+        if not isinstance(section, dict):
+            continue
+        compact_sections.append({
+            key: section.get(key)
+            for key in (
+                "section_id", "heading", "must_cover",
+                "candidate_evidence_ids",
+            )
+            if section.get(key) not in (None, "", [])
+        })
+    compact = {
+        "brief": compact_brief,
+        "coverage": {"sections": compact_sections[:8]},
+    }
+    return json.dumps(compact, ensure_ascii=False, indent=2)
 
 
 # ── R0: Generate Search Prompt ──────────────────────────────────────────
@@ -3540,8 +3605,15 @@ async def stage_w1b_revise(
         if isinstance(candidate_seed_feedback, str)
         else ""
     )
+    failure_payload: dict[str, Any] | None = None
     if seed_feedback:
         structured_failures = seed_feedback
+        try:
+            parsed_feedback = json.loads(seed_feedback)
+        except json.JSONDecodeError:
+            parsed_feedback = None
+        if isinstance(parsed_feedback, dict):
+            failure_payload = parsed_feedback
     else:
         try:
             current_precheck = _w1b_precheck_data(
@@ -3552,10 +3624,9 @@ async def stage_w1b_revise(
                 "success": False,
                 "error": f"无法读取当前结构化 W1b 失败项: {exc}",
             }
+        failure_payload = _w1b_failure_payload(current_precheck)
         structured_failures = json.dumps(
-            _w1b_failure_payload(current_precheck),
-            ensure_ascii=False,
-            indent=2,
+            failure_payload, ensure_ascii=False, indent=2,
         )
     retry_memory = _recent_revision_memory(state, "w1b")
     retry_section = (
@@ -3563,12 +3634,13 @@ async def stage_w1b_revise(
         if retry_memory else "\n"
     )
 
-    active_precheck_context = seed_feedback or precheck_report
     contracts, evidence_cards = _revision_context_contracts(
         workspace, slug, topic,
-        relevant_text=f"{active_precheck_context}\n{retry_memory}",
+        relevant_text=f"{structured_failures}\n{retry_memory}",
     )
     repair_contract = _w1b_repair_contract(draft, topic)
+    failure_summary = _w1b_failure_summary(failure_payload)
+    compact_context = _w1b_compact_revision_context(contracts)
     user_prompt = f"""Revise the article for: "{topic}"
 
 The article failed the W1b pre-check. Fix the items listed below using
@@ -3597,16 +3669,15 @@ regulations, new product claims, or invented experience.
 ## Exact structured failures (fix every listed item and sentence)
 {structured_failures}
 
-## Pre-check report (human-readable context)
-{active_precheck_context[:_W1B_REPAIR_REPORT_CHAR_LIMIT]}
+## Repair focus summary
+{failure_summary}
 {retry_section}
 
 ## Current candidate draft
 {source_draft_md}
 
 ## Compact write brief and coverage contract
-{json.dumps(contracts.get('brief') or {}, ensure_ascii=False, indent=2)}
-{json.dumps(contracts.get('coverage') or {}, ensure_ascii=False, indent=2)}
+{compact_context}
 
 ## Evidence cards relevant to this repair
 {evidence_cards}
@@ -3619,7 +3690,7 @@ Return the revised article Markdown only."""
     try:
         new_draft_md = _strip_code_fence(await _run_ai_text(
             "legacy_write_revise_body", _REVISE_BODY_AI_SYSTEM, user_prompt,
-            settings=settings, max_tokens=16000,
+            settings=settings, max_tokens=_W1B_REVISE_BODY_MAX_TOKENS,
         ))
     except Exception as exc:
         error = str(exc)

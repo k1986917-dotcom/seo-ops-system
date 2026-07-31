@@ -2,6 +2,43 @@
 
 最后更新：2026-07-31（Europe/Paris）
 
+## 2026-07-31 — W1b 修订上下文精简（待本机完整验证）
+
+- 真实 Action #3 在 `0307a3b` 上已验收：一次正式 W1b POST 内部按设计执行两次
+  AI 修订尝试，二者均返回 `AI 返回空文本`；正式 draft、claim-ledger、w2-state、
+  数据库和 Git 工作区未被手工修改，W2/W3 未运行。
+- 本次修复补齐 ADR-0025 的 W1b 实现：W1b 正文修订 prompt 不再重复携带完整
+  human-readable pre-check Markdown，也不再把 `write-brief` 的完整
+  `research_brief_excerpt` 塞入修订上下文。
+- W1b prompt 现在保留：完整结构化失败 JSON、短失败摘要、当前 draft、精简
+  brief/coverage（topic/tier/intent/guidance/outline/sections）、失败相关 evidence cards、
+  当前 claim ledger 已使用的 evidence cards 和受限内链表。事实门禁、claim ledger
+  校验、原子写和 W1b/W2/W3 gate 未放宽。
+- W1b 正文修订的可选 evidence card 上限从 64 降到 24；已被当前 claim ledger
+  使用的 evidence ID 仍不会因该上限被截断。正文修订 `max_tokens` 从 16000 降到 8000，
+  与 1350+ checker-visible body word 要求匹配，减少供应商空响应风险。
+- 新增回归测试锁定：完整 pre-check 报告 sentinel 不进入 prompt、完整 brief excerpt
+  sentinel 不进入 prompt、结构化事实句仍进入 prompt、AI 输出预算为 8000。
+
+### 已完成验证
+
+- `.venv/bin/python -m pytest -q tests/test_w1b_revision_contract.py::TestW1bRevisionContract::test_revision_prompt_omits_full_precheck_and_brief_excerpt`：通过。
+- `.venv/bin/python -m pytest -q tests/test_w1b_revision_contract.py`：通过。
+- `.venv/bin/python -m pytest -q tests/test_w1b_revision_contract.py tests/test_w1b_mixed_fact_cleanup.py tests/test_w1b_seo_title_normalization.py tests/test_faq_schema_repair.py`：通过。
+- `.venv/bin/ruff check src/seo_ops/services/legacy_workflow.py tests/test_w1b_revision_contract.py`：通过。
+- `.venv/bin/python -m compileall -q src/seo_ops/services/legacy_workflow.py tests/test_w1b_revision_contract.py`：通过。
+- `git diff --check`：通过。
+- `.venv/bin/python -m pytest -q` 在 coding-tools-mcp 沙箱内被 Landlock 阻止：
+  `openpyxl -> mimetypes` 读取 `/etc/mime.types` 触发 `PermissionError`；需由本机环境
+  跑全量测试，不得把该沙箱权限问题当作代码回归。
+
+### 下一步
+
+1. 本机运行全量 `pytest -q`，确认没有跨模块回归。
+2. 全量通过后提交并推送本补丁。
+3. 再只运行一次真实 Action #3 W1b 批次；若仍为空或出现供应商错误，停止并保留现场，
+   不得运行 W2/W3。
+
 ## 2026-07-31 — W1b 正文 AI 空响应安全重试（待本机验证）
 
 - 真实 Action #3 在 `legacy_write_revise_body` 调用收到 HTTP 成功但正文为空，

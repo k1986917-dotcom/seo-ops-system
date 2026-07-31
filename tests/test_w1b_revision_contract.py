@@ -49,6 +49,128 @@ class TestW1bRevisionContract:
         assert "at most four sentences" in contract
         assert "unsupported" in contract
 
+    def test_revision_prompt_omits_full_precheck_and_brief_excerpt(
+        self, tmp_path, monkeypatch
+    ):
+        from seo_ops.services import legacy_workflow as lw
+
+        topic = "compact prompt topic"
+        slug = lw._slugify(topic)
+        workspace = tmp_path / "ws"
+        for name in ("drafts", "research", "reports", "context"):
+            (workspace / name).mkdir(parents=True, exist_ok=True)
+        draft_text = (
+            "---\n"
+            "SEO Keywords: compact prompt keyword\n"
+            "---\n\n"
+            "# Existing article\n\nExisting practical analysis.\n"
+        )
+        draft = workspace / "drafts" / f"{slug}-2026-07-30.md"
+        draft.write_text(draft_text, encoding="utf-8")
+        claim = workspace / "research" / f"claim-ledger-{slug}.json"
+        claim.write_text(
+            json.dumps({
+                "version": 1,
+                "claims": [],
+                "draft_sha256": hashlib.sha256(
+                    draft_text.encode("utf-8")
+                ).hexdigest(),
+            }),
+            encoding="utf-8",
+        )
+        lw.save_report(
+            workspace,
+            "pre-check",
+            slug,
+            "# failed\n\nFULL_PRECHECK_REPORT_SENTINEL\n" + ("x" * 3000),
+        )
+        lw.save_w2_state(
+            workspace,
+            slug,
+            {"w1b_rounds": 0, "gate_passed": False},
+        )
+
+        captured: dict[str, str | int] = {}
+
+        monkeypatch.setattr(
+            lw,
+            "resolve_tier",
+            lambda *args, **kwargs: "Cluster Content",
+        )
+
+        def fake_context_contracts(*args, **kwargs):
+            captured["relevant_text"] = kwargs["relevant_text"]
+            return (
+                {
+                    "brief": {
+                        "topic": topic,
+                        "tier": "Cluster Content",
+                        "guidance": "Use concise practical guidance.",
+                        "outline": ["Compact Prompt H2"],
+                        "research_brief_excerpt": (
+                            "FULL_BRIEF_EXCERPT_SENTINEL" + ("y" * 3000)
+                        ),
+                    },
+                    "coverage": {
+                        "sections": [{
+                            "section_id": "section_1",
+                            "heading": "Compact Prompt H2",
+                            "must_cover": True,
+                            "candidate_evidence_ids": ["ev_compact"],
+                        }],
+                    },
+                },
+                "- ev_compact: direct support | https://example.com/source",
+            )
+
+        monkeypatch.setattr(
+            lw, "_revision_context_contracts", fake_context_contracts
+        )
+        monkeypatch.setattr(
+            lw,
+            "_w1b_precheck_data",
+            lambda *args, **kwargs: {
+                "fail_count": 2,
+                "checks": [{
+                    "item": "事实校验",
+                    "pass": False,
+                    "detail": "STRUCTURED_DETAIL_SENTINEL",
+                    "fact_issues": [{
+                        "reason": "uncovered_factual_sentence",
+                        "sentence": "FACT_SENTENCE_SENTINEL",
+                        "sentence_id": "s001",
+                    }],
+                }],
+            },
+        )
+
+        async def stop_after_prompt(purpose, system_prompt, user_prompt, **kwargs):
+            captured["purpose"] = purpose
+            captured["prompt"] = user_prompt
+            captured["max_tokens"] = kwargs["max_tokens"]
+            raise RuntimeError("stop after prompt capture")
+
+        monkeypatch.setattr(lw, "_run_ai_text", stop_after_prompt)
+
+        result = asyncio.run(
+            lw.stage_w1b_revise(topic, "Cluster Content", workspace)
+        )
+
+        prompt = str(captured["prompt"])
+        assert result["error"] == "stop after prompt capture"
+        assert captured["purpose"] == "legacy_write_revise_body"
+        assert captured["max_tokens"] == 8000
+        assert "STRUCTURED_DETAIL_SENTINEL" in prompt
+        assert "FACT_SENTENCE_SENTINEL" in prompt
+        assert "Repair focus summary" in prompt
+        assert "Compact Prompt H2" in prompt
+        assert "ev_compact" in prompt
+        assert "FULL_PRECHECK_REPORT_SENTINEL" not in prompt
+        assert "FULL_BRIEF_EXCERPT_SENTINEL" not in prompt
+        assert "Pre-check report (human-readable context)" not in prompt
+        assert "FULL_PRECHECK_REPORT_SENTINEL" not in str(
+            captured["relevant_text"]
+        )
 
     def test_candidate_normalizer_fixes_mechanical_rules_without_dropping_content(
         self, tmp_path

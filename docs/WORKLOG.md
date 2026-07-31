@@ -1461,3 +1461,40 @@ W0/W1b/W2 gate。
    搜索意图、文章结构、事实覆盖、FAQ、链接、W1b/W2/W3 结果；未完成前不得声称
    三者实际文章质量完全等价。
 2. 真实服务配置及 API 凭据由本地运营环境负责；代码测试不得调用生产外部搜索或 AI。
+
+## 2026-07-31 — W1b 修订上下文精简
+
+### 完成内容
+
+- 复核真实 Action #3 在 `0307a3b` 上的一次 W1b 验收：同一次正式 POST 内部两次
+  AI 修订尝试均返回 `AI 返回空文本`，正式 draft/claim-ledger/w2-state/database 未被
+  手工修改，W2/W3 未运行。
+- 按 ADR-0025 补齐 W1b 修订上下文裁剪：正文修订 prompt 不再携带完整
+  human-readable pre-check Markdown，也不再携带 `write-brief` 的完整
+  `research_brief_excerpt`。
+- W1b 修订 prompt 仍保留完整结构化失败 JSON、短失败摘要、当前 draft、精简
+  brief/coverage、失败相关 evidence cards、当前 claim ledger 已用 evidence cards 和
+  受限内链表；事实门禁、claim-ledger 校验、原子写和 W1b/W2/W3 gate 未放宽。
+- W1b 正文修订的可选 evidence card 上限从 64 调整为 24；已被当前 claim ledger
+  使用的 evidence ID 仍不受该上限截断。正文修订 `max_tokens` 从 16000 调整为 8000，
+  以降低当前供应商在长请求上的空响应风险。
+- 新增回归测试，锁定完整 pre-check 报告和完整 brief excerpt 不进入 W1b prompt，
+  同时确认精确结构化事实句仍进入 prompt，AI 输出预算为 8000。
+
+### 验证
+
+- `.venv/bin/python -m pytest -q tests/test_w1b_revision_contract.py::TestW1bRevisionContract::test_revision_prompt_omits_full_precheck_and_brief_excerpt`：通过。
+- `.venv/bin/python -m pytest -q tests/test_w1b_revision_contract.py`：通过。
+- `.venv/bin/python -m pytest -q tests/test_w1b_revision_contract.py tests/test_w1b_mixed_fact_cleanup.py tests/test_w1b_seo_title_normalization.py tests/test_faq_schema_repair.py`：通过。
+- `.venv/bin/ruff check src/seo_ops/services/legacy_workflow.py tests/test_w1b_revision_contract.py`：通过。
+- `.venv/bin/python -m compileall -q src/seo_ops/services/legacy_workflow.py tests/test_w1b_revision_contract.py`：通过。
+- `git diff --check`：通过。
+- `.venv/bin/python -m pytest -q` 在 coding-tools-mcp 沙箱内被 Landlock 阻止：
+  `openpyxl -> mimetypes` 读取 `/etc/mime.types` 触发 `PermissionError`；需由本机环境
+  跑全量测试，不得把该沙箱权限问题当作代码回归。
+
+### 下一步
+
+1. 本机运行全量 `pytest -q`。
+2. 全量通过后提交并推送本补丁。
+3. 在当前 HEAD 上只运行一次真实 Action #3 W1b 批次；W1b 通过前绝不运行 W2/W3。
