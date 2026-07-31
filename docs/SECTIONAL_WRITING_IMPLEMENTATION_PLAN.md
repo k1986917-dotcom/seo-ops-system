@@ -264,6 +264,8 @@ Phase 6。
 - [x] 独立 AI 调用硬预算，默认 24、可配置范围 8–40；
 - [x] Web 与 Hermes 将稳定 Action ID 传入 W0；非白名单 Action 保持旧路径；
 - [x] 提供显式 decision/rollback 运维命令；rollback 需要确认词；
+- [x] 已有正式 pair 的 Action 提供 shadow-only Web POST；不重跑 W0，前后校验 SHA，
+  异常修改原子恢复，不更新 Legacy 阶段；
 - [x] 本机完整 pytest；
 - [ ] Action #3 真实 shadow 对比；
 - [ ] shadow 无 blocker 后单 Action promotion/rollback 验收；

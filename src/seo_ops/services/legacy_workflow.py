@@ -2596,6 +2596,76 @@ article Markdown only."""
     return result
 
 
+async def stage_sectional_shadow_existing_pair(
+    topic: str,
+    author: str,
+    workspace: Path,
+    settings: Any | None = None,
+    *,
+    action_id: int,
+) -> dict[str, Any]:
+    """Run sectional shadow for an existing formal Legacy pair.
+
+    Unlike W0, this operation never generates or replaces the formal draft or
+    claim ledger.  It exists for controlled rollout validation on Actions that
+    have already progressed beyond W0.
+    """
+    from seo_ops.config import get_settings
+    from seo_ops.services.sectional_legacy_adapter import (
+        run_existing_legacy_sectional_shadow,
+    )
+
+    active_settings = settings or get_settings()
+    if getattr(active_settings, "sectional_writing_mode", "off") != "shadow":
+        return {
+            "success": False,
+            "error": "现有正式稿的章节化运行只允许 SEO_OPS_SECTIONAL_WRITING_MODE=shadow",
+        }
+    slug = _slugify(topic)
+
+    async def sectional_generate(system: str, user: str, **kwargs: Any) -> str:
+        if user.startswith("SECTION PACKAGE\n"):
+            purpose = "legacy_write_sectional_body"
+            max_tokens = 5000
+        elif user.startswith("ARTICLE FRAME PACKAGE\n"):
+            purpose = "legacy_write_sectional_frame"
+            max_tokens = 5000
+        elif user.startswith("SECTION CLAIM PACKAGE\n"):
+            purpose = "legacy_write_sectional_claim_ledger"
+            max_tokens = kwargs.get("max_tokens") or 4000
+        else:
+            raise ValueError("未知的 sectional AI prompt")
+        return await _run_ai_text(
+            purpose,
+            system,
+            user,
+            settings=active_settings,
+            max_tokens=max_tokens,
+            thinking_mode="disabled",
+        )
+
+    try:
+        rollout = await run_existing_legacy_sectional_shadow(
+            action_id=action_id,
+            topic=topic,
+            author=author.strip() or "LaserPointerHub",
+            workspace=workspace,
+            slug=slug,
+            settings=active_settings,
+            generate_text_async=sectional_generate,
+        )
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": f"章节化 shadow 失败，正式 Legacy pair 保持不变: {exc}",
+        }
+    return {
+        "success": True,
+        "sectional_rollout": rollout,
+        "formal_pair": rollout.get("formal_pair"),
+    }
+
+
 def _strip_code_fence(text: str) -> str:
     """Some models wrap the whole document in a fence despite instructions."""
     stripped = text.strip()

@@ -89,6 +89,7 @@ from seo_ops.services.legacy_workflow import (
     stage_r0_generate_prompt,
     stage_r1_save_and_collect,
     stage_r3_ai_analyze,
+    stage_sectional_shadow_existing_pair,
     stage_w0_validate_and_draft,
     stage_w1b_pre_check,
     stage_w1b_revise_batch,
@@ -704,6 +705,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "草稿已生成，等待预检"
         return _redirect("/actions", msg, "error" if not result.get("success") else "success")
+
+    @app.post("/actions/{action_id}/legacy/stage/sectional-shadow")
+    async def legacy_sectional_shadow(action_id: int, request: Request):
+        """Run sectional shadow against the existing formal Legacy pair."""
+        _require_local_form(request)
+        form = await request.form()
+        author = form.get("author", "") or "LaserPointerHub"
+        action = _get_action_or_404(action_id)
+        topic = _get_action_topic(action)
+        run_workspace = _current_legacy_workspace(action_id, topic)
+        result = await stage_sectional_shadow_existing_pair(
+            topic,
+            author,
+            run_workspace,
+            active_settings,
+            action_id=action_id,
+        )
+        if not result.get("success"):
+            return _redirect(
+                "/actions",
+                result.get("error") or "章节化 shadow 失败",
+                "error",
+            )
+        return _redirect(
+            "/actions",
+            "章节化 shadow 已完成；正式 draft/claim ledger 未改变",
+            "success",
+        )
 
     @app.post("/actions/{action_id}/legacy/stage/w1b")
     async def legacy_w1b(action_id: int, request: Request):

@@ -4,15 +4,25 @@ from dataclasses import replace
 
 import pytest
 
+from seo_ops.services.legacy_workflow import stage_sectional_shadow_existing_pair
 from seo_ops.services.sectional_legacy_adapter import (
     SectionalLegacyAdapterError,
     build_legacy_assembly_metadata,
+    run_existing_legacy_sectional_shadow,
     run_legacy_sectional_rollout,
 )
 
 
 def _run_rollout(**kwargs):
     return asyncio.run(run_legacy_sectional_rollout(**kwargs))
+
+
+def _run_existing_shadow(**kwargs):
+    return asyncio.run(run_existing_legacy_sectional_shadow(**kwargs))
+
+
+def _run_existing_stage(**kwargs):
+    return asyncio.run(stage_sectional_shadow_existing_pair(**kwargs))
 
 
 def _draft() -> str:
@@ -77,6 +87,192 @@ def test_off_mode_returns_legacy_only_without_reading_inputs(tmp_path, settings)
     )
     assert result["status"] == "legacy_only"
     assert result["decision"]["reason_code"] == "sectional_rollout_off"
+
+
+def _existing_pair_workspace(tmp_path):
+    slug = "professional-ceiling-marking-tools"
+    draft_path = tmp_path / "drafts" / f"{slug}-2026-07-31.md"
+    claim_path = tmp_path / "research" / f"claim-ledger-{slug}.json"
+    draft_path.parent.mkdir(parents=True)
+    claim_path.parent.mkdir(parents=True)
+    draft_path.write_text(_draft(), encoding="utf-8")
+    claim_path.write_text(
+        json.dumps({"draft_sha256": "unused", "claims": []}),
+        encoding="utf-8",
+    )
+    contracts = {
+        f"write-brief-{slug}.json": {
+            "tier": "Cluster Content",
+            "intent": "compare tools",
+            "guidance": "Use existing evidence only.",
+            "research_brief_excerpt": "H2: Example (100 words)",
+        },
+        f"coverage-contract-{slug}.json": {"sections": []},
+        f"evidence-cards-{slug}.json": {"all_cards": []},
+    }
+    for name, payload in contracts.items():
+        (tmp_path / "research" / name).write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+    return slug, draft_path, claim_path
+
+
+def test_existing_pair_shadow_uses_current_pair_without_mutating_it(
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    slug, draft_path, claim_path = _existing_pair_workspace(tmp_path)
+    configured = replace(settings, sectional_writing_mode="shadow")
+    draft_before = draft_path.read_bytes()
+    claim_before = claim_path.read_bytes()
+    calls = []
+
+    async def fake_rollout(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "shadow_complete",
+            "decision": {"promotion_allowed": False},
+        }
+
+    monkeypatch.setattr(
+        "seo_ops.services.sectional_legacy_adapter.run_legacy_sectional_rollout",
+        fake_rollout,
+    )
+    result = _run_existing_shadow(
+        action_id=3,
+        topic="Professional Ceiling Marking Tools",
+        author="Example Tools",
+        workspace=tmp_path,
+        slug=slug,
+        settings=configured,
+        generate_text_async=lambda *args, **kwargs: None,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["formal_draft_path"] == draft_path
+    assert calls[0]["formal_claim_path"] == claim_path
+    assert calls[0]["tier"] == "Cluster Content"
+    assert calls[0]["contracts"]["brief"]["intent"] == "compare tools"
+    assert draft_path.read_bytes() == draft_before
+    assert claim_path.read_bytes() == claim_before
+    assert result["formal_pair"]["unchanged"] is True
+    assert result["formal_pair"]["draft_sha256_before"] == (
+        result["formal_pair"]["draft_sha256_after"]
+    )
+    assert result["formal_pair"]["claim_sha256_before"] == (
+        result["formal_pair"]["claim_sha256_after"]
+    )
+
+
+def test_existing_pair_shadow_requires_shadow_mode(tmp_path, settings):
+    with pytest.raises(SectionalLegacyAdapterError, match="requires.*shadow"):
+        _run_existing_shadow(
+            action_id=3,
+            topic="Professional Ceiling Marking Tools",
+            author="Example Tools",
+            workspace=tmp_path,
+            slug="professional-ceiling-marking-tools",
+            settings=settings,
+            generate_text_async=lambda *args, **kwargs: None,
+        )
+
+
+def test_existing_pair_shadow_restores_formal_pair_after_mutation(
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    slug, draft_path, claim_path = _existing_pair_workspace(tmp_path)
+    configured = replace(settings, sectional_writing_mode="shadow")
+    draft_before = draft_path.read_bytes()
+    claim_before = claim_path.read_bytes()
+
+    async def mutate_formal_pair(**kwargs):
+        kwargs["formal_draft_path"].write_text("changed", encoding="utf-8")
+        kwargs["formal_claim_path"].write_text("{}", encoding="utf-8")
+        return {
+            "status": "shadow_complete",
+            "decision": {"promotion_allowed": False},
+        }
+
+    monkeypatch.setattr(
+        "seo_ops.services.sectional_legacy_adapter.run_legacy_sectional_rollout",
+        mutate_formal_pair,
+    )
+    with pytest.raises(SectionalLegacyAdapterError, match="changed.*restored"):
+        _run_existing_shadow(
+            action_id=3,
+            topic="Professional Ceiling Marking Tools",
+            author="Example Tools",
+            workspace=tmp_path,
+            slug=slug,
+            settings=configured,
+            generate_text_async=lambda *args, **kwargs: None,
+        )
+    assert draft_path.read_bytes() == draft_before
+    assert claim_path.read_bytes() == claim_before
+
+
+def test_existing_pair_stage_requires_shadow_mode(tmp_path, settings):
+    result = _run_existing_stage(
+        topic="Professional Ceiling Marking Tools",
+        author="Example Tools",
+        workspace=tmp_path,
+        settings=settings,
+        action_id=3,
+    )
+    assert result["success"] is False
+    assert "SECTIONAL_WRITING_MODE=shadow" in result["error"]
+
+
+def test_existing_pair_stage_delegates_without_changing_legacy_stage(
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    configured = replace(settings, sectional_writing_mode="shadow")
+    calls = []
+
+    async def fake_existing_shadow(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "shadow_complete",
+            "decision": {"promotion_allowed": False},
+            "formal_pair": {"unchanged": True},
+        }
+
+    monkeypatch.setattr(
+        "seo_ops.services.sectional_legacy_adapter.run_existing_legacy_sectional_shadow",
+        fake_existing_shadow,
+    )
+    result = _run_existing_stage(
+        topic="Professional Ceiling Marking Tools",
+        author="Example Tools",
+        workspace=tmp_path,
+        settings=configured,
+        action_id=3,
+    )
+
+    assert result["success"] is True
+    assert result["formal_pair"] == {"unchanged": True}
+    assert len(calls) == 1
+    assert calls[0]["action_id"] == 3
+    assert calls[0]["slug"] == "professional-ceiling-marking-tools"
+
+
+def test_existing_pair_shadow_web_route_is_post_only(settings):
+    from seo_ops.web.app import create_app
+
+    app = create_app(settings)
+    route = next(
+        item
+        for item in app.routes
+        if getattr(item, "path", "")
+        == "/actions/{action_id}/legacy/stage/sectional-shadow"
+    )
+    assert route.methods == {"POST"}
 
 
 def test_shadow_mode_runs_pipeline_but_never_promotes(tmp_path, settings, monkeypatch):

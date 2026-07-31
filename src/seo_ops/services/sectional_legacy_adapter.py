@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -75,6 +76,160 @@ def _load_json(path: Path, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SectionalLegacyAdapterError(f"{field} must be a JSON object")
     return value
+
+
+def _latest_formal_draft(workspace: Path, slug: str) -> Path:
+    candidates = [
+        path
+        for path in (Path(workspace) / "drafts").glob(f"{slug}-*.md")
+        if path.is_file()
+    ]
+    if not candidates:
+        raise SectionalLegacyAdapterError("formal Legacy draft is missing")
+    return max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+
+
+def _atomic_restore(path: Path, data: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.shadow-restore.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _restore_formal_pair(
+    draft_path: Path,
+    draft_bytes: bytes,
+    claim_path: Path,
+    claim_bytes: bytes,
+) -> None:
+    try:
+        if draft_path.read_bytes() != draft_bytes:
+            _atomic_restore(draft_path, draft_bytes)
+        if claim_path.read_bytes() != claim_bytes:
+            _atomic_restore(claim_path, claim_bytes)
+    except OSError as exc:
+        raise SectionalLegacyAdapterError(
+            f"cannot restore formal Legacy pair after shadow failure: {exc}"
+        ) from exc
+
+
+async def run_existing_legacy_sectional_shadow(
+    *,
+    action_id: int,
+    topic: str,
+    author: str,
+    workspace: Path,
+    slug: str,
+    settings: Any,
+    generate_text_async: Callable[..., Awaitable[str]],
+) -> dict[str, Any]:
+    """Run shadow against an existing formal pair without re-running Legacy W0.
+
+    This is the controlled operational path for an Action that already has a
+    formal draft/claim ledger.  It is intentionally shadow-only and verifies
+    that the formal pair remains byte-for-byte unchanged.
+    """
+    if getattr(settings, "sectional_writing_mode", "off") != "shadow":
+        raise SectionalLegacyAdapterError(
+            "existing-pair sectional run requires sectional_writing_mode=shadow"
+        )
+
+    workspace = Path(workspace)
+    formal_draft_path = _latest_formal_draft(workspace, slug)
+    formal_claim_path = workspace / "research" / f"claim-ledger-{slug}.json"
+    try:
+        draft_before = formal_draft_path.read_bytes()
+        claim_before = formal_claim_path.read_bytes()
+    except OSError as exc:
+        raise SectionalLegacyAdapterError(
+            f"cannot snapshot formal Legacy pair: {exc}"
+        ) from exc
+
+    contracts = {
+        "brief": _load_json(
+            workspace / "research" / f"write-brief-{slug}.json",
+            "write brief",
+        ),
+        "coverage": _load_json(
+            workspace / "research" / f"coverage-contract-{slug}.json",
+            "coverage contract",
+        ),
+        "cards": _load_json(
+            workspace / "research" / f"evidence-cards-{slug}.json",
+            "evidence cards",
+        ),
+    }
+    brief = contracts["brief"]
+    tier = str(brief.get("tier") or "").strip()
+    if not tier:
+        raise SectionalLegacyAdapterError("write brief tier is missing")
+
+    try:
+        result = await run_legacy_sectional_rollout(
+            action_id=action_id,
+            topic=topic,
+            author=author,
+            tier=tier,
+            intent=str(brief.get("intent") or ""),
+            guidance=str(brief.get("guidance") or ""),
+            workspace=workspace,
+            slug=slug,
+            contracts=contracts,
+            formal_draft_path=formal_draft_path,
+            formal_claim_path=formal_claim_path,
+            settings=settings,
+            generate_text_async=generate_text_async,
+        )
+    except Exception:
+        _restore_formal_pair(
+            formal_draft_path,
+            draft_before,
+            formal_claim_path,
+            claim_before,
+        )
+        raise
+    try:
+        draft_after = formal_draft_path.read_bytes()
+        claim_after = formal_claim_path.read_bytes()
+    except OSError as exc:
+        raise SectionalLegacyAdapterError(
+            f"cannot verify formal Legacy pair after shadow: {exc}"
+        ) from exc
+    if draft_after != draft_before or claim_after != claim_before:
+        _restore_formal_pair(
+            formal_draft_path,
+            draft_before,
+            formal_claim_path,
+            claim_before,
+        )
+        raise SectionalLegacyAdapterError(
+            "formal Legacy pair changed during existing-pair shadow and was restored"
+        )
+    if result.get("status") != "shadow_complete":
+        raise SectionalLegacyAdapterError(
+            f"existing-pair shadow did not complete: {result.get('status')}"
+        )
+    decision = result.get("decision")
+    if not isinstance(decision, dict) or decision.get("promotion_allowed") is not False:
+        raise SectionalLegacyAdapterError(
+            "existing-pair shadow unexpectedly allowed promotion"
+        )
+
+    result["formal_pair"] = {
+        "draft_path": str(formal_draft_path),
+        "claim_path": str(formal_claim_path),
+        "draft_sha256_before": hashlib.sha256(draft_before).hexdigest(),
+        "draft_sha256_after": hashlib.sha256(draft_after).hexdigest(),
+        "claim_sha256_before": hashlib.sha256(claim_before).hexdigest(),
+        "claim_sha256_after": hashlib.sha256(claim_after).hexdigest(),
+        "unchanged": True,
+    }
+    return result
 
 
 async def run_legacy_sectional_rollout(

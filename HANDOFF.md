@@ -188,6 +188,10 @@
 - 当前接线状态必须准确理解：`legacy_workflow.py` 已在 W0 成功写入旧正式 pair 后调用
   sectional rollout adapter；默认 `off` 时立即短路。W1b/W2 未导入 sectional repair
   自动接管路径，正式后续 gate 仍是原 Legacy gate。
+- 已补已有正式 pair 的受控 shadow Web 入口：
+  `POST /actions/{action_id}/legacy/stage/sectional-shadow`。它只允许 `mode=shadow`，读取现有
+  write brief、coverage contract、evidence cards、draft 和 claim ledger，不重跑 W0、
+  不更新数据库阶段、不允许 promotion。运行前后字节级校验正式 pair；异常改动会原子恢复。
 - 新增完整 shadow pipeline：合同、候选、逐节正文、article frame、章节 ledger、
   delivery 和 assembly 均使用原有 checkpoint 与全局门禁，正式 pair 仅在 promotion
   协议通过后替换。
@@ -216,12 +220,19 @@
   Legacy/W1b 全口径（含 5 个 Web gate 测试）为 `279 passed, 1 warning`。MCP 通过临时、
   已删除的测试运行器仅在测试进程内跳过系统 MIME 文件读取，分批覆盖全部测试文件，
   最终合计 `570 passed, 1 warning`。Ruff、compileall、`git diff --check` 全部通过。
+- existing-pair shadow 新增专项 `13 passed`；与 rollout/pipeline 合并 `32 passed`；
+  当前 Phase 1–7 sectional 加版本测试合计 `149 passed`；Legacy/W1b 全口径为
+  `264 passed, 1 warning`。Ruff、compileall 和 diff check 通过。Action #3 当前仍为
+  `w1b_pre_check/in_progress`；正式 draft SHA 为
+  `a09e790329469c4fc035562d4c31d1712b7c0ea9781920c76edd1c037e6621e1`，claim ledger SHA 为
+  `d118d10cf88faa29c81bf19176501120c2cd53eeb542a9fc1c4b6978f8e664a6`。
 - 正式 rollout 仍默认 `off`；未运行真实 AI/API 或真实 Action，未修改正式生产产物。
 
 ### 当前下一步
 
-1. 提交并推送已完成全量验证的审计 hotfix；Phase 7 `123b141` 已在本地跟踪分支显示同步。
-2. 以 `shadow` 对 Action #3 运行一次真实候选和比较，不允许 promotion。
+1. 提交并推送 existing-pair shadow 安全入口。
+2. 仅以 `SEO_OPS_SECTIONAL_WRITING_MODE=shadow` 通过新增正式 Web POST 对 Action #3 运行
+   一次真实候选和比较；不得重跑 W0，不允许 promotion。
 3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。
 4. B303 产品页/目录修正后重新生成产品报告，确认 catalog data issues 自动清零。
 

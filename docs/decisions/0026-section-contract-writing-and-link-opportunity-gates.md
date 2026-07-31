@@ -195,6 +195,11 @@ Legacy W0 始终先按原协议生成并原子写入正式 draft/claim ledger。
 只能在旧 W0 成功后运行，且默认 feature flag 为 `off`。`shadow` 只生成独立候选与比较
 报告；`action` 也只有显式 Action ID 白名单可以进入 promotion。
 
+对于已经完成 W0、已有正式 pair 且处于 W1b/W2 的 Action，首次 shadow 不得通过重跑
+W0 触发。系统必须提供 shadow-only 的正式 Web POST，直接读取现有 R3 合同与正式 pair；
+该入口只允许 `mode=shadow`，不得更新 Legacy 阶段或 promotion。运行前后必须校验正式
+draft/claim ledger 字节与 SHA；异常修改必须恢复原 pair 后 fail-closed。
+
 promotion 必须同时满足：比较报告无 blocker、assembly SHA 与报告一致、正式 pair 自
 shadow 开始后未变化、Action 仍在白名单。提升前保存旧 pair 和 prepared manifest；正式
 pair 与 promoted manifest 任一步失败都恢复旧 pair。成功 promotion 保留旧 pair 备份供

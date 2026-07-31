@@ -25,10 +25,39 @@
 
 ### 下一步
 
-Phase 7 已本地提交为 `123b14199ac343bb2e1490af7f6c5d466c75bb54`，Phase 6 已推送。
-外部静态审计发现的 frame 数量合同冲突已修复并通过专项测试；下一步先完成本机全量
-验证并提交 hotfix，再推送 Phase 7 与 hotfix。之后才以 `shadow` 对 Action #3 运行真实
-候选，比较无 blocker 前不启用 promotion。
+Phase 7 与 article-frame hotfix 已提交并推送至 `a2e3989`。已有正式 pair 的 Action 不能
+通过重跑 W0 做首次 shadow，否则会先替换正式 draft/ledger；现已补 shadow-only Web POST。
+下一步提交并推送该安全入口，再以 `mode=shadow` 对 Action #3 运行真实候选；比较无
+blocker 前不启用 promotion。
+
+## 2026-07-31 — 已有正式 pair 的 shadow-only Web 入口
+
+### 问题
+
+- Phase 7 原 shadow 只在 W0 原子写入 Legacy pair 后运行。
+- Action #3 已处于 `w1b_pre_check/in_progress`，已有正式 draft 和 claim ledger；直接重跑
+  W0 会先改变正式 pair，无法满足首次 shadow 的 SHA 不变验收。
+
+### 修复
+
+- 新增 `POST /actions/{action_id}/legacy/stage/sectional-shadow`。
+- 入口仅接受 `SEO_OPS_SECTIONAL_WRITING_MODE=shadow`；`off` 或 `action` 均拒绝。
+- 直接读取现有 write brief、coverage contract、evidence cards、正式 draft 和 claim ledger，
+  不调用 W0、不更新 Action 阶段、不允许 promotion。
+- 运行前保存正式 pair 字节与 SHA；运行异常或检测到任何改动时原子恢复原 pair 后失败。
+- 成功结果记录 draft/claim 的 before/after SHA 和 `unchanged=true`。
+
+### 验证与真实基线
+
+- existing-pair adapter/service/Web route 专项：`13 passed`。
+- adapter + rollout + pipeline：`32 passed`。
+- Phase 1–7 sectional 加版本测试：`149 passed`。
+- Legacy/W1b 全口径：`264 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx。
+- Ruff、compileall、`git diff --check`：通过。
+- Action #3：`site_id=1`、`legacy_stage=w1b_pre_check`、`workflow_status=in_progress`。
+- 正式 draft SHA：`a09e790329469c4fc035562d4c31d1712b7c0ea9781920c76edd1c037e6621e1`。
+- 正式 claim ledger SHA：`d118d10cf88faa29c81bf19176501120c2cd53eeb542a9fc1c4b6978f8e664a6`。
+- 未运行真实 AI/API、shadow、promotion 或 rollback；正式数据未修改。
 
 ## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
 

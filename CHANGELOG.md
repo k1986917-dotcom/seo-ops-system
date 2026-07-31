@@ -31,6 +31,10 @@
 
 ### Fixed
 
+- 新增已有正式稿的安全 sectional shadow 入口：
+  `POST /actions/{action_id}/legacy/stage/sectional-shadow` 只允许 `mode=shadow`，直接读取
+  现有 draft、claim ledger 和 R3 写作合同，不再为了 shadow 重跑 W0。运行前后校验正式
+  pair 字节与 SHA；任何异常修改都会原子恢复，且不会更新 Legacy 阶段或触发 promotion。
 - 对齐 article-frame 与最终 assembly 的硬合同：Key Takeaways 统一为 3–5 条，FAQ 统一为
   3–4 条。生成 prompt、package 校验和 Phase 5 门禁不再出现“生成层允许、交付层必拒绝”
   的确定性冲突。
