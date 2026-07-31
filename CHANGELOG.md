@@ -29,6 +29,19 @@
 - 原有蚕食误报人工确认按钮改为红色警戒文案“接受当前蚕食问题并继续”；它的后端条件未放宽，不能绕过事实、评分或检查器失败。
 - 网页 Legacy 卡在任何已开始阶段都提供警戒色 `R0 重新开始此任务`；只重置当前 action，不影响其他任务。
 
+### Fixed
+
+- 对齐 article-frame 与最终 assembly 的硬合同：Key Takeaways 统一为 3–5 条，FAQ 统一为
+  3–4 条。生成 prompt、package 校验和 Phase 5 门禁不再出现“生成层允许、交付层必拒绝”
+  的确定性冲突。
+- article-frame package 的数量要求改为 canonical 固定值；即使重新计算 package SHA，
+  也不能把 FAQ 上限篡改回 5 或把 Takeaways 上限篡改回 6。
+- 产品候选 `fit_level` 仅允许
+  `strong|approved_constraint|contextual|related_catalog`；未知值 fail-closed。
+- 项目 metadata 与运行时 `__version__` 统一为 `0.11.5`。
+- shadow 指标在供应商未返回 token usage 时明确记录 `completion_tokens=null` 和
+  `completion_tokens_known=false`，不再把“未知”伪装成 0。
+
 ### Added
 
 - 新增章节化写作 Phase 7 controlled rollout：默认 `off`，支持只读 `shadow` 和显式
@@ -76,8 +89,9 @@
   切换。
 - 新增跨行业产品目录解析：核心只要求产品 ID、标题/名称和 URL，其余字段作为通用
   attributes；喷码机、园林工具和激光产品使用同一候选逻辑。
-- 新增 Catalog Data Quality Report。同一产品的标题、目录表格和详情属性冲突时，显示
-  产品 ID、冲突值和修复建议，并在修正前阻止该 SKU 被自动链接。
+- 新增 Catalog Data Quality Report 逻辑区段，随持久化 sectional shadow report 保存。
+  同一产品的标题、目录表格和详情属性冲突时，显示产品 ID、冲突值和修复建议，并在
+  修正前阻止该 SKU 被自动链接。
 - 新增只读 `tools/sectional_shadow_preview.py`，可预览候选和链接机会而不调用 AI、不修改
   Action 文件。
 - 新增 `POST /api/hermes/runs`、`GET /api/hermes/sites`、

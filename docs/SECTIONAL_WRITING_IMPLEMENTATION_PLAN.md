@@ -156,6 +156,8 @@ W0/W1b/W2 未改变。
 - [x] 每节独立原子 checkpoint，可在 provider 中断后只续跑未完成章节；
 - [x] checkpoint 绑定 package SHA；损坏、过期或内容不一致时不得恢复；
 - [x] Introduction/Takeaways/Conclusion/FAQ 在主体完成后单独生成并 checkpoint；
+- [x] article-frame canonical 数量合同固定为 Takeaways 3–5、FAQ 3–4；生成 prompt、
+  package validator 与 Phase 5 assembly 使用同一边界；
 - [x] 兼容旧编号加粗 H2 大纲，不把后续链接策略误当 FAQ 要点；
 - [x] 产品推荐区分 `strong|contextual|related_catalog|approved_constraint`；
 - [x] `compare|select|apply` 有内容相关且数据有效商品时最低要求 1 个产品链接；
@@ -272,6 +274,14 @@ Ruff、compileall、`git diff --check` 通过。本机完整 pytest 为 `563 pas
 Legacy/W1b 完整兼容回归为 `264 passed, 1 warning`，未排除 `TestPrecheckGateDisplay`。
 MCP 完整 pytest 仍在收集阶段被 `openpyxl -> mimetypes -> /etc/mime.types` 权限阻止。
 默认 rollout 为 `off`，尚未运行真实 AI/API 或 Action。
+
+外部静态审计后新增 hotfix：修复 Phase 3 允许 Takeaways 6 条/FAQ 5 条而 Phase 5 必然
+拒绝的跨阶段合同冲突；锁定 canonical frame requirements，未知产品 `fit_level`
+fail-closed；项目版本 metadata 对齐为 `0.11.5`；token usage 未提供时显式记为 unknown。
+Phase 1–7 sectional 加版本测试共 `143 passed`；Legacy/W1b 全口径（含 5 个 Web gate
+测试）`279 passed, 1 warning`。MCP 使用临时且已删除的测试运行器，仅在测试进程内将
+系统 MIME 文件列表置空，分批覆盖全部测试文件，最终合计 `570 passed, 1 warning`。
+Ruff、compileall、`git diff --check` 通过。hotfix 可提交；提交并推送后方可启动 shadow。
 
 ## 提交和文档规则
 

@@ -25,8 +25,51 @@
 
 ### 下一步
 
-Phase 7 代码、本机完整 pytest 与兼容回归已完成，Phase 6 已推送。下一步提交/推送
-Phase 7，然后先以 `shadow` 对 Action #3 运行真实候选。比较无 blocker 前不启用 promotion。
+Phase 7 已本地提交为 `123b14199ac343bb2e1490af7f6c5d466c75bb54`，Phase 6 已推送。
+外部静态审计发现的 frame 数量合同冲突已修复并通过专项测试；下一步先完成本机全量
+验证并提交 hotfix，再推送 Phase 7 与 hotfix。之后才以 `shadow` 对 Action #3 运行真实
+候选，比较无 blocker 前不启用 promotion。
+
+## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
+
+### 核实结论
+
+- 确认真缺陷：Phase 3 允许 Key Takeaways 3–6 条，而 Phase 5 只接受 3–5 条；Phase 3
+  允许 FAQ 3–5 条，而 Phase 5 只接受 3–4 条。模型合法返回 6 条或 5 条时会被后序
+  assembly 确定性拒绝。
+- 确认版本 metadata 漂移：HANDOFF/CHANGELOG 为 `0.11.5`，但 `pyproject.toml` 与
+  `seo_ops.__version__` 仍为 `0.10.9`。
+- 当前 W0 接线并非“完全未导入”：W0 在 Legacy 正式 pair 成功写入后后置调用 rollout
+  adapter；默认 `off` 立即短路。W1b/W2 仍未由 sectional repair 自动接管。
+- `brief_catalog_alignment_pending` 并非未使用：generation package、validator、测试与 ADR
+  均在使用。`563 passed` 也来自本机真实完整 pytest，不是静态估算。
+
+### 本次修复
+
+- canonical article-frame requirements 固定为 Takeaways 3–5、FAQ 3–4；prompt、package
+  validator 和 assembly 使用同一边界，重新计算 SHA 也不能篡改数量上限。
+- 产品 `fit_level` 增加
+  `strong|approved_constraint|contextual|related_catalog` 白名单，未知值 fail-closed。
+- 版本 metadata 与运行时版本统一为 `0.11.5`。
+- provider 未返回 token usage 时，shadow 指标明确记录 `completion_tokens=null` 和
+  `completion_tokens_known=false`，不再把未知值展示为 0。
+- 新增 Markdown 包裹 evidence URL、版本一致性、frame 上限与 fit-level 回归测试。
+- Catalog Data Quality Report 文档改为“持久化 shadow report 中的独立逻辑区段”；
+  成功 promotion 保留旧 pair 备份，失败 promotion 恢复旧 pair 后清理未完成目录。
+
+### 当前验证
+
+- Phase 1–7 sectional 加版本一致性测试：`143 passed`。
+- Legacy/W1b 全口径（包含 `TestPrecheckGateDisplay` 的 5 个 Web gate 测试）：
+  `279 passed, 1 warning`。
+- MCP 直接完整收集仍会被 `openpyxl -> mimetypes -> /etc/mime.types` Landlock 阻止；
+  为避免把沙箱限制误判为代码失败，使用临时测试运行器，仅在测试进程内将
+  `mimetypes.knownfiles=[]`，随后按测试文件分批执行并删除运行器。全部测试文件合计：
+  `570 passed, 1 warning`，无 failed、skipped、xfailed 或 xpassed。
+- Ruff、compileall 与 `git diff --check`：通过。
+- 未运行真实 AI/API、Action #3、promotion 或 rollback；正式 draft、ledger、state、数据库
+  和产品数据未修改。
+- 审计 hotfix 已完成提交前验证；下一步提交并推送，再启动 Action #3 shadow。
 
 ## 2026-07-31 — Phase 7 controlled rollout、shadow 对比与事务回滚
 
@@ -62,8 +105,8 @@ Phase 7，然后先以 `shadow` 对 Action #3 运行真实候选。比较无 blo
   权限阻止；唯一 warning 为既有 Starlette/httpx 弃用提示。
 - 默认 rollout 为 `off`。未运行真实 AI/API 或 Action，未修改正式生产 draft、ledger、
   w2-state、数据库或产品数据。
-- Phase 6 已推送；本地与远端 HEAD 均为
-  `358929afac5d4f420b0c288f3a75ad8095762c59`。Phase 7 工作区尚未提交。
+- Phase 6 已推送；远端 HEAD 为 `358929afac5d4f420b0c288f3a75ad8095762c59`。
+  Phase 7 已本地提交为 `123b14199ac343bb2e1490af7f6c5d466c75bb54`，尚未推送。
 
 ## 2026-07-31 — Phase 6 W1b/W2 失败定位、局部修订与 claim 重映射
 

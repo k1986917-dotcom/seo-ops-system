@@ -118,6 +118,8 @@ def test_shadow_comparison_is_deterministic_and_persists(tmp_path):
 
     assert report["recommendation"] == "eligible_for_single_action_promotion"
     assert report["blockers"] == []
+    assert report["run_metrics"]["completion_tokens"] is None
+    assert report["run_metrics"]["completion_tokens_known"] is False
     assert report == build_shadow_comparison(
         action_id=3,
         topic=assembly["topic"],
@@ -135,6 +137,23 @@ def test_shadow_comparison_is_deterministic_and_persists(tmp_path):
     ) == report
     Path(path).write_text("{}", encoding="utf-8")
     assert load_shadow_comparison(tmp_path, "ceiling-marking", 3) is None
+
+
+def test_shadow_comparison_marks_observed_completion_tokens():
+    assembly = _assembly()
+    old_draft, old_ledger = _legacy_pair(assembly)
+
+    report = build_shadow_comparison(
+        action_id=3,
+        topic=assembly["topic"],
+        old_draft=old_draft,
+        old_claim_ledger=old_ledger,
+        new_assembly=assembly,
+        run_metrics={"completion_tokens": 321},
+    )
+
+    assert report["run_metrics"]["completion_tokens"] == 321
+    assert report["run_metrics"]["completion_tokens_known"] is True
 
 
 def test_comparison_rejects_old_ledger_mismatch_and_detects_regression():

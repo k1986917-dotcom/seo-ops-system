@@ -34,6 +34,19 @@ FRAME_CONCLUSION_MARKER = "===CONCLUSION==="
 FRAME_FAQ_MARKER = "===FAQ_JSON==="
 
 _LINK_TYPES = ("article_links", "product_links", "external_citations")
+_PRODUCT_FIT_LEVELS = {
+    "strong",
+    "approved_constraint",
+    "contextual",
+    "related_catalog",
+}
+_ARTICLE_FRAME_REQUIREMENTS = {
+    "introduction_words": {"min": 80, "max": 180},
+    "takeaway_count": {"min": 3, "max": 5},
+    "conclusion_words": {"min": 80, "max": 180},
+    "faq_count": {"min": 3, "max": 4},
+    "faq_answer_words": {"min": 20, "max": 90},
+}
 _ARTICLE_PLACEHOLDER = re.compile(
     r"\[\[ARTICLE:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]"
 )
@@ -148,12 +161,17 @@ def _selected_candidates(
                     f"conflicted product cannot enter generation context: {candidate_id}"
                 )
             metadata = (metadata_by_id or {}).get(candidate_id, {})
+            fit_level = metadata.get("fit_level", "contextual")
+            if fit_level not in _PRODUCT_FIT_LEVELS:
+                raise SectionGenerationError(
+                    f"product candidate fit_level is invalid: {candidate_id}"
+                )
             result.append({
                 "candidate_id": candidate_id,
                 "product_id": candidate.get("product_id", ""),
                 "title": candidate.get("title", ""),
                 "attributes": _compact_product_attributes(candidate),
-                "fit_level": metadata.get("fit_level", "contextual"),
+                "fit_level": fit_level,
                 "fit_reason": metadata.get("fit_reason", "approved_candidate"),
             })
         else:
@@ -850,13 +868,7 @@ def build_article_frame_package(section_run: dict[str, Any]) -> dict[str, Any]:
             }
             for item in outputs
         ],
-        "requirements": {
-            "introduction_words": {"min": 80, "max": 180},
-            "takeaway_count": {"min": 3, "max": 6},
-            "conclusion_words": {"min": 80, "max": 180},
-            "faq_count": {"min": 3, "max": 5},
-            "faq_answer_words": {"min": 20, "max": 90},
-        },
+        "requirements": json.loads(json.dumps(_ARTICLE_FRAME_REQUIREMENTS)),
     }
     if package["content_language"] != DEFAULT_CONTENT_LANGUAGE:
         raise SectionGenerationError("article frame language must be en")
@@ -886,8 +898,8 @@ def validate_article_frame_package(package: Any) -> dict[str, Any]:
         _clean_text(item["summary"], "frame summary")
     if len(section_ids) != len(set(section_ids)):
         raise SectionGenerationError("article frame section IDs must be unique")
-    if not isinstance(package.get("requirements"), dict):
-        raise SectionGenerationError("article frame requirements are missing")
+    if package.get("requirements") != _ARTICLE_FRAME_REQUIREMENTS:
+        raise SectionGenerationError("article frame requirements are invalid")
     expected_sha = _clean_text(
         package.get("package_sha256"),
         "article frame package_sha256",
@@ -907,11 +919,11 @@ Return exactly four blocks and no other text:
 ===INTRODUCTION===
 <80-180 words, one or two paragraphs, direct answer first>
 ===KEY_TAKEAWAYS===
-<3-6 Markdown bullet points>
+<3-5 Markdown bullet points>
 ===CONCLUSION===
 <80-180 words, no new facts>
 ===FAQ_JSON===
-{"faqs":[{"question":"...","answer":"..."}]}"""
+{"faqs":[{"question":"...","answer":"..."}]} with exactly 3-4 items"""
     user = "ARTICLE FRAME PACKAGE\n" + json.dumps(
         package,
         ensure_ascii=False,

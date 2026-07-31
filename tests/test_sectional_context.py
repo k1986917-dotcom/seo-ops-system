@@ -123,6 +123,29 @@ def test_article_registry_rejects_self_duplicate_and_invalid_urls():
     ]
 
 
+def test_evidence_registry_accepts_markdown_wrapped_source_url():
+    registry = build_candidate_registry(
+        internal_links_map=INTERNAL_LINKS,
+        product_report=LASER_PRODUCTS,
+        evidence_cards={
+            "all_cards": [
+                {
+                    "evidence_id": "ev_markdown_url",
+                    "source_url": "[Source title](https://source.example/markdown)",
+                    "support": "A concise supported statement.",
+                    "concepts": ["selection"],
+                    "claim_types": ["guidance"],
+                    "required": False,
+                }
+            ]
+        },
+    )
+
+    assert registry["evidence"]["candidates"][0]["url"] == (
+        "https://source.example/markdown"
+    )
+
+
 def test_common_site_topic_words_cannot_create_false_article_opportunity():
     links = """# Internal Links
 

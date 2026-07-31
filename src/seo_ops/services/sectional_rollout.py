@@ -201,12 +201,22 @@ def build_shadow_comparison(
         "retry_count",
         "empty_response_count",
         "prompt_chars",
-        "completion_tokens",
     ):
         value = metrics.get(field, 0)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise SectionalRolloutError(f"run_metrics.{field} must be a non-negative integer")
         metrics[field] = value
+    completion_tokens = metrics.get("completion_tokens")
+    if completion_tokens is not None and (
+        not isinstance(completion_tokens, int)
+        or isinstance(completion_tokens, bool)
+        or completion_tokens < 0
+    ):
+        raise SectionalRolloutError(
+            "run_metrics.completion_tokens must be null or a non-negative integer"
+        )
+    metrics["completion_tokens"] = completion_tokens
+    metrics["completion_tokens_known"] = completion_tokens is not None
     old_metrics = _draft_metrics(old_draft, old_claim_ledger)
     new_metrics = _draft_metrics(assembly["draft_markdown"], assembly["claim_ledger"])
     new_metrics["binding_counts"] = {

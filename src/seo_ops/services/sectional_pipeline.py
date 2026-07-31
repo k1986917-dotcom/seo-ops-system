@@ -134,6 +134,7 @@ def run_sectional_shadow_candidate(
         "ai_calls": 0,
         "prompt_chars": 0,
         "max_tokens_requested": 0,
+        "completion_tokens": None,
         "empty_response_count": 0,
     }
 
@@ -279,6 +280,15 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         value = counters.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise SectionalPipelineError(f"pipeline run_metrics.{field} is invalid")
+    completion_tokens = counters.get("completion_tokens")
+    if completion_tokens is not None and (
+        not isinstance(completion_tokens, int)
+        or isinstance(completion_tokens, bool)
+        or completion_tokens < 0
+    ):
+        raise SectionalPipelineError(
+            "pipeline run_metrics.completion_tokens is invalid"
+        )
     digest = result.get("result_sha256")
     if not isinstance(digest, str) or len(digest) != 64:
         raise SectionalPipelineError("pipeline result SHA is invalid")

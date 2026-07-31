@@ -198,6 +198,7 @@ def test_shadow_pipeline_builds_complete_candidate_without_formal_artifacts(tmp_
         result["assembly"]["delivery"]["section_order"]
     )
     assert result["run_metrics"]["ai_calls"] == len(calls)
+    assert result["run_metrics"]["completion_tokens"] is None
     assert result["assembly"]["audit"]["blockers"] == []
     assert Path(result["delivery_path"]).exists()
     assert all(Path(path).exists() for path in result["assembly_paths"].values())

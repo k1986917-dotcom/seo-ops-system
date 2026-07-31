@@ -48,7 +48,8 @@
 - 正式合同固定 `content_language=en`。旧中文 brief 条目保存到
   `brief_points_rejected`，不进入 AI 写作上下文、产品评分或链接决策；混合 FAQ 标题可
   删除中文括号，仍包含中文的 H2 fail-closed。
-- 新增 Catalog Data Quality Report：产品标题、目录表格或详情字段互相冲突时，报告
+- 新增 Catalog Data Quality Report 逻辑区段并随 sectional shadow report 持久化：产品
+  标题、目录表格或详情字段互相冲突时，报告
   产品 ID、冲突值、严重程度、修复建议和 `blocking_for_auto_link=true`。修正前只阻止
   该 SKU 自动链接，不影响其他产品。
 - 新增只读工具 `tools/sectional_shadow_preview.py`。默认只打印摘要，不写 Action 文件，
@@ -178,12 +179,15 @@
   (`feat: add sectional repair workflow`)；插件环境无法完成远端认证，当前分支相对远端
   `ahead=1`。
 
-### Phase 7 controlled rollout 代码与本机全量验证已完成，待提交
+### Phase 7 已本地提交；外部审计 hotfix 已完成专项验证，待本机全量验证
 
 - 新增 `off|shadow|action` 三态 feature flag，默认 `off`。`shadow` 只生成 sectional
   候选和比较报告；`action` 只有显式 Action ID 白名单才能提升，其他 Action 继续旧 W0。
 - W0 仍先按原路径生成并原子写入 Legacy draft/claim ledger；sectional 在其后运行。
   sectional 任何异常都返回 `failed_keep_legacy`，不撤销旧 W0 成功结果。
+- 当前接线状态必须准确理解：`legacy_workflow.py` 已在 W0 成功写入旧正式 pair 后调用
+  sectional rollout adapter；默认 `off` 时立即短路。W1b/W2 未导入 sectional repair
+  自动接管路径，正式后续 gate 仍是原 Legacy gate。
 - 新增完整 shadow pipeline：合同、候选、逐节正文、article frame、章节 ledger、
   delivery 和 assembly 均使用原有 checkpoint 与全局门禁，正式 pair 仅在 promotion
   协议通过后替换。
@@ -203,14 +207,23 @@
   `TestPrecheckGateDisplay`。MCP 兼容回归排除无法导入 Web app 的 5 项后为 `259 passed`。
 - Phase 6 已推送：本地与远端 HEAD 均为
   `358929afac5d4f420b0c288f3a75ad8095762c59`，不再 `ahead 1`。
+- Phase 7 已本地提交为 `123b14199ac343bb2e1490af7f6c5d466c75bb54`，尚未推送；
+  当前分支相对远端 `ahead=1`。
+- 外部静态审计确认两个真实跨阶段冲突并已修复：生成层 Takeaways 3–6 与 assembly 3–5、
+  FAQ 3–5 与 assembly 3–4。现统一为 Takeaways 3–5、FAQ 3–4，并锁定 canonical package
+  requirements。另补 `fit_level` 白名单、Markdown evidence URL 覆盖、版本一致性及
+  completion token 未知值语义。Phase 1–7 sectional 加版本测试共 `143 passed`；
+  Legacy/W1b 全口径（含 5 个 Web gate 测试）为 `279 passed, 1 warning`。MCP 通过临时、
+  已删除的测试运行器仅在测试进程内跳过系统 MIME 文件读取，分批覆盖全部测试文件，
+  最终合计 `570 passed, 1 warning`。Ruff、compileall、`git diff --check` 全部通过。
 - 正式 rollout 仍默认 `off`；未运行真实 AI/API 或真实 Action，未修改正式生产产物。
 
 ### 当前下一步
 
-1. 提交并推送 Phase 7 原子变更。
+1. 提交并推送已完成全量验证的审计 hotfix；Phase 7 `123b141` 已在本地跟踪分支显示同步。
 2. 以 `shadow` 对 Action #3 运行一次真实候选和比较，不允许 promotion。
 3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。
-4. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
+4. B303 产品页/目录修正后重新生成产品报告，确认 catalog data issues 自动清零。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 

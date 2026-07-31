@@ -38,7 +38,9 @@ R3 确定性地产生可重建的 Article Blueprint。每个主体 H2 对应一�
 
 正文按 H2 章节分别生成。每次只传入精简全局结论、当前章节合同、当前章节证据、少量
 链接候选、上一节短摘要和下一节目标。Introduction、Key Takeaways、Conclusion 和 FAQ
-在主体章节完成后依据实际正文生成。
+在主体章节完成后依据实际正文生成。article-frame 的 canonical 数量边界为 Key
+Takeaways 3–5 条、FAQ 3–4 条；生成 prompt、package validator 与最终 assembly 必须使用
+同一边界，禁止前序允许而后序确定性拒绝。
 
 ### 2. 链接机会先于链接数量
 
@@ -92,8 +94,8 @@ R3 确定性地产生可重建的 Article Blueprint。每个主体 H2 对应一�
 
 ### 3.2 产品目录错误必须显式报告
 
-若同一产品的标题、目录表格和详情字段互相矛盾，系统必须产生独立的
-Catalog Data Quality Report，至少记录：
+若同一产品的标题、目录表格和详情字段互相矛盾，系统必须产生独立逻辑区段的
+Catalog Data Quality Report，并随持久化 sectional shadow report 保存，至少记录：
 
 - 产品 ID、标题、URL；
 - 冲突字段及各来源值；
@@ -195,8 +197,10 @@ Legacy W0 始终先按原协议生成并原子写入正式 draft/claim ledger。
 
 promotion 必须同时满足：比较报告无 blocker、assembly SHA 与报告一致、正式 pair 自
 shadow 开始后未变化、Action 仍在白名单。提升前保存旧 pair 和 prepared manifest；正式
-pair 与 promoted manifest 任一步失败都恢复旧 pair。rollback 同样验证当前 promoted pair、
-备份和 manifest SHA；rollback manifest 失败时恢复 promoted pair。
+pair 与 promoted manifest 任一步失败都恢复旧 pair。成功 promotion 保留旧 pair 备份供
+rollback 与审计；失败 promotion 在恢复正式旧 pair 后可删除未完成的 promotion 临时目录。
+rollback 同样验证当前 promoted pair、备份和 manifest SHA；rollback manifest 失败时恢复
+promoted pair。
 
 首次 rollout 对空 AI 响应、超过两次重试、claim 覆盖下降或重复句增加采取 fail-closed。
 章节化调用使用独立硬预算，避免因逐节和逐单元 ledger 自然增加调用次数而无限消耗。

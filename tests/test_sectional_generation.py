@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from seo_ops.services.sectional_generation import (
     run_article_frame_generation,
     run_section_generation_sequence,
     section_checkpoint_path,
+    validate_article_frame_output,
 )
 from seo_ops.services.sectional_writing import (
     build_contract_bundle,
@@ -318,6 +320,28 @@ def test_valid_section_response_passes_required_link_gates():
     assert output["content_language"] == "en"
 
 
+def test_unknown_product_fit_level_is_rejected():
+    sections, shadow = _setup()
+    section = next(
+        item for item in sections["sections"] if item["reader_stage"] == "select"
+    )
+    manifest_section = next(
+        item
+        for item in shadow["context_manifest"]["sections"]
+        if item["section_id"] == section["section_id"]
+    )
+    assert manifest_section["product_candidates"]
+    manifest_section["product_candidates"][0]["fit_level"] = "invented_fit"
+
+    with pytest.raises(SectionGenerationError, match="fit_level"):
+        build_section_generation_package(
+            sections,
+            shadow["section_link_contracts"],
+            shadow["context_manifest"],
+            section["section_id"],
+        )
+
+
 def test_required_link_cannot_be_silently_omitted():
     package = _package_for_stage("select")
     required_types = [
@@ -563,6 +587,61 @@ def test_article_frame_uses_summaries_and_validates_all_components():
     assert FRAME_FAQ_MARKER in prompt["system"]
     assert len(output["key_takeaways"]) == 4
     assert len(output["faq"]) == 3
+
+
+def test_article_frame_contract_matches_phase5_limits():
+    package = build_article_frame_package(_completed_section_run())
+    prompt = build_article_frame_prompt(package)
+
+    assert package["requirements"]["takeaway_count"] == {"min": 3, "max": 5}
+    assert package["requirements"]["faq_count"] == {"min": 3, "max": 4}
+    assert "<3-5 Markdown bullet points>" in prompt["system"]
+    assert "exactly 3-4 items" in prompt["system"]
+
+
+def test_article_frame_rejects_six_takeaways_or_five_faqs():
+    package = build_article_frame_package(_completed_section_run())
+    output = parse_article_frame_response(_frame_response(), package)
+
+    too_many_takeaways = copy.deepcopy(output)
+    too_many_takeaways["key_takeaways"].extend([
+        "Keep catalog facts consistent.",
+        "Use only approved evidence.",
+    ])
+    with pytest.raises(SectionGenerationError, match="takeaway count"):
+        validate_article_frame_output(too_many_takeaways, package)
+
+    too_many_faqs = copy.deepcopy(output)
+    too_many_faqs["faq"].extend([
+        {
+            "question": "How should teams document the final selection?",
+            "answer": "Teams should record the task, chosen product, relevant catalog facts, and approved evidence so the recommendation remains traceable and maintainable.",
+        },
+        {
+            "question": "When should the selection be reviewed again?",
+            "answer": "The selection should be reviewed when the catalog, working conditions, product data, or applicable site procedures materially change.",
+        },
+    ])
+    with pytest.raises(SectionGenerationError, match="FAQ count"):
+        validate_article_frame_output(too_many_faqs, package)
+
+
+def test_article_frame_rejects_tampered_limits():
+    package = build_article_frame_package(_completed_section_run())
+    package["requirements"]["faq_count"]["max"] = 5
+    unsigned = dict(package)
+    unsigned.pop("package_sha256")
+    package["package_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(SectionGenerationError, match="requirements"):
+        build_article_frame_prompt(package)
 
 
 def test_article_frame_checkpoint_round_trip_and_resume(tmp_path):
