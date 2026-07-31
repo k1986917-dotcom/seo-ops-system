@@ -88,6 +88,43 @@ blocker 前不启用 promotion。
 - 对真实 Action #3 的纯只读解析返回：
   `('Cluster Content', 'matching_w1b_state')`；未调用 AI、未写文件。
 
+## 2026-07-31 — Legacy YAML 引号标量兼容
+
+### 真实失败
+
+- 空 tier 修复推送后，Action #3 再执行一次正式 existing-pair shadow POST。
+- tier 已成功解析为 `Cluster Content / matching_w1b_state`，但 route 返回 error：
+  `metadata title must equal the delivery topic`。
+- 只读诊断确认正式 draft 的 frontmatter 为
+  `title: "Laser Pointer for Pointing Above Ceilings in Commercial Construction"`；旧 adapter
+  只做正则截取，把双引号保留成了 title 实际内容，严格 assembly metadata 校验因此拒绝。
+- 正式 draft、claim ledger、w2-state、数据库和 `.env` SHA 全部不变；未生成 sectional
+  目录，未运行 W0/W1b/W2/W3、promotion 或 rollback，也未发送第二次 POST。
+
+### 修复
+
+- 新增简单 YAML frontmatter scalar 解码，仅发生在 Legacy adapter 输入边界。
+- 成对双引号按 JSON-compatible 字符串解码；成对单引号移除外层并把 YAML 的 `''`
+  还原为单个 apostrophe；不成对、转义错误或畸形引号直接 fail-closed。
+- 对旧稀疏 frontmatter 做只读兼容：`description` 可作为 summary 与 SEO Description
+  候选；仅在 tags/SEO Keywords 未达到 canonical 最低数量时从 Action topic 派生；已有
+  合法值保持原顺序且不额外扩写。
+- SEO Title/Description 使用确定性语义压缩进入 50–60 / 150–160 范围，避免简单截断造成
+  `in Commercial` 或 `what to look` 这类残缺文本。
+- 没有放宽 assembly 的严格 metadata 门禁，也不修改或重写任何正式 draft/frontmatter。
+
+### 验证
+
+- adapter 专项：`21 passed`。
+- Phase 1–7 sectional 加版本测试：`157 passed`。
+- Legacy 主流程 `186` 项，W1b/FAQ `78` 项，合计 `264 passed, 1 warning`；唯一 warning
+  仍为既有 Starlette/httpx 弃用提示。
+- 对真实 Action #3 的纯只读完整验证确认：tier 来源为 `matching_w1b_state`；title 与
+  Action topic 完全相同；summary 为 163 字符；tags 为 3 个；SEO Title 为
+  `Laser Pointer for Commercial Construction: Above Ceilings`（57 字符）；SEO Description
+  为 158 字符且保留完整句子；最终 `validate_assembly_metadata()` 通过。
+- MCP 长时完整测试会话被执行器回收，未获得可靠最终结果，因此没有把该次执行记为通过。
+
 ## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
 
 ### 核实结论

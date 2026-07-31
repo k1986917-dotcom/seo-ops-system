@@ -234,10 +234,23 @@
   文件。真实 Action #3 只读解析为 `Cluster Content / matching_w1b_state`。
 - 新增后 adapter 专项 `17 passed`，sectional 加版本 `153 passed`，Legacy/W1b
   `264 passed, 1 warning`。正式 rollout 仍默认 `off`。
+- 第二次真实 existing-pair shadow 已通过空 tier 门禁，但被旧正式 draft frontmatter 中
+  带 YAML 双引号的 `title` 安全拒绝：adapter 读取到的是包含字面引号的值，严格 metadata
+  校验因此判定不等于 Action topic。正式 pair/state/DB/.env SHA 仍全部不变，未生成
+  sectional 目录，也未重试。
+- 已修复 adapter 的简单 YAML 标量读取：成对双引号使用 JSON-compatible 转义解码，成对
+  单引号按 YAML 规则折叠 `''`；不成对或畸形引号在 adapter 边界直接拒绝。
+- 同时补齐旧稀疏 frontmatter：`description` 可作为 summary/SEO Description 来源；只有在
+  tags/SEO Keywords 缺失最低数量时才从 Action topic 派生；SEO Title/Description 采用
+  确定性语义压缩满足 canonical 长度，不修改正式 draft。
+- 真实 Action #3 的完整 metadata 已通过最终 validator：title 等于 topic，summary 163
+  字符，3 个 tags，SEO Title 57 字符，SEO Description 158 字符且句子完整。
+- 修复后 adapter 专项 `21 passed`，sectional 加版本 `157 passed`，Legacy/W1b/FAQ
+  `264 passed, 1 warning`。未把 MCP 丢失结果的长时完整套件记为通过。
 
 ### 当前下一步
 
-1. 提交并推送空 tier 的 SHA 绑定兼容修复。
+1. 提交并推送 YAML frontmatter quoted scalar 兼容修复。
 2. 仅以 `SEO_OPS_SECTIONAL_WRITING_MODE=shadow` 通过新增正式 Web POST 对 Action #3 再运行
    一次真实候选和比较；不得重跑 W0，不允许 promotion。
 3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。

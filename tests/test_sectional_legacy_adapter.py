@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from seo_ops.services.legacy_workflow import stage_sectional_shadow_existing_pair
+from seo_ops.services.sectional_assembly import validate_assembly_metadata
 from seo_ops.services.sectional_legacy_adapter import (
     SectionalLegacyAdapterError,
     build_legacy_assembly_metadata,
@@ -57,6 +58,112 @@ def test_build_metadata_from_legacy_frontmatter():
     assert metadata["author"] == "Example Tools"
     assert metadata["tags"] == ["ceiling marking", "worksite tools", "product selection"]
     assert metadata["target_words"] == {"min": 1200, "max": 1920}
+
+
+def test_build_metadata_decodes_quoted_legacy_frontmatter():
+    draft = """---
+title: "Professional Ceiling Marking Tools"
+author: 'Example Tools'
+summary: "Choose a pointer for Bob's commercial crew."
+tags: 'ceiling marking, worksite tools, product selection'
+seo title: "Professional Ceiling Marking Tools"
+seo description: 'Bob''s practical ceiling marking guide.'
+seo keywords: "ceiling marking, laser pointer"
+---
+
+Legacy body.
+"""
+
+    metadata = build_legacy_assembly_metadata(
+        draft,
+        topic="Professional Ceiling Marking Tools",
+        slug="professional-ceiling-marking-tools",
+        author="Fallback Author",
+        tier="Cluster Content",
+    )
+
+    assert metadata["title"] == "Professional Ceiling Marking Tools"
+    assert metadata["author"] == "Example Tools"
+    assert metadata["summary"] == "Choose a pointer for Bob's commercial crew."
+    assert metadata["seo_description"] == "Bob's practical ceiling marking guide."
+    assert metadata["tags"] == [
+        "ceiling marking",
+        "worksite tools",
+        "product selection",
+    ]
+    assert metadata["seo_keywords"] == ["ceiling marking", "laser pointer"]
+
+
+def test_build_metadata_rejects_malformed_frontmatter_quotes():
+    draft = """---
+title: "Professional Ceiling Marking Tools'
+---
+
+Legacy body.
+"""
+
+    with pytest.raises(SectionalLegacyAdapterError, match="malformed quotes"):
+        build_legacy_assembly_metadata(
+            draft,
+            topic="Professional Ceiling Marking Tools",
+            slug="professional-ceiling-marking-tools",
+            author="Fallback Author",
+            tier="Cluster Content",
+        )
+
+
+def test_build_metadata_keeps_plain_scalar_ending_in_apostrophe():
+    draft = _draft().replace(
+        "Summary: A practical guide",
+        "Summary: Professionals' practical guide",
+    )
+
+    metadata = build_legacy_assembly_metadata(
+        draft,
+        topic="Professional Ceiling Marking Tools",
+        slug="professional-ceiling-marking-tools",
+        author="Fallback Author",
+        tier="Cluster Content",
+    )
+
+    assert metadata["summary"].startswith("Professionals' practical guide")
+
+
+def test_sparse_quoted_legacy_frontmatter_builds_valid_sectional_metadata():
+    topic = "Laser Pointer for Pointing Above Ceilings in Commercial Construction"
+    draft = """---
+title: "Laser Pointer for Pointing Above Ceilings in Commercial Construction"
+description: "Find the best laser pointer for pointing above ceilings in commercial construction. Learn safety, OSHA compliant options, green 532nm vs red, and what to look for."
+author: "LaserPointerHub"
+---
+
+Legacy body.
+"""
+
+    metadata = build_legacy_assembly_metadata(
+        draft,
+        topic=topic,
+        slug="laser-pointer-for-pointing-above-ceilings-in-commercial-construction",
+        author="Fallback Author",
+        tier="Cluster Content",
+    )
+    validated = validate_assembly_metadata(metadata, expected_topic=topic)
+
+    assert validated["title"] == topic
+    assert validated["author"] == "LaserPointerHub"
+    assert validated["summary"].startswith("Find the best laser pointer")
+    assert validated["tags"] == [
+        "laser pointer",
+        "pointing above ceilings",
+        "commercial construction",
+    ]
+    assert validated["seo_keywords"][0] == topic.casefold()
+    assert 50 <= len(validated["seo_title"]) <= 60
+    assert validated["seo_title"] == (
+        "Laser Pointer for Commercial Construction: Above Ceilings"
+    )
+    assert 150 <= len(validated["seo_description"]) <= 160
+    assert validated["seo_description"].endswith("what to look for.")
 
 
 def test_metadata_rejects_missing_frontmatter():

@@ -31,6 +31,12 @@
 
 ### Fixed
 
+- Legacy frontmatter used by sectional shadow now decodes simple YAML single-
+  and double-quoted scalars and rejects malformed quoting at the adapter
+  boundary. Sparse older drafts may reuse `description` for summary/SEO
+  description, derive only the missing minimum tags/keywords from the Action
+  topic, and deterministically compact SEO fields into canonical length ranges
+  without rewriting the formal draft.
 - Existing-pair sectional shadow now supports pre-existing Actions whose compact
   write brief contains an empty `tier`. It may read `precheck_tier` from the
   existing W1b state only when `precheck_draft_sha256` exactly matches the

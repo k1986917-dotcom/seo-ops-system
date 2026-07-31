@@ -26,6 +26,42 @@ class SectionalLegacyAdapterError(RuntimeError):
     """Raised when Legacy inputs cannot safely produce a sectional candidate."""
 
 
+def _frontmatter_scalar(value: str) -> str:
+    """Return the text value of a simple YAML frontmatter scalar.
+
+    Legacy drafts commonly quote frontmatter values.  The sectional adapter
+    does not need a full YAML parser, but it must compare the represented value
+    rather than the literal quote characters.  Double-quoted values are decoded
+    with JSON-compatible escapes; single-quoted YAML values collapse doubled
+    apostrophes.  Malformed or unmatched outer quoting is rejected here so it
+    cannot accidentally satisfy a downstream length-only metadata gate.
+    """
+    clean = value.strip()
+    starts_quoted = bool(clean) and clean[0] in {'"', "'"}
+    if starts_quoted and (len(clean) < 2 or clean[0] != clean[-1]):
+        raise SectionalLegacyAdapterError("Legacy frontmatter scalar has malformed quotes")
+    if len(clean) < 2 or not starts_quoted:
+        return clean
+    if clean[0] == '"':
+        try:
+            decoded = json.loads(clean)
+        except json.JSONDecodeError as exc:
+            raise SectionalLegacyAdapterError(
+                "Legacy frontmatter double-quoted scalar is invalid"
+            ) from exc
+        if not isinstance(decoded, str):
+            raise SectionalLegacyAdapterError(
+                "Legacy frontmatter quoted scalar must decode to text"
+            )
+        return decoded
+    inner = clean[1:-1]
+    if "'" in inner.replace("''", ""):
+        raise SectionalLegacyAdapterError(
+            "Legacy frontmatter single-quoted scalar is invalid"
+        )
+    return inner.replace("''", "'")
+
+
 def _frontmatter(draft: str) -> dict[str, str]:
     if not isinstance(draft, str) or not draft.startswith("---"):
         raise SectionalLegacyAdapterError("Legacy draft is missing frontmatter")
@@ -36,12 +72,135 @@ def _frontmatter(draft: str) -> dict[str, str]:
     for line in parts[1].splitlines():
         match = re.match(r"^([^:]+?):\s*(.+?)\s*$", line.strip())
         if match:
-            result[match.group(1).strip().casefold()] = match.group(2).strip()
+            result[match.group(1).strip().casefold()] = _frontmatter_scalar(
+                match.group(2)
+            )
     return result
 
 
 def _list_value(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _fit_metadata_text(
+    values: list[str],
+    *,
+    minimum: int,
+    maximum: int,
+    removable_phrases: tuple[str, ...] = (),
+) -> str:
+    """Choose and word-trim an existing metadata value into a strict range."""
+    fallback = ""
+    for value in values:
+        clean = " ".join(str(value or "").split())
+        if not clean:
+            continue
+        if not fallback:
+            fallback = clean
+        candidate = clean
+        if len(candidate) > maximum:
+            for phrase in removable_phrases:
+                compacted = re.sub(
+                    rf"\b{re.escape(phrase)}\b\s*",
+                    "",
+                    candidate,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+                if minimum <= len(compacted) <= maximum:
+                    return compacted
+        if len(candidate) > maximum:
+            shortened = candidate[: maximum + 1].rsplit(" ", 1)[0].rstrip(" ,;:-")
+            candidate = shortened or candidate[:maximum].rstrip(" ,;:-")
+        if minimum <= len(candidate) <= maximum:
+            return candidate
+    return fallback
+
+
+def _fit_seo_title(values: list[str]) -> str:
+    for value in values:
+        clean = " ".join(str(value or "").split())
+        if not clean:
+            continue
+        if 50 <= len(clean) <= 60:
+            return clean
+        pattern = re.fullmatch(
+            r"(.+?)\s+for\s+(.+?)\s+in\s+(.+)",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if pattern:
+            subject, purpose, context = (part.strip() for part in pattern.groups())
+            purpose_words = purpose.split()
+            if len(purpose_words) > 1 and purpose_words[0].casefold().endswith("ing"):
+                purpose = " ".join(purpose_words[1:])
+            candidate = f"{subject} for {context}: {purpose}"
+            if 50 <= len(candidate) <= 60:
+                return candidate
+    return _fit_metadata_text(values, minimum=50, maximum=60)
+
+
+def _topic_metadata_phrases(topic: str) -> list[str]:
+    clean = " ".join(str(topic or "").split())
+    if not clean:
+        return []
+    candidates = [
+        part.strip().casefold()
+        for part in re.split(
+            r"\b(?:for|in|with|versus|vs\.?|and|to|by|on)\b",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if len(part.strip().split()) >= 2
+    ]
+    candidates.append(clean.casefold())
+    words = re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*", clean)
+    if len(words) >= 2:
+        candidates.extend(
+            [
+                " ".join(words[:2]).casefold(),
+                " ".join(words[-2:]).casefold(),
+            ]
+        )
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = " ".join(candidate.split())
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            result.append(normalized)
+            seen.add(key)
+    return result
+
+
+def _bounded_metadata_list(
+    primary: list[str],
+    fallback: list[str],
+    *,
+    minimum: int,
+    maximum: int,
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in primary:
+        clean = " ".join(str(value or "").split())
+        key = clean.casefold()
+        if clean and key not in seen:
+            result.append(clean)
+            seen.add(key)
+        if len(result) >= maximum:
+            break
+    if len(result) >= minimum:
+        return result
+    for value in fallback:
+        clean = " ".join(str(value or "").split())
+        key = clean.casefold()
+        if clean and key not in seen:
+            result.append(clean)
+            seen.add(key)
+        if len(result) >= minimum or len(result) >= maximum:
+            break
+    return result
 
 
 def build_legacy_assembly_metadata(
@@ -54,16 +213,47 @@ def build_legacy_assembly_metadata(
 ) -> dict[str, Any]:
     meta = _frontmatter(draft)
     minimum = int(TIER_MIN_WORDS.get(tier, 1200))
+    title = meta.get("title") or topic
+    description = meta.get("description", "")
+    topic_phrases = _topic_metadata_phrases(topic)
+    tags = _bounded_metadata_list(
+        _list_value(meta.get("tags", "")),
+        topic_phrases,
+        minimum=3,
+        maximum=5,
+    )
+    seo_keywords = _bounded_metadata_list(
+        _list_value(meta.get("seo keywords", "")),
+        [topic.casefold(), *topic_phrases],
+        minimum=1,
+        maximum=8,
+    )
     return {
-        "title": meta.get("title") or topic,
+        "title": title,
         "slug": meta.get("slug") or slug,
         "author": meta.get("author") or author,
-        "summary": meta.get("summary", ""),
-        "tags": _list_value(meta.get("tags", "")),
+        "summary": _fit_metadata_text(
+            [meta.get("summary", ""), description],
+            minimum=80,
+            maximum=300,
+        ),
+        "tags": tags,
         "page_type": meta.get("page type") or meta.get("tier") or tier,
-        "seo_title": meta.get("seo title") or meta.get("title", ""),
-        "seo_description": meta.get("seo description") or meta.get("summary", ""),
-        "seo_keywords": _list_value(meta.get("seo keywords", "")),
+        "seo_title": _fit_seo_title([meta.get("seo title", ""), title, topic]),
+        "seo_description": _fit_metadata_text(
+            [meta.get("seo description", ""), description, meta.get("summary", "")],
+            minimum=150,
+            maximum=160,
+            removable_phrases=(
+                "best",
+                "complete",
+                "comprehensive",
+                "detailed",
+                "ultimate",
+                "in-depth",
+            ),
+        ),
+        "seo_keywords": seo_keywords,
         "target_words": {"min": minimum, "max": max(minimum, round(minimum * 1.6))},
     }
 
