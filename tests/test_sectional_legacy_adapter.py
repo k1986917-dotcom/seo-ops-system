@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from dataclasses import replace
 
@@ -164,6 +165,181 @@ def test_existing_pair_shadow_uses_current_pair_without_mutating_it(
     assert result["formal_pair"]["claim_sha256_before"] == (
         result["formal_pair"]["claim_sha256_after"]
     )
+    assert result["existing_pair_inputs"] == {
+        "tier": "Cluster Content",
+        "tier_source": "write_brief",
+    }
+
+
+def test_existing_pair_shadow_recovers_empty_brief_tier_from_matching_w1b_state(
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    slug, draft_path, _ = _existing_pair_workspace(tmp_path)
+    brief_path = tmp_path / "research" / f"write-brief-{slug}.json"
+    brief = json.loads(brief_path.read_text(encoding="utf-8"))
+    brief["tier"] = ""
+    brief_path.write_text(json.dumps(brief), encoding="utf-8")
+    state_path = tmp_path / "reports" / f"w2-state-{slug}.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "precheck_tier": "Cluster Content",
+                "precheck_draft_sha256": hashlib.sha256(
+                    draft_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    configured = replace(settings, sectional_writing_mode="shadow")
+    calls = []
+
+    async def fake_rollout(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "shadow_complete",
+            "decision": {"promotion_allowed": False},
+        }
+
+    monkeypatch.setattr(
+        "seo_ops.services.sectional_legacy_adapter.run_legacy_sectional_rollout",
+        fake_rollout,
+    )
+    result = _run_existing_shadow(
+        action_id=3,
+        topic="Professional Ceiling Marking Tools",
+        author="Example Tools",
+        workspace=tmp_path,
+        slug=slug,
+        settings=configured,
+        generate_text_async=lambda *args, **kwargs: None,
+    )
+
+    assert calls[0]["tier"] == "Cluster Content"
+    assert result["existing_pair_inputs"] == {
+        "tier": "Cluster Content",
+        "tier_source": "matching_w1b_state",
+    }
+
+
+def test_existing_pair_shadow_rejects_stale_w1b_tier_fallback(
+    tmp_path,
+    settings,
+):
+    slug, _, _ = _existing_pair_workspace(tmp_path)
+    brief_path = tmp_path / "research" / f"write-brief-{slug}.json"
+    brief = json.loads(brief_path.read_text(encoding="utf-8"))
+    brief["tier"] = ""
+    brief_path.write_text(json.dumps(brief), encoding="utf-8")
+    state_path = tmp_path / "reports" / f"w2-state-{slug}.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "precheck_tier": "Cluster Content",
+                "precheck_draft_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    configured = replace(settings, sectional_writing_mode="shadow")
+
+    with pytest.raises(
+        SectionalLegacyAdapterError,
+        match="does not belong to the current formal draft",
+    ):
+        _run_existing_shadow(
+            action_id=3,
+            topic="Professional Ceiling Marking Tools",
+            author="Example Tools",
+            workspace=tmp_path,
+            slug=slug,
+            settings=configured,
+            generate_text_async=lambda *args, **kwargs: None,
+        )
+
+
+def test_existing_pair_shadow_rejects_conflicting_matching_tiers(
+    tmp_path,
+    settings,
+):
+    slug, draft_path, _ = _existing_pair_workspace(tmp_path)
+    state_path = tmp_path / "reports" / f"w2-state-{slug}.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "precheck_tier": "Pillar Page",
+                "precheck_draft_sha256": hashlib.sha256(
+                    draft_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    configured = replace(settings, sectional_writing_mode="shadow")
+
+    with pytest.raises(
+        SectionalLegacyAdapterError,
+        match="conflicts with the matching W1b state tier",
+    ):
+        _run_existing_shadow(
+            action_id=3,
+            topic="Professional Ceiling Marking Tools",
+            author="Example Tools",
+            workspace=tmp_path,
+            slug=slug,
+            settings=configured,
+            generate_text_async=lambda *args, **kwargs: None,
+        )
+
+
+def test_existing_pair_shadow_ignores_stale_state_tier_when_brief_tier_is_valid(
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    slug, _, _ = _existing_pair_workspace(tmp_path)
+    state_path = tmp_path / "reports" / f"w2-state-{slug}.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "precheck_tier": "obsolete-unsupported-tier",
+                "precheck_draft_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    configured = replace(settings, sectional_writing_mode="shadow")
+    calls = []
+
+    async def fake_rollout(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "shadow_complete",
+            "decision": {"promotion_allowed": False},
+        }
+
+    monkeypatch.setattr(
+        "seo_ops.services.sectional_legacy_adapter.run_legacy_sectional_rollout",
+        fake_rollout,
+    )
+    result = _run_existing_shadow(
+        action_id=3,
+        topic="Professional Ceiling Marking Tools",
+        author="Example Tools",
+        workspace=tmp_path,
+        slug=slug,
+        settings=configured,
+        generate_text_async=lambda *args, **kwargs: None,
+    )
+
+    assert calls[0]["tier"] == "Cluster Content"
+    assert result["existing_pair_inputs"]["tier_source"] == "write_brief"
 
 
 def test_existing_pair_shadow_requires_shadow_mode(tmp_path, settings):

@@ -31,6 +31,12 @@
 
 ### Fixed
 
+- Existing-pair sectional shadow now supports pre-existing Actions whose compact
+  write brief contains an empty `tier`. It may read `precheck_tier` from the
+  existing W1b state only when `precheck_draft_sha256` exactly matches the
+  current formal draft; stale, unsupported or conflicting tiers still fail
+  closed. No Action file is rewritten, and the selected source is recorded in
+  `existing_pair_inputs.tier_source`.
 - 新增已有正式稿的安全 sectional shadow 入口：
   `POST /actions/{action_id}/legacy/stage/sectional-shadow` 只允许 `mode=shadow`，直接读取
   现有 draft、claim ledger 和 R3 写作合同，不再为了 shadow 重跑 W0。运行前后校验正式

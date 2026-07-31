@@ -226,12 +226,19 @@
   `w1b_pre_check/in_progress`；正式 draft SHA 为
   `a09e790329469c4fc035562d4c31d1712b7c0ea9781920c76edd1c037e6621e1`，claim ledger SHA 为
   `d118d10cf88faa29c81bf19176501120c2cd53eeb542a9fc1c4b6978f8e664a6`。
-- 正式 rollout 仍默认 `off`；未运行真实 AI/API 或真实 Action，未修改正式生产产物。
+- `e729eff` 已推送且本地/远端一致。第一次真实 existing-pair shadow 请求到达服务，因
+  Action #3 旧 `write-brief` 的 `tier=""` 被安全拒绝；HTTP 303 redirect 为 error，未调用
+  sectional pipeline，未生成 sectional 目录，正式 pair/state/DB/.env SHA 全部不变。
+- 已补旧 Action 兼容：write brief tier 为空时，仅可使用与当前正式 draft SHA 完全绑定的
+  w2-state `precheck_tier`；过期、冲突或未知 tier 继续 fail-closed，不写回任何 Action
+  文件。真实 Action #3 只读解析为 `Cluster Content / matching_w1b_state`。
+- 新增后 adapter 专项 `17 passed`，sectional 加版本 `153 passed`，Legacy/W1b
+  `264 passed, 1 warning`。正式 rollout 仍默认 `off`。
 
 ### 当前下一步
 
-1. 提交并推送 existing-pair shadow 安全入口。
-2. 仅以 `SEO_OPS_SECTIONAL_WRITING_MODE=shadow` 通过新增正式 Web POST 对 Action #3 运行
+1. 提交并推送空 tier 的 SHA 绑定兼容修复。
+2. 仅以 `SEO_OPS_SECTIONAL_WRITING_MODE=shadow` 通过新增正式 Web POST 对 Action #3 再运行
    一次真实候选和比较；不得重跑 W0，不允许 promotion。
 3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。
 4. B303 产品页/目录修正后重新生成产品报告，确认 catalog data issues 自动清零。

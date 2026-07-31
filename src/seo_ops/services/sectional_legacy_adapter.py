@@ -118,6 +118,60 @@ def _restore_formal_pair(
         ) from exc
 
 
+def _validated_tier(value: Any, field: str) -> str:
+    tier = str(value or "").strip()
+    if tier and tier not in TIER_MIN_WORDS:
+        raise SectionalLegacyAdapterError(f"{field} is unsupported: {tier}")
+    return tier
+
+
+def _resolve_existing_pair_tier(
+    *,
+    workspace: Path,
+    slug: str,
+    brief: dict[str, Any],
+    draft_bytes: bytes,
+) -> tuple[str, str]:
+    """Resolve a legacy tier without mutating resumed Action artifacts.
+
+    Older Actions may have an empty ``write-brief.tier`` even though W1b has
+    already recorded the tier used to validate the exact formal draft.  That
+    state is a safe compatibility source only when its draft SHA matches the
+    current formal draft byte-for-byte.
+    """
+    brief_tier = _validated_tier(brief.get("tier"), "write brief tier")
+    state_path = workspace / "reports" / f"w2-state-{slug}.json"
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        state = _load_json(state_path, "W2 state")
+    draft_sha256 = hashlib.sha256(draft_bytes).hexdigest()
+    state_draft_sha256 = str(state.get("precheck_draft_sha256") or "").strip()
+    state_matches_draft = state_draft_sha256 == draft_sha256
+    raw_state_tier = state.get("precheck_tier")
+
+    if brief_tier:
+        if state_matches_draft:
+            state_tier = _validated_tier(raw_state_tier, "W1b state tier")
+        else:
+            state_tier = ""
+        if state_tier and state_tier != brief_tier:
+            raise SectionalLegacyAdapterError(
+                "write brief tier conflicts with the matching W1b state tier"
+            )
+        return brief_tier, "write_brief"
+
+    state_tier = _validated_tier(raw_state_tier, "W1b state tier")
+    if not state_tier:
+        raise SectionalLegacyAdapterError(
+            "write brief tier is missing and matching W1b state tier is unavailable"
+        )
+    if not state_matches_draft:
+        raise SectionalLegacyAdapterError(
+            "W1b state tier does not belong to the current formal draft"
+        )
+    return state_tier, "matching_w1b_state"
+
+
 async def run_existing_legacy_sectional_shadow(
     *,
     action_id: int,
@@ -165,9 +219,12 @@ async def run_existing_legacy_sectional_shadow(
         ),
     }
     brief = contracts["brief"]
-    tier = str(brief.get("tier") or "").strip()
-    if not tier:
-        raise SectionalLegacyAdapterError("write brief tier is missing")
+    tier, tier_source = _resolve_existing_pair_tier(
+        workspace=workspace,
+        slug=slug,
+        brief=brief,
+        draft_bytes=draft_before,
+    )
 
     try:
         result = await run_legacy_sectional_rollout(
@@ -228,6 +285,10 @@ async def run_existing_legacy_sectional_shadow(
         "claim_sha256_before": hashlib.sha256(claim_before).hexdigest(),
         "claim_sha256_after": hashlib.sha256(claim_after).hexdigest(),
         "unchanged": True,
+    }
+    result["existing_pair_inputs"] = {
+        "tier": tier,
+        "tier_source": tier_source,
     }
     return result
 

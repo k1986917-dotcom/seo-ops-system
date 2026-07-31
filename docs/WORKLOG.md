@@ -59,6 +59,35 @@ blocker 前不启用 promotion。
 - 正式 claim ledger SHA：`d118d10cf88faa29c81bf19176501120c2cd53eeb542a9fc1c4b6978f8e664a6`。
 - 未运行真实 AI/API、shadow、promotion 或 rollback；正式数据未修改。
 
+## 2026-07-31 — 旧 Action 空 tier 的 SHA 绑定兼容回退
+
+### 真实失败
+
+- `e729eff` 推送后，Action #3 通过新增正式 Web POST 发出一次 shadow 请求。
+- 服务正常返回 HTTP 303，但 redirect 为 error：`write brief tier is missing`。
+- 只读检查确认 `write-brief-*.json` 的 `tier` 键存在但值为 `""`；这是旧 Action 既有
+  数据。正式 draft、claim ledger、w2-state、数据库和 `.env` SHA 均未变化，且未生成
+  sectional 目录。
+
+### 修复
+
+- existing-pair shadow 不再要求旧 compact write brief 必须带非空 tier。
+- write brief 有合法 tier 时仍优先使用；若为空，只允许从既有 w2-state 读取
+  `precheck_tier`，并要求 `precheck_draft_sha256` 与当前正式 draft SHA 完全一致。
+- tier 必须属于 `TIER_MIN_WORDS` 支持列表；write brief 与绑定当前 draft 的 W1b tier
+  冲突、state tier 过期或不受支持时继续 fail-closed。
+- 不写回 write brief、w2-state 或任何 Action 文件；结果新增
+  `existing_pair_inputs.tier_source` 记录 `write_brief` 或 `matching_w1b_state`。
+
+### 验证
+
+- adapter 专项：`17 passed`。
+- Phase 1–7 sectional 加版本测试：原 `149` 项基础上新增 4 项，合计 `153 passed`。
+- Legacy/W1b：`186 + 78 = 264 passed, 1 warning`；唯一 warning 仍为既有
+  Starlette/httpx 弃用提示。
+- 对真实 Action #3 的纯只读解析返回：
+  `('Cluster Content', 'matching_w1b_state')`；未调用 AI、未写文件。
+
 ## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
 
 ### 核实结论
