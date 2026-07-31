@@ -25,8 +25,43 @@
 
 ### 下一步
 
-Phase 5 已完成 shadow 代码、专项与旧 W1b 兼容回归；本机完整 pytest 通过后提交
-Phase 5，并将尚未推送的 Phase 4 一并推送。继续保持 shadow-only，不接管正式 W0。
+Phase 6 已完成 shadow 代码和本机全量验证；Phase 5 已推送。下一步提交/推送 Phase 6，
+然后进入 Phase 7。继续保持 shadow-only，不接管正式 W0。
+
+## 2026-07-31 — Phase 6 W1b/W2 失败定位、局部修订与 claim 重映射
+
+### 本次完成
+
+- 新增 `sectional_repair.py`，把 W1b/W2 的结构化 checks、fact issues、fix items、
+  link issues 以及 `score_error/cannibal_error/*_block` 统一转换为 SHA 绑定 repair plan。
+- 失败定位依次使用显式 section ID、全局 S-ID、完整 sentence text、已绑定 URL、正文 H2
+  标题和 Introduction/Takeaways/Conclusion/FAQ aliases。无法安全定位的评分、蚕食或系统
+  失败保持 global blocker，不调用 AI 猜测修复范围。
+- 局部动作分为正文重写、link-only、ledger-only 和 frame refresh；最多两轮。Link Repair
+  的即时响应、写 checkpoint、读 checkpoint 均复用同一“读者可见文字零变化”门禁。
+- 多章节修复按正文顺序运行，后一节获得前一节的新摘要；当前旧输出仍用原始 package
+  校验，新修复输出使用更新后的 package，避免 package SHA 混用。
+- 正文变更后重新生成 article frame；FAQ/frame-only 修复不调用正文生成器。所有未目标
+  正文 output 必须与旧版本完全相等。
+- 新 delivery 重新分配全局 S-ID 后，未改单元的 claims 通过唯一规范化 `claim_text`
+  重映射；旧 evidence 不再批准、文本匹配不唯一或 package 校验失败时，仅重审该单元。
+- 修复后强制重新执行 Phase 4 URL binding/section ledger merge 和 Phase 5 assembly gates。
+  最终 result 保存 repair plan、section run、frame、delivery、ledger run、最终 ledger 与
+  assembly，并验证嵌套 SHA、单元覆盖、动作声明和计数一致性。
+
+### 验证与安全状态
+
+- 本机完整 pytest：`534 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx
+  弃用提示，无其他 warning。
+- Phase 6 新增：`24 passed`；Phase 1–6 sectional 联合：`108 passed`。
+- Legacy/W1b 大回归未排除 `TestPrecheckGateDisplay`：`263 passed, 1 warning`。
+- MCP 完整 pytest 仍会因 `openpyxl -> mimetypes -> /etc/mime.types` Landlock 权限阻止，
+  但本机完整套件已全部通过。
+- Ruff、compileall、`git diff --check`：通过。
+- 正式 W0/W1b/W2 未导入新模块；未调用真实 AI/API，未运行真实 Action，未修改正式
+  draft、claim ledger、w2-state、数据库或产品数据。
+- Phase 5 已本地提交为 `287235eb5e18f2bac47ab2164206b4f2fc5d178c`，插件环境无法
+  完成远端认证，当前分支相对远端 `ahead=1`。
 
 ## 2026-07-31 — Phase 5 canonical assembly、FAQ schema 与全局链接审计
 
@@ -58,8 +93,8 @@ Phase 5，并将尚未推送的 Phase 4 一并推送。继续保持 shadow-only�
   本地与远端一致。
 - 正式 W0/W1b/W2 未导入新模块；未调用真实 AI/API，未运行真实 Action，未修改正式
   draft、claim ledger、w2-state、数据库或产品数据。
-- Phase 4 已本地提交为 `347fb832d51db5ebfb3332b006970487bc5810af`，当前分支相对
-  远端 `ahead=1`。
+- Phase 5 已本地提交为 `287235eb5e18f2bac47ab2164206b4f2fc5d178c`，当前分支相对
+  远端 `ahead=1`；Phase 4 已推送。
 
 ## 2026-07-31 — Phase 4 最终草稿绑定、全局 S-ID 与章节 ledger
 

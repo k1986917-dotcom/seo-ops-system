@@ -187,6 +187,26 @@ sentence_id、claim_type 和 evidence_ids，claim_text 由服务端从最终 Mar
 W1b/W2 根据失败句定位章节，只重写失败章节；已通过章节保持不变。全文组装后必须重新
 执行全部正式门禁。
 
+### 7.1 局部修订必须保留可证明的不变部分
+
+W1b/W2 failure adapter 必须先把 report 规范化为 SHA 绑定 repair plan，再决定动作：
+
+- `section_rewrite`：只替换被定位的正文 H2；
+- `link_repair`：读者可见文字、段落和标点保持不变，只调整批准占位符与 decisions；
+- `ledger_repair`：正文与 frame 完全不变，只重审目标单元 ledger；
+- `frame_rewrite`：只刷新 Introduction/Takeaways/Conclusion/FAQ，不调用正文生成器。
+
+定位只允许使用显式 section ID、全局 S-ID、完整 sentence text、已绑定 URL、正文 heading
+或明确 frame alias。评分器/蚕食检查器异常、蚕食阻塞和其他不可安全定位的问题保持
+global blocker，不得让模型猜测修复范围。单次自动修订最多两轮。
+
+多章节同轮修订按正文顺序执行，后一节必须接收前一节修订后的摘要；但当前旧输出仍按
+原始 generation package 校验，修订输出按更新后的 package 校验，禁止混用 package SHA。
+
+重新组装导致全局 S-ID 移动时，未改单元的旧 claims 只能通过唯一规范化 claim_text 映射
+到新 S-ID。匹配不唯一、证据不再批准或 package 不一致时，仅重审该单元。所有结果仍需
+重新通过 URL binding、section ledger merge、claim ledger 权威校验和 Phase 5 全局门禁。
+
 ## 实施约束
 
 1. 用户界面仍保持现有阶段按钮，不增加逐节手工操作。

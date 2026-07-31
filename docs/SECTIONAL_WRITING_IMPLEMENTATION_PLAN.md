@@ -202,7 +202,7 @@ Action #3 只读合同重建确认正文 6 节，未调用 AI、未写入 Action
 
 ### Phase 5 — 确定性组装与全局编辑门禁
 
-状态：**shadow-only 代码与全量验证完成，待原子提交**
+状态：**shadow-only 代码与全量验证完成，已本地提交待推送**
 
 - [x] 确定性组装 canonical frontmatter、Phase 4 body 和 FAQPage JSON-LD；
 - [x] FAQ schema 只从可见 FAQ 问答生成，问题与答案逐项一致；
@@ -222,15 +222,31 @@ Action #3 只读合同重建确认正文 6 节，未调用 AI、未写入 Action
 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码失败。正式 W0/W1b/W2
 未导入 Phase 5。
 
+Phase 5 提交 `287235eb5e18f2bac47ab2164206b4f2fc5d178c`
+(`feat: add deterministic sectional assembly`) 已由本机认证环境推送，本地与远端一致。
+
 ### Phase 6 — W1b/W2 章节定位与局部修订
 
-状态：**待实施**
+状态：**shadow-only 代码与全量验证完成，待原子提交**
 
-- 将失败句映射到 section ID；
-- 仅重写失败章节或只做 Link Repair；
-- 其他章节保持不变；
-- 重新组装后运行全部正式门禁；
-- 保留现有批次上限和原子写。
+- [x] 规范化 W1b/W2 checks、fact issues、fix items、link issues 和布尔 gate/error；
+- [x] 通过 section ID、S-ID、完整 sentence text、绑定 URL、heading/frame alias 定位单元；
+- [x] 评分器/蚕食检查器错误、蚕食阻塞和不可定位失败保持 global blocker；
+- [x] 区分 `section_rewrite|link_repair|ledger_repair|frame_rewrite`，最多两轮；
+- [x] Link Repair 保持读者可见文字字节语义不变，只能调整批准占位符与 decisions；
+- [x] 多章节同轮按顺序修复，后一节使用前一节修复后的摘要；
+- [x] 未目标正文输出保持不变；正文变更后刷新 article frame；frame-only 不调用正文模型；
+- [x] 新全局 S-ID 生成后，未改 claims 通过唯一 claim_text 映射；不安全时仅重审该单元；
+- [x] repair checkpoint 绑定完整 repair package；损坏/越权/可见文字变化时拒绝恢复；
+- [x] 修复后重新运行 Phase 4 delivery/ledger 与 Phase 5 assembly 全局门禁；
+- [x] result 持久化 repair plan、section/frame/delivery/ledger/assembly，并验证嵌套一致性。
+
+专项验收：Phase 6 新增 `24 passed`；Phase 1–6 sectional 联合 `108 passed`；Ruff、
+compileall、`git diff --check` 通过。本机完整 pytest 为 `534 passed, 1 warning`；唯一
+warning 为既有 Starlette/httpx 弃用提示。Legacy/W1b 兼容回归未排除
+`TestPrecheckGateDisplay`，结果为 `263 passed, 1 warning`。MCP 完整 pytest 仍会被
+`/etc/mime.types` Landlock 权限阻止，但本机完整套件已通过。正式 W0/W1b/W2 尚未导入
+Phase 6。
 
 ### Phase 7 — Shadow 对比、正式切换与清理
 
@@ -256,5 +272,5 @@ Action #3 只读合同重建确认正文 6 节，未调用 AI、未写入 Action
 
 ## 当前下一步
 
-本机运行完整 pytest；通过后形成并推送 Phase 5 原子提交，同时推送尚未上远端的
-Phase 4 提交。随后进入 Phase 6：章节失败定位、局部修订和 Link Repair。
+形成并推送 Phase 6 原子提交。随后进入 Phase 7：shadow 对比、feature flag、单 Action
+正式切换和回滚验收。

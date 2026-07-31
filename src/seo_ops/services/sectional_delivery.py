@@ -1036,6 +1036,17 @@ def _generate_one_section_ledger(
     )
 
 
+def generate_section_claim_output(
+    package: dict[str, Any],
+    generate_text: Callable[..., str],
+) -> dict[str, Any]:
+    """Public fail-closed wrapper for one section-scoped claim audit."""
+    validated = validate_section_claim_package(package)
+    if not callable(generate_text):
+        raise SectionDeliveryError("generate_text must be callable")
+    return _generate_one_section_ledger(validated, generate_text)
+
+
 def run_section_claim_ledger_sequence(
     *,
     workspace: Path,

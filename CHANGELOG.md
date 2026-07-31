@@ -31,6 +31,12 @@
 
 ### Added
 
+- 新增章节化写作 Phase 6 局部修订层：将 W1b/W2 失败映射到正文 section、article frame、
+  link-only 或 ledger-only 动作；不可定位的评分、蚕食和系统失败保持 global blocker。
+- 多章节修订按顺序传递新摘要；未目标正文保持不变。全局 S-ID 变化后，未改 claims 通过
+  唯一 claim_text 重映射，不安全时只重审对应单元。
+- Link Repair 的即时响应、checkpoint 写入和 checkpoint 恢复均强制读者可见文字不变；
+  修复结果重新通过 Phase 4 delivery/ledger 和 Phase 5 assembly 全局门禁，最多两轮。
 - 新增章节化写作 Phase 5 canonical assembly：确定性生成 frontmatter、可见 FAQ 对应的
   FAQPage JSON-LD、最终 draft、最终 claim ledger 和 assembly report；目前仍为 shadow-only。
 - 新增全局交付门禁：目标词数、H1/H2 顺序、Takeaways/FAQ 数量、跨章节重复、未登记

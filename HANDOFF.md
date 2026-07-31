@@ -122,7 +122,7 @@
   `347fb832d51db5ebfb3332b006970487bc5810af`
   (`feat: add sectional delivery and ledgers`)；本地与远端一致。
 
-### Phase 5 shadow 代码与全量验证已完成，待提交
+### Phase 5 shadow 代码与全量验证已完成，已本地提交待推送
 
 - 新增 `src/seo_ops/services/sectional_assembly.py`：不调用 AI，确定性生成 canonical
   frontmatter、可见 FAQ 对应的 FAQPage JSON-LD、最终 draft 与重新绑定最终 draft SHA
@@ -145,13 +145,42 @@
   SEO Title normalization。
 - MCP 完整 pytest 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码回归。
 - 正式 W0/W1b/W2 尚未导入 Phase 5；未调用真实 API、未运行真实 Action、未写正式产物。
+- Phase 5 已提交并由本机认证环境成功推送：
+  `287235eb5e18f2bac47ab2164206b4f2fc5d178c`
+  (`feat: add deterministic sectional assembly`)；本地与远端一致。
+
+### Phase 6 shadow 局部修订代码与全量验证已完成，待提交
+
+- 新增 `src/seo_ops/services/sectional_repair.py`，把 W1b/W2 的 checks、fact issues、
+  fix items、link issues 和布尔 gate/error 字段规范化为可审计 repair plan。
+- 失败可通过 `section_id`、全局 S-ID、完整 sentence text、绑定 URL 和 H1/Introduction/
+  Takeaways/Conclusion/FAQ 别名定位。评分器/蚕食检查器异常、不可定位评分失败和蚕食阻塞
+  保持 global blocker，绝不让 AI 猜测修复位置。
+- 修复动作分为 `section_rewrite`、`link_repair`、`ledger_repair` 和 `frame_rewrite`；
+  单次最多两轮。Link Repair 必须保持全部读者可见文字不变，只能调整批准占位符和链接
+  decision；恶意或损坏 checkpoint 会被拒绝恢复。
+- 多章节同轮修复按原顺序执行，后一节收到前一节修复后的新摘要。未目标正文输出保持
+  字节级不变；正文改写后刷新 article frame，FAQ-only/frame-only 修复不调用正文生成器。
+- 重新组装后的全局 S-ID 发生移动时，未改单元的旧 claims 按唯一规范化 `claim_text`
+  映射到新 S-ID；映射不唯一、证据不再批准或 package 不一致时，只对该单元重新审计。
+- 修复结果重新经过 Phase 4 delivery/ledger 合并和 Phase 5 assembly 全局门禁；result
+  持久化完整 repair plan、section run、article frame、delivery、ledger run 和最终 assembly，
+  并重新验证嵌套 SHA、单元覆盖、计数和 changed/unchanged 声明。
+- 本机完整 `pytest -q`：`534 passed, 1 warning`；唯一 warning 为既有
+  Starlette/httpx 弃用提示，无其他 warning。
+- Phase 1–6 sectional 专项 `108 passed`；Phase 6 新增 `24 passed`。
+- Legacy/W1b 兼容回归未排除 `TestPrecheckGateDisplay`：`263 passed, 1 warning`。
+- MCP 完整 pytest 仍会在收集阶段被 `/etc/mime.types` Landlock 权限阻止；这是插件
+  沙箱限制，不是代码回归，本机完整套件已证明全部通过。
+- Ruff、compileall、`git diff --check` 全部通过。正式 W0/W1b/W2 尚未导入 Phase 6；
+  未运行真实 AI/API 或 Action，未写正式 draft、ledger、state 或数据库。
 
 ### 当前下一步
 
-1. 提交并推送 Phase 5 原子变更。
-2. 进入 Phase 6：W1b/W2 失败定位、章节局部修订和 Link Repair。
+1. 提交并推送 Phase 6 原子变更。
+2. 进入 Phase 7：shadow 对比、feature flag、单 Action 切换和正式回滚路径。
 3. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
-4. 只有 Phase 6–7 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
+4. 只有 Phase 7 的 shadow 对比与真实单 Action 验收通过后，才扩大正式启用范围。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 
