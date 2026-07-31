@@ -709,6 +709,7 @@ Return exactly two blocks:
 <complete repaired H2 Markdown>
 {SECTION_DECISIONS_MARKER}
 <one JSON object containing article_links, product_links, external_citations>
+For every non-empty used_ids list, set reason_code to used_approved_candidate. For an unused recommended gate, provide a concise rejection reason. For an unused none gate, preserve the supplied gate reason_code.
 The result must be a complete replacement, not a patch or explanation."""
     user = "SECTION REPAIR PACKAGE\n" + json.dumps(
         validated,

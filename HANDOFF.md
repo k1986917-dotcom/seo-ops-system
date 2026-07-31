@@ -247,12 +247,26 @@
   字符，3 个 tags，SEO Title 57 字符，SEO Description 158 字符且句子完整。
 - 修复后 adapter 专项 `21 passed`，sectional 加版本 `157 passed`，Legacy/W1b/FAQ
   `264 passed, 1 warning`。未把 MCP 丢失结果的长时完整套件记为通过。
+- `2eb008e` 已推送。第三次真实 existing-pair shadow 首次通过 tier 与 metadata 门禁并进入
+  AI 正文生成；`ai_runs #134`（`legacy_write_sectional_body`）成功写入后，section parser
+  因 `external_citations used candidates require a used reason_code` 安全停止。正式
+  draft/claim ledger/w2-state/`.env` 与 Action 行保持不变；数据库文件 SHA 变化仅来自合法
+  `ai_runs` 审计新增，不能再把“整个 DB SHA 不变”作为真实 AI shadow 的验收条件。
+- 已修复 decisions 合同：placeholder 与 `used_ids` 仍须逐项一致、候选仍须 allowlisted；
+  当使用事实已由服务端验证后，reason code 确定性规范化为
+  `used_approved_candidate`。未使用 gate 仍必须给出非空原因，门禁未放宽。
+- 新增受测运维工具 `tools/run_sectional_shadow.py`，后续真实 shadow 使用短命令
+  `.venv/bin/python tools/run_sectional_shadow.py --action-id 3`，不再内嵌巨型 Python，且
+  push 与 shadow 必须分成两个原子阶段。
+- 本轮最终验证：sectional 加版本及 runner `167 passed`；Legacy/W1b/sentence-ID/FAQ
+  `264 passed, 1 warning`；唯一 warning 仍为既有 Starlette/httpx。
 
 ### 当前下一步
 
-1. 提交并推送 YAML frontmatter quoted scalar 兼容修复。
-2. 仅以 `SEO_OPS_SECTIONAL_WRITING_MODE=shadow` 通过新增正式 Web POST 对 Action #3 再运行
-   一次真实候选和比较；不得重跑 W0，不允许 promotion。
+1. 提交并推送 decisions 规范化与短命令 shadow runner。
+2. MCP 核验远端同步后，单独运行
+   `.venv/bin/python tools/run_sectional_shadow.py --action-id 3`；不得重跑 W0，不允许
+   promotion，也不得与 push 放进同一执行块。
 3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。
 4. B303 产品页/目录修正后重新生成产品报告，确认 catalog data issues 自动清零。
 

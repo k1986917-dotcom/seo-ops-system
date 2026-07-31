@@ -125,6 +125,42 @@ blocker 前不启用 promotion。
   为 158 字符且保留完整句子；最终 `validate_assembly_metadata()` 通过。
 - MCP 长时完整测试会话被执行器回收，未获得可靠最终结果，因此没有把该次执行记为通过。
 
+## 2026-07-31 — Used reason code 确定性规范化与短命令 shadow runner
+
+### 第三次真实失败
+
+- `2eb008e` 推送后，Action #3 再执行一次正式 existing-pair shadow POST。
+- tier 与完整 metadata 预检均通过，流程首次进入 AI 正文生成；数据库新增
+  `ai_runs #134`，purpose=`legacy_write_sectional_body`，status=`success`。
+- 生成正文包含已批准 external citation placeholder，`used_ids` 也与 placeholder 一致，
+  但模型填写的 `reason_code` 不是 `used|used_approved_candidate`，parser 以
+  `external_citations used candidates require a used reason_code` 停止。
+- 正式 draft、claim ledger、w2-state、`.env` 和 Action 行全部不变；未生成 sectional
+  目录，未 promotion/rollback。数据库文件 SHA 变化来自合法 AI 审计写入，不是正式
+  Action 数据被手工修改。
+
+### 修复
+
+- `ARTICLE/PRODUCT/CITE` placeholder 与 decisions `used_ids` 仍由服务端严格逐项比较；
+  candidate ID 仍必须来自 section gate allowlist，并继续受 min/max/none 约束。
+- 一旦 used 状态已由 placeholder 与 `used_ids` 证明，服务端把 reason code 确定性规范化为
+  `used_approved_candidate`，不再让冗余的模型标签使合法正文失败。
+- 未使用 gate 仍要求非空 reason；recommended gate 仍拒绝 `used` 类 reason，未放宽任何
+  链接机会或引用门禁。生成与 repair prompt 同步写明 reason code 协议。
+- 新增 `tools/run_sectional_shadow.py`，通过正式 Web 路由只发送一次 POST，并在进程退出后
+  检查正式 pair、w2-state、`.env`、Action 行、Git 与 promotion 状态。工具单独记录
+  DB SHA 和 `ai_runs` 增量，允许正常审计日志写入。
+- 运维流程改为原子阶段：普通 push → MCP 核验 → 一条 runner 命令 → MCP 审查产物；
+  不再把 push、服务启动、POST 和几十项验收塞进同一个巨型脚本。
+
+### 验证
+
+- generation/repair/runner 直接相关：`58 passed`。
+- Phase 1–7 sectional、版本与 runner：`167 passed`。
+- Legacy 主流程 `186` 项；W1b/FAQ `52` 项；sentence-ID strict `26` 项，合计
+  `264 passed, 1 warning`。唯一 warning 仍为既有 Starlette/httpx。
+- Ruff 通过；直接执行 `tools/run_sectional_shadow.py --help` 成功。
+
 ## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
 
 ### 核实结论

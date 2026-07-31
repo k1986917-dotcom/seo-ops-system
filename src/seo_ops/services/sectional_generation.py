@@ -374,6 +374,7 @@ Use approved placeholders only:
 [[CITE:evidence_id]]
 The first content line must be the exact requested H2. Write 2-5 coherent paragraphs and answer directly before expanding.
 Respect every link gate. A required gate must meet min_required. A none gate must not be used. If a recommended gate is unused, give a concise machine-readable reason_code in the decisions JSON.
+Decision reason codes are deterministic: whenever used_ids is non-empty, set reason_code to used_approved_candidate. When a recommended gate is unused, use a concise rejection reason such as not_needed_for_this_section. When a none gate is unused, copy that gate's supplied reason_code.
 Return exactly two blocks and no other text:
 ===SECTION_MARKDOWN===
 <section markdown>
@@ -491,6 +492,7 @@ def _validate_decisions(
 ) -> dict[str, Any]:
     if not isinstance(decisions, dict) or set(decisions) != set(_LINK_TYPES):
         raise SectionGenerationError("section decisions must contain all three link types")
+    normalized: dict[str, Any] = {}
     for link_type in _LINK_TYPES:
         decision = decisions[link_type]
         if not isinstance(decision, dict) or set(decision) != {
@@ -502,6 +504,7 @@ def _validate_decisions(
         reason = _clean_text(
             decision["reason_code"],
             f"{link_type}.reason_code",
+            allow_empty=True,
         )
         if (
             not isinstance(used_ids, list)
@@ -524,19 +527,24 @@ def _validate_decisions(
             raise SectionGenerationError(f"{link_type} does not meet min_required")
         if state == "none" and used_ids:
             raise SectionGenerationError(f"{link_type} is prohibited for this section")
+        if not used_ids and not reason:
+            raise SectionGenerationError(
+                f"{link_type} needs a reason_code when unused"
+            )
         if state == "recommended" and not used_ids and reason in {
-            "",
             "used",
             "used_approved_candidate",
         }:
             raise SectionGenerationError(
                 f"{link_type} needs a rejection reason when unused"
             )
-        if used_ids and reason not in {"used", "used_approved_candidate"}:
-            raise SectionGenerationError(
-                f"{link_type} used candidates require a used reason_code"
-            )
-    return decisions
+        if used_ids:
+            reason = "used_approved_candidate"
+        normalized[link_type] = {
+            "used_ids": list(used_ids),
+            "reason_code": reason,
+        }
+    return normalized
 
 
 def _section_summary(markdown: str, limit: int = 420) -> str:

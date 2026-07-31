@@ -218,6 +218,7 @@ def test_generation_prompt_contains_protocol_but_not_full_registry():
     assert SECTION_MARKDOWN_MARKER in prompt["system"]
     assert SECTION_DECISIONS_MARKER in prompt["system"]
     assert "Do not invent URLs" in prompt["system"]
+    assert "set reason_code to used_approved_candidate" in prompt["system"]
     assert package["section_id"] in prompt["user"]
     assert "catalog_data_issues" not in prompt["user"]
 
@@ -368,6 +369,55 @@ def test_recommended_zero_requires_an_explicit_reason():
     )
 
     with pytest.raises(SectionGenerationError, match="rejection reason"):
+        parse_section_generation_response(response, package)
+
+
+def test_used_reason_code_is_canonicalized_from_verified_placeholders():
+    package = _package_for_stage("select")
+    response = _response(package)
+    response = response.replace(
+        '"reason_code": "used_approved_candidate"',
+        '"reason_code": "evidence_required"',
+        1,
+    )
+
+    output = parse_section_generation_response(response, package)
+    used_type = next(
+        key for key, value in output["used_ids"].items() if value
+    )
+    assert output["decisions"][used_type]["reason_code"] == (
+        "used_approved_candidate"
+    )
+
+
+def test_blank_used_reason_code_is_canonicalized():
+    package = _package_for_stage("select")
+    response = _response(package)
+    response = response.replace(
+        '"reason_code": "used_approved_candidate"',
+        '"reason_code": ""',
+        1,
+    )
+
+    output = parse_section_generation_response(response, package)
+    used_type = next(
+        key for key, value in output["used_ids"].items() if value
+    )
+    assert output["decisions"][used_type]["reason_code"] == (
+        "used_approved_candidate"
+    )
+
+
+def test_blank_unused_reason_code_is_rejected():
+    package = _package_for_stage("discover")
+    response = _response(package)
+    response = response.replace(
+        '"reason_code": "not_needed_for_this_section"',
+        '"reason_code": ""',
+        1,
+    )
+
+    with pytest.raises(SectionGenerationError, match="reason_code when unused"):
         parse_section_generation_response(response, package)
 
 

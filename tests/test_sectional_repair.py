@@ -33,6 +33,7 @@ from seo_ops.services.sectional_repair import (
     SectionRepairError,
     build_section_repair_package,
     build_section_repair_plan,
+    build_section_repair_prompt,
     load_sectional_repair_result,
     parse_section_repair_response,
     persist_sectional_repair_result,
@@ -529,6 +530,8 @@ def test_link_repair_must_preserve_visible_text(tmp_path):
         plan=plan,
         section_id=binding["section_id"],
     )
+    prompt = build_section_repair_prompt(package)
+    assert "used_approved_candidate" in prompt["system"]
     response = _repair_generator(change_visible=True)("system", "SECTION REPAIR PACKAGE\n" + json.dumps(package))
 
     with pytest.raises(SectionRepairError, match="changed reader-visible text"):
