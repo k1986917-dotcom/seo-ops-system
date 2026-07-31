@@ -2866,6 +2866,26 @@ def _remove_uncovered_fact_sentences(
     removed = 0
     seen: set[str] = set()
 
+    # Mask delivery-only blocks before removing a sentence.  A factual
+    # sentence can legitimately appear in a fenced example or FAQ JSON-LD
+    # while the same sentence is also present in prose.  Plain ``str.replace``
+    # could otherwise remove the protected occurrence first and leave the
+    # reader-visible unsupported claim untouched.
+    protected: list[str] = []
+
+    def _protect(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return f"\x00W1BPROTECTED{len(protected) - 1}\x00"
+
+    masked_body = re.sub(
+        r"```[\s\S]*?```|"
+        r"<script[^>]*type=[\"']application/ld\+json[\"'][^>]*>"
+        r"[\s\S]*?</script>",
+        _protect,
+        body,
+        flags=re.IGNORECASE,
+    )
+
     for issue in fact_issues:
         if issue.get("reason") != "uncovered_factual_sentence":
             continue
@@ -2876,9 +2896,9 @@ def _remove_uncovered_fact_sentences(
         if not sentence or sentence in seen:
             continue
         seen.add(sentence)
-        if sentence not in body:
+        if sentence not in masked_body:
             continue
-        body = body.replace(sentence, "", 1)
+        masked_body = masked_body.replace(sentence, "", 1)
         removed += 1
 
     if not removed:
@@ -2886,6 +2906,9 @@ def _remove_uncovered_fact_sentences(
 
     # Remove whitespace left by exact sentence deletion without rewriting any
     # surviving prose or touching the frontmatter contract.
+    body = masked_body
+    for index, original in enumerate(protected):
+        body = body.replace(f"\x00W1BPROTECTED{index}\x00", original)
     body = re.sub(r"[ \t]+\n", "\n", body)
     body = re.sub(r"\n{3,}", "\n\n", body)
     cleaned = (frontmatter + body).strip()
@@ -3418,7 +3441,8 @@ Hard acceptance contract:
    remove it or rewrite it as clearly qualified analysis/recommendation.
 9. Do not invent numbers, specifications, regulations, quotations, URLs,
    products, tests, or first-hand experience.
-10. Return at least 1350 checker-visible body words. Preserve every existing paragraph except an exact unsupported factual sentence named in structured failures; add useful analysis, selection guidance, or a practical checklist instead of compressing prose.\n11. Return the entire revised article, not a patch or explanation.
+10. Return at least 1350 checker-visible body words. Preserve every existing paragraph except an exact unsupported factual sentence named in structured failures; add useful analysis, selection guidance, or a practical checklist instead of compressing prose.
+11. Return the entire revised article, not a patch or explanation.
 
 Before returning, silently verify every item above."""
 

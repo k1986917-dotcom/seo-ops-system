@@ -10,6 +10,31 @@ def _write(path, text):
     return path
 
 
+def test_uncovered_fact_cleanup_does_not_remove_protected_copy():
+    sentence = "A Class 2 pointer is suitable for this task."
+    draft = (
+        "---\nTitle: Example\n---\n\n"
+        "# Example\n\n"
+        "```text\n"
+        f"{sentence}\n"
+        "```\n\n"
+        f"{sentence}\n\n"
+        '<script type="application/ld+json">\n'
+        '{"description": "A Class 2 pointer is suitable for this task."}\n'
+        "</script>\n"
+    )
+
+    cleaned, removed = lw._remove_uncovered_fact_sentences(
+        draft,
+        [{"reason": "uncovered_factual_sentence", "sentence": sentence}],
+    )
+
+    assert removed == 1
+    assert f"```text\n{sentence}\n```" in cleaned
+    assert '"description": "A Class 2 pointer is suitable for this task."' in cleaned
+    assert f"\n{sentence}\n\n<script" not in cleaned
+
+
 def test_w1b_mixed_word_and_fact_failures_cleanup_before_retry(
     tmp_path,
     monkeypatch,

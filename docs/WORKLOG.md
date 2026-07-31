@@ -1,5 +1,27 @@
 # 工作日志
 
+## 2026-07-31 — W1b 无证据事实清理安全加固
+
+### 完成
+
+- 将 `_remove_uncovered_fact_sentences` 从整篇字符串替换改为保护代码围栏和 FAQ
+  JSON-LD 后，仅在正文中删除结构化 `uncovered_factual_sentence`。
+- 修复 `_w1b_repair_contract` 把换行写成字面量 `\\n` 的提示词问题，使第 10、11 条
+  合同真正分行传给模型。
+- 新增正文、代码示例、FAQ JSON-LD 含同一事实句时只删除正文实例的回归测试。
+
+### 验证
+
+- W1b/事实/FAQ/SEO Title 专项：`74 passed`。
+- 变更文件 Ruff：通过；`compileall`：通过；`git diff --check`：通过。
+- 受限执行器运行全量 pytest 时，环境在收集 `openpyxl` 阶段因禁止读取
+  `/etc/mime.types` 失败；这不是代码失败，需在本机完整复跑。
+
+### 遗留与下一步
+
+- 尚未触发真实 Action #3 W1b/API；保持正式 draft、claim ledger、w2-state 和数据库不变。
+- 本地 AI 只负责在真实服务环境执行一次 W1b 批次并回报不变量，不能自行改代码或放宽 gate。
+
 ## 2026-07-29 — W0 claim-ledger 最终交卷合同强化
 
 ### 背景

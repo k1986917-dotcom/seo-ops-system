@@ -1,6 +1,22 @@
 # Handoff — 当前接手状态
 
-最后更新：2026-07-29（Asia/Shanghai）
+最后更新：2026-07-31（Europe/Paris）
+
+## 2026-07-31 — W1b 事实清理安全加固
+
+- W1b 的无证据事实清理现在只作用于正文：代码围栏和 FAQ JSON-LD 会先被保护，
+  不会因为正文中同文句子的出现顺序而误删交付元数据或示例内容。
+- 修复 W1b 修订合同中的换行转义错误；模型现在会收到真正分开的第 10、11 条要求。
+- 新增正文/代码/JSON-LD 同文句回归测试。
+- 目标专项测试、Ruff、compileall 和 `git diff --check` 已通过；真实 Action #3
+  仍未在本次会话触发 W1b/API，正式 draft/ledger/state/database 未修改。
+
+### 下一步
+
+1. 将本次代码提交同步到本机环境。
+2. 在当前 HEAD 上只运行一次真实 Action #3 `stage_w1b_revise_batch`；返回后审计
+   新 draft、claim ledger、SHA、`precheck_passed`、事实 blocking 和备份成对性。
+3. W1b 未通过前绝不运行 W2/W3；若本地服务或 AI 调用失败，保留原正式产物并报告原始错误。
 
 ## 一句话状态
 
