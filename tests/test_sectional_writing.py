@@ -6,7 +6,9 @@ import pytest
 from seo_ops.services.sectional_writing import (
     ContractValidationError,
     build_contract_bundle,
+    build_contract_bundle_from_brief,
     load_contract_bundle,
+    parse_brief_section_specs,
     persist_contract_bundle,
     stable_section_id,
     validate_contract_bundle,
@@ -38,6 +40,9 @@ def test_contract_bundle_is_stable_and_aligned():
     blueprint = first["article_blueprint"]
     sections = first["section_contracts"]
     links = first["section_link_contracts"]
+    assert blueprint["content_language"] == sections["content_language"] == links[
+        "content_language"
+    ] == "en"
     assert blueprint["section_order"] == sections["section_order"] == links["section_order"]
     assert blueprint["section_order"][0] == stable_section_id(
         1, "Why Ceiling Layout Needs Clear Pointing"
@@ -94,6 +99,147 @@ def test_reader_stages_control_initial_product_link_policy():
     assert safety_gate["opportunity_state"] == "none"
     assert safety_gate["min_required"] == 0
     assert safety_gate["reason_code"] == "section_role_prohibits_product_link"
+
+
+def test_recommendation_heading_enters_product_selection_stage():
+    bundle = build_contract_bundle(
+        topic="Recommendations",
+        tier="Cluster Content",
+        intent="Recommend a suitable option.",
+        outline=["Top Recommendations with Safety Compliance Filter"],
+    )
+    section = bundle["section_contracts"]["sections"][0]
+
+    assert section["reader_stage"] == "select"
+    assert section["product_link_allowed"] is True
+    assert section["product_constraints"] == []
+
+
+def test_legacy_brief_points_stay_advisory_until_product_rules_are_approved():
+    brief = """## 3. Recommended Outline (H2)
+
+```
+H2: Key Considerations When Choosing a Pointer (600 words)
+- Visibility and durability
+- FDA ≤5mW limit
+
+H2: Top Recommendations with Safety Compliance Filter (500 words)
+- 我们只推荐5mW绿光指示笔
+- Explain why higher power is not appropriate
+
+H2: Safety and Regulatory Compliance (300 words)
+- Explain the legal boundary
+```
+"""
+    specs = parse_brief_section_specs(brief)
+    assert specs[0] == {
+        "heading": "Key Considerations When Choosing a Pointer",
+        "target_words": 600,
+        "bullets": ["Visibility and durability", "FDA ≤5mW limit"],
+    }
+
+    bundle = build_contract_bundle_from_brief(
+        topic="Ceiling Work",
+        tier="Cluster Content",
+        intent="Recommend a compliant product.",
+        brief_text=brief,
+    )
+    sections = {item["heading"]: item for item in bundle["section_contracts"]["sections"]}
+    considerations = sections["Key Considerations When Choosing a Pointer"]
+    recommendations = sections["Top Recommendations with Safety Compliance Filter"]
+    safety = sections["Safety and Regulatory Compliance"]
+
+    assert considerations["target_words"] == {"min": 450, "max": 750}
+    assert considerations["must_answer"] == [
+        "Key Considerations When Choosing a Pointer"
+    ]
+    assert considerations["brief_points"] == [
+        "Visibility and durability",
+        "FDA ≤5mW limit",
+    ]
+    assert considerations["product_constraints"] == []
+    assert recommendations["reader_stage"] == "select"
+    assert recommendations["brief_points"] == [
+        "Explain why higher power is not appropriate",
+    ]
+    assert recommendations["brief_points_rejected"] == [
+        {
+            "text": "我们只推荐5mW绿光指示笔",
+            "reason_code": "non_english_brief_point",
+        }
+    ]
+    assert recommendations["product_constraints"] == []
+    assert safety["reader_stage"] == "verify"
+    assert safety["product_link_allowed"] is False
+
+
+def test_only_structured_approved_product_constraints_become_hard_rules():
+    heading = "Top Recommendations"
+    brief = f"""## 3. Recommended Outline (H2)
+
+```
+H2: {heading} (400 words)
+- Compare products from the live catalog
+```
+"""
+    approved = {
+        heading: [
+            {
+                "field": "battery_platform",
+                "operator": "equals",
+                "value": "40V",
+                "unit": "",
+                "source": "site_policy",
+                "reason": "The site sells this battery platform.",
+            }
+        ]
+    }
+    bundle = build_contract_bundle_from_brief(
+        topic="Garden tools",
+        tier="Cluster Content",
+        intent="Recommend compatible tools.",
+        brief_text=brief,
+        approved_product_constraints=approved,
+    )
+
+    section = bundle["section_contracts"]["sections"][0]
+    assert section["product_constraints"] == approved[heading]
+
+
+def test_non_english_output_language_is_rejected():
+    with pytest.raises(ContractValidationError, match="content_language=en"):
+        build_contract_bundle(
+            topic="Garden tools",
+            tier="Cluster Content",
+            intent="Recommend tools.",
+            outline=["Top Recommendations"],
+            content_language="zh",
+        )
+
+
+def test_mixed_legacy_faq_heading_is_normalized_to_english():
+    brief = """## 3. Recommended Outline (H2)
+
+```
+H2: FAQ (3-4个问答)
+- Answer common questions
+```
+"""
+    specs = parse_brief_section_specs(brief)
+
+    assert specs[0]["heading"] == "FAQ"
+
+
+def test_fully_non_english_heading_is_rejected():
+    brief = """## 3. Recommended Outline (H2)
+
+```
+H2: 产品推荐
+- Compare products
+```
+"""
+    with pytest.raises(ContractValidationError, match="H2 must be English"):
+        parse_brief_section_specs(brief)
 
 
 def test_unassessed_gate_cannot_silently_default_to_zero():

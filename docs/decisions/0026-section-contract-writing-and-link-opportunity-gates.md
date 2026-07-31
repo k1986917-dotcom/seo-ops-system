@@ -63,6 +63,50 @@ R3 确定性地产生可重建的 Article Blueprint。每个主体 H2 对应一�
 - 安全警告、法规说明、事故分析等章节默认禁止具体产品链接；
 - 零产品链接可以是合法结果，但必须来自机会门禁，而不是模型自行省略。
 
+### 3.1 产品目录优先于旧 brief
+
+产品策略的权威顺序固定为：
+
+```text
+站点配置与真实在售目录
+→ 已批准的结构化产品约束
+→ 文章主题和章节职责
+→ 旧 Research Brief 建议
+```
+
+旧 brief 的自然语言不得自动升级为产品过滤规则。若旧 brief 写着“只推荐某规格”，
+但站点真实目录没有该规格，系统必须产生 `brief_catalog_alignment_pending` 或
+`prescriptive_brief_catalog_mismatch`，要求调整文章角度；不得据此排除网站主营商品。
+
+只有来源为 `site_policy`、`catalog_policy` 或 `operator_approved` 的结构化约束，才可
+过滤产品候选。核心候选注册器只要求产品 ID、标题/名称和 URL；喷码机、园林工具、
+激光产品等其他属性一律作为通用 catalog attributes 保存，不能在核心代码中硬编码
+某个行业的 Power、Wavelength、Battery Platform 等字段。
+
+### 3.2 产品目录错误必须显式报告
+
+若同一产品的标题、目录表格和详情字段互相矛盾，系统必须产生独立的
+Catalog Data Quality Report，至少记录：
+
+- 产品 ID、标题、URL；
+- 冲突字段及各来源值；
+- `severity=error`；
+- `blocking_for_auto_link=true`；
+- 可执行的修复建议。
+
+该 SKU 在修正并重新同步前不得自动作为具体产品链接候选，但其他商品仍可正常使用。
+数据错误与“文章想写的条件在目录中不存在”必须使用不同 reason code，避免运营者不清楚
+应修产品页还是改文章策略。
+
+### 3.3 正式内容语言固定为 English
+
+当前站点合同固定 `content_language=en`。Article Blueprint、Section Contract、正文、
+链接锚文本和最终输出都必须为英文。旧研究文档中的中文备注只可进入审计字段
+`brief_points_rejected`，不得进入正式 AI 写作上下文、产品过滤或链接决策。
+
+混合标题中纯注释性的中文括号可在重建时移除；仍包含中文的 H2 必须 fail-closed，先改写
+成英文后才能进入章节合同。
+
 ### 4. AI 只选择占位符，服务端绑定真实性
 
 写作模型只能输出批准的占位符，例如：
@@ -119,6 +163,8 @@ W1b/W2 根据失败句定位章节，只重写失败章节；已通过章节保�
 4. 不手工修改正式 draft、claim ledger、w2-state、数据库或真实 Action 文件。
 5. 旧 action 缺少新合同文件时必须可确定性重建，不能要求重新研究。
 6. 完整 material pack、evidence ledger、产品库存报告和站内链接地图仍是权威来源。
+7. 站点目录和站点策略优先于旧 brief；旧 brief 不得定义站点产品范围。
+8. 正式内容语言为 English；非英文历史备注只保留审计痕迹。
 
 ## 后果
 

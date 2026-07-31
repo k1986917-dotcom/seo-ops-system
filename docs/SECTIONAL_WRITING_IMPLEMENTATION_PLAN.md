@@ -26,6 +26,9 @@ Article Blueprint
 3. 有明确链接机会时，模型不能用 0 链接偷懒；无有效机会时不强塞链接。
 4. 产品推荐必须在售、属性匹配、出现位置自然，并有正文理由。
 5. 任何失败不产生 draft/ledger 混合版本，不绕过现有正式门禁。
+6. 站点真实产品目录优先于旧 brief；系统不得根据单篇文章备注重新定义网站卖什么。
+7. 正式内容固定为 English；非英文历史备注只进入审计，不进入写作上下文。
+8. 产品标题、目录表格和详情互相冲突时，必须生成可操作的数据质量错误报告。
 
 ## Link Opportunity Gate
 
@@ -107,17 +110,38 @@ Article Blueprint
 
 ### Phase 2 — 候选注册与链接机会评分（shadow mode）
 
-状态：**待实施**
+状态：**代码完成，待本机全量验证与提交**
 
-- 文章候选来自 internal-links-map；
-- 产品候选来自 live_products_report；
-- 外部引用来自 evidence cards；
-- 验证 URL、库存、属性、self-link、重复目标；
-- 独立计算文章/产品 `required|recommended|none`；
-- 保存 Context Manifest 和 shadow 报告；
-- 不修改正式 draft。
+- [x] 文章候选来自 internal-links-map，过滤 self-link、重复 URL 和非法 URL；
+- [x] 产品候选来自任意包含 ID/SKU、Title/Name、URL 的 Markdown 产品表；核心解析器
+  不依赖 Power、Wavelength 等激光专属列，喷码机和园林工具 fixtures 已覆盖；
+- [x] 产品表其余列作为通用 attributes 保存；只有 `site_policy`、`catalog_policy` 或
+  `operator_approved` 的结构化约束可以过滤候选；
+- [x] 旧 brief 条目只作为 advisory points。英文条目若与目录明显冲突则降级为
+  alignment pending；非英文条目进入 `brief_points_rejected`，不进入写作上下文；
+- [x] 正式合同固定 `content_language=en`；混合 FAQ 标题可移除中文括号，仍含中文的 H2
+  fail-closed；
+- [x] 外部引用兼容纯 URL 与 Markdown `[title](URL)` evidence card；
+- [x] 候选评分区分 section match 与 topic match。全站品类词只能帮助召回，不能单独
+  把链接升级为 `required`；
+- [x] 独立计算文章、产品和外部引用的 `required|recommended|none`；
+- [x] 生成 Catalog Data Quality Report。产品标题、表格和详情字段冲突时，报告产品 ID、
+  冲突值、修复建议，并将该 SKU 标记 `blocking_for_auto_link=true`；
+- [x] 保存 Context Manifest 和 shadow report 的原子持久化与回滚逻辑；
+- [x] 新增只读 `tools/sectional_shadow_preview.py`，默认不写文件、不调用 AI；
+- [x] 正式 draft、claim ledger、w2-state、数据库和 W0/W1b/W2 均未修改。
 
-验收：用固定 fixtures 和 Action #3 的只读数据检查候选是否合理；人工抽查明显机会没有漏召回。
+专项验收：
+
+- 31 项 Phase 1+2 测试通过；
+- Ruff、compileall、`git diff --check` 通过；
+- 激光产品、喷码机、园林工具三类 catalog fixture 通过；
+- Action #3 只读 shadow 成功读取 65 篇文章、15 个产品、12 张 evidence cards；
+- 真实 B303 被识别为标题 `532nm` 与目录属性 `650nm` 冲突，输出
+  `catalog_attribute_conflict`，修正前不参与自动链接；
+- 未调用 AI，未写入任何正式或 shadow Action 文件。
+
+剩余验收：本机运行完整 pytest；通过后形成 Phase 2 原子提交并推送。
 
 ### Phase 3 — 章节生成引擎与 checkpoint
 
@@ -187,5 +211,6 @@ feature flag 默认关闭。旧 W0 仍为正式路径。
 
 ## 当前下一步
 
-实施 Phase 2：读取 internal-links-map、live_products_report 与 evidence cards，生成只读
-候选注册表、机会评分和 Context Manifest；仍不接管正式 W0。
+1. 本机完整 pytest 验证 Phase 2 并提交推送。
+2. 进入 Phase 3：基于已验证 Context Manifest 构建逐章节生成引擎和 checkpoint；
+   继续保持 feature flag 关闭，不接管正式 W0。

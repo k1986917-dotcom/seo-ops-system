@@ -32,6 +32,15 @@
   W0。
 - 新增链接机会四态合同。未评估机会必须使用 `unassessed + min_required=null`；只有经过
   判断的 `none` 才允许最低值为 0，`required` 必须有候选且最低值至少为 1。
+- 新增章节化写作 Phase 2 shadow 候选层：从站内文章地图、通用产品目录和 evidence
+  cards 构建每节候选、机会状态、Context Manifest 和只读 shadow report；正式 W0 尚未
+  切换。
+- 新增跨行业产品目录解析：核心只要求产品 ID、标题/名称和 URL，其余字段作为通用
+  attributes；喷码机、园林工具和激光产品使用同一候选逻辑。
+- 新增 Catalog Data Quality Report。同一产品的标题、目录表格和详情属性冲突时，显示
+  产品 ID、冲突值和修复建议，并在修正前阻止该 SKU 被自动链接。
+- 新增只读 `tools/sectional_shadow_preview.py`，可预览候选和链接机会而不调用 AI、不修改
+  Action 文件。
 - 新增 `POST /api/hermes/runs`、`GET /api/hermes/sites`、
   `GET /api/hermes/runs/{action_id}` 和 `/prompt`，支持 Hermes 以站点、
   选题和可选要求启动/恢复持久文章任务。
@@ -45,6 +54,12 @@
 ### Unchanged
 
 - W0/W1b/W2 evidence/claim ledger 事实校验链路和严格 gate 未修改。
+
+### Safety and compatibility
+
+- 站点真实在售目录优先于旧 Research Brief；brief 自然语言不会自动成为产品过滤规则。
+- 正式章节合同固定输出语言为 English；旧中文备注只进入审计字段，不进入写作上下文、
+  产品评分或链接决策。
 
 ## [0.11.5] - 2026-07-29
 

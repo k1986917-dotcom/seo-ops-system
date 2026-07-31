@@ -32,12 +32,40 @@
   被 Landlock 拒绝。这是已知执行环境限制，不是测试断言失败；提交前仍须由本机运行
   完整 `.venv/bin/python -m pytest -q`。
 
+### Phase 2 代码已完成，待本机全量验证
+
+- 新增 `src/seo_ops/services/sectional_context.py`：只读解析站内文章地图、产品目录和
+  evidence cards，构建候选注册表、目录画像、章节候选评分、Link Opportunity Gate、
+  Context Manifest 和 shadow report。
+- 产品解析器是跨行业的：只要求 ID/SKU、Title/Name 和 URL；其他列作为通用
+  attributes。测试已覆盖激光产品、喷码机和园林工具，不在核心逻辑中硬编码波长、功率、
+  打印高度或电池平台。
+- 产品目录是商业事实基线。旧 brief 的自然语言不会变成硬过滤条件；只有明确来源为
+  `site_policy`、`catalog_policy` 或 `operator_approved` 的结构化约束才可过滤商品。
+- 正式合同固定 `content_language=en`。旧中文 brief 条目保存到
+  `brief_points_rejected`，不进入 AI 写作上下文、产品评分或链接决策；混合 FAQ 标题可
+  删除中文括号，仍包含中文的 H2 fail-closed。
+- 新增 Catalog Data Quality Report：产品标题、目录表格或详情字段互相冲突时，报告
+  产品 ID、冲突值、严重程度、修复建议和 `blocking_for_auto_link=true`。修正前只阻止
+  该 SKU 自动链接，不影响其他产品。
+- 新增只读工具 `tools/sectional_shadow_preview.py`。默认只打印摘要，不写 Action 文件，
+  不调用 AI。
+- Action #3 只读 shadow 已成功读取 65 篇文章、15 个在售产品、12 张 evidence cards。
+  B303 被识别为标题 `532nm` 与目录属性 `650nm` 冲突，输出
+  `catalog_attribute_conflict` 并从自动产品链接候选排除。
+- Phase 1+2 共 31 项专项测试通过；Ruff、compileall、`git diff --check` 通过。
+  正式 W0/W1b/W2 仍未导入新模块，draft、claim ledger、w2-state、数据库和真实 Action
+  未修改。
+- MCP 完整 `pytest -q` 再次在收集 Hermes integration 时被既有 Landlock 限制阻断：
+  `openpyxl -> mimetypes -> /etc/mime.types` 返回 `PermissionError`。这不是测试断言失败，
+  仍需本机环境完成全量测试后才能提交。
+
 ### 当前下一步
 
-1. 本机运行完整 pytest；全绿后提交并推送 Phase 0+1 原子变更。
-2. Phase 2 以 shadow mode 读取站内文章、在售产品和 evidence cards，计算候选与机会状态。
-3. 保存 Context Manifest，评估“明显有机会却没有候选”与“有候选却输出 0”的比例。
-4. 只有 shadow 与测试通过后，才启用章节生成、章节 ledger 和局部修订。
+1. 本机运行完整 pytest；全绿后提交并推送 Phase 2 原子变更。
+2. 进入 Phase 3，构建逐章节生成与 checkpoint；feature flag 默认关闭，旧 W0 仍是正式路径。
+3. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
+4. 只有 Phase 3–6 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 

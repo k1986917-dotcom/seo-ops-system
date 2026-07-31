@@ -27,6 +27,47 @@
 
 实施 Phase 2：候选注册、机会评分和 Context Manifest，默认 shadow-only，不接管正式 W0。
 
+## 2026-07-31 — Phase 2 跨行业候选注册、目录优先与数据质量报告
+
+### 关键纠偏
+
+- 旧 Action #3 brief 中存在中文“只推荐 5mW 绿光”备注，但站点实际主营高功率产品。
+  已确认单篇旧 brief 不能反向定义站点卖什么，也不能自动升级为产品硬约束。
+- 产品策略权威顺序改为：站点配置与真实在售目录 → 已批准结构化约束 → 文章章节职责
+  → 旧 brief 建议。
+- 正式网站内容固定 English；非英文历史备注只保留审计，不进入正文或产品决策。
+
+### 本次完成
+
+- 新增跨行业 `sectional_context.py`。产品目录只要求 ID/SKU、Title/Name 和 URL；
+  喷码机的 Print Height/Ink Type、园林工具的 Battery Platform/Cutting Width、激光产品的
+  Power/Wavelength 均作为通用 attributes 处理。
+- 只有 `site_policy`、`catalog_policy`、`operator_approved` 的结构化约束可过滤产品。
+  旧 brief 的英文建议若与目录不一致，只生成 alignment warning；中文建议进入
+  `brief_points_rejected`。
+- Article/Section/Link 合同新增 `content_language=en`，并校验三者一致。混合 FAQ 标题中
+  纯中文括号备注可清理；仍含中文的 H2 直接拒绝。
+- evidence cards 支持 Markdown 链接格式 `[title](URL)`，真实 Action #3 的 12 张卡均可读取。
+- 候选评分区分章节具体匹配与全局主题匹配；品类词只能用于召回，不能单独把链接机会
+  升级为 `required`。
+- 新增 Catalog Data Quality Report：同一产品标题、目录属性、详情属性冲突时，输出
+  产品 ID、URL、冲突值、修复建议和 `blocking_for_auto_link=true`。
+- 新增只读 preview 工具；不写文件、不调用 AI。
+
+### 真实只读验收
+
+- Action #3 读取到 65 篇站内文章、15 个产品、12 张 evidence cards。
+- B303 标题写 `532nm`，产品目录属性写 `650nm`；系统输出
+  `catalog_attribute_conflict`，该 SKU 修正前不会进入自动产品链接。
+- 其他产品继续正常评分；正式 draft、claim ledger、w2-state、数据库和 Action 文件未修改。
+
+### 验证
+
+- Phase 1+2 专项：31 passed。
+- Ruff、compileall、`git diff --check`：通过。
+- 跨行业 fixtures：激光产品、喷码机、园林工具全部通过。
+- 完整 pytest 仍需本机环境执行后才能提交。
+
 ### Phase 1 实施结果
 
 - 新增 `src/seo_ops/services/sectional_writing.py`：构建、验证、持久化和加载 Article、
