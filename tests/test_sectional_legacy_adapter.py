@@ -57,7 +57,7 @@ def test_build_metadata_from_legacy_frontmatter():
     assert metadata["title"] == "Professional Ceiling Marking Tools"
     assert metadata["author"] == "Example Tools"
     assert metadata["tags"] == ["ceiling marking", "worksite tools", "product selection"]
-    assert metadata["target_words"] == {"min": 1200, "max": 1920}
+    assert metadata["target_words"] == {"min": 3000, "max": 4200}
 
 
 def test_build_metadata_decodes_quoted_legacy_frontmatter():
@@ -159,9 +159,7 @@ Legacy body.
     ]
     assert validated["seo_keywords"][0] == topic.casefold()
     assert 50 <= len(validated["seo_title"]) <= 60
-    assert validated["seo_title"] == (
-        "Laser Pointer for Commercial Construction: Above Ceilings"
-    )
+    assert validated["seo_title"] == ("Laser Pointer for Commercial Construction: Above Ceilings")
     assert 150 <= len(validated["seo_description"]) <= 160
     assert validated["seo_description"].endswith("what to look for.")
 
@@ -266,11 +264,13 @@ def test_existing_pair_shadow_uses_current_pair_without_mutating_it(
     assert draft_path.read_bytes() == draft_before
     assert claim_path.read_bytes() == claim_before
     assert result["formal_pair"]["unchanged"] is True
-    assert result["formal_pair"]["draft_sha256_before"] == (
-        result["formal_pair"]["draft_sha256_after"]
+    assert (
+        result["formal_pair"]["draft_sha256_before"]
+        == (result["formal_pair"]["draft_sha256_after"])
     )
-    assert result["formal_pair"]["claim_sha256_before"] == (
-        result["formal_pair"]["claim_sha256_after"]
+    assert (
+        result["formal_pair"]["claim_sha256_before"]
+        == (result["formal_pair"]["claim_sha256_after"])
     )
     assert result["existing_pair_inputs"] == {
         "tier": "Cluster Content",
@@ -294,9 +294,7 @@ def test_existing_pair_shadow_recovers_empty_brief_tier_from_matching_w1b_state(
         json.dumps(
             {
                 "precheck_tier": "Cluster Content",
-                "precheck_draft_sha256": hashlib.sha256(
-                    draft_path.read_bytes()
-                ).hexdigest(),
+                "precheck_draft_sha256": hashlib.sha256(draft_path.read_bytes()).hexdigest(),
             }
         ),
         encoding="utf-8",
@@ -380,9 +378,7 @@ def test_existing_pair_shadow_rejects_conflicting_matching_tiers(
         json.dumps(
             {
                 "precheck_tier": "Pillar Page",
-                "precheck_draft_sha256": hashlib.sha256(
-                    draft_path.read_bytes()
-                ).hexdigest(),
+                "precheck_draft_sha256": hashlib.sha256(draft_path.read_bytes()).hexdigest(),
             }
         ),
         encoding="utf-8",
@@ -552,8 +548,7 @@ def test_existing_pair_shadow_web_route_is_post_only(settings):
     route = next(
         item
         for item in app.routes
-        if getattr(item, "path", "")
-        == "/actions/{action_id}/legacy/stage/sectional-shadow"
+        if getattr(item, "path", "") == "/actions/{action_id}/legacy/stage/sectional-shadow"
     )
     assert route.methods == {"POST"}
 

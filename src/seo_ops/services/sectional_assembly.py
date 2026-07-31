@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import tempfile
@@ -24,7 +23,10 @@ from data_sources.modules.seo_config import (
     LINK_RATIO_EXTERNAL,
     LINK_RATIO_PRODUCT,
 )
-from seo_ops.services.sectional_delivery import validate_resolved_delivery
+from seo_ops.services.sectional_delivery import (
+    sectional_link_hard_caps,
+    validate_resolved_delivery,
+)
 from seo_ops.services.sectional_writing import (
     CONTRACT_VERSION,
     DEFAULT_CONTENT_LANGUAGE,
@@ -36,45 +38,51 @@ ASSEMBLY_VERSION = 1
 _SHA256 = re.compile(r"[a-f0-9]{64}")
 _SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
-_GENERIC_ANCHORS = frozenset({
-    "click",
-    "click here",
-    "here",
-    "learn more",
-    "more",
-    "product",
-    "read more",
-    "this",
-    "this article",
-    "this product",
-})
-_METADATA_KEYS = frozenset({
-    "title",
-    "slug",
-    "author",
-    "summary",
-    "tags",
-    "page_type",
-    "seo_title",
-    "seo_description",
-    "seo_keywords",
-    "target_words",
-})
-_ASSEMBLY_KEYS = frozenset({
-    "version",
-    "content_language",
-    "topic",
-    "metadata",
-    "delivery",
-    "frontmatter",
-    "faq_schema",
-    "faq_schema_block",
-    "draft_markdown",
-    "draft_sha256",
-    "claim_ledger",
-    "audit",
-    "assembly_sha256",
-})
+_GENERIC_ANCHORS = frozenset(
+    {
+        "click",
+        "click here",
+        "here",
+        "learn more",
+        "more",
+        "product",
+        "read more",
+        "this",
+        "this article",
+        "this product",
+    }
+)
+_METADATA_KEYS = frozenset(
+    {
+        "title",
+        "slug",
+        "author",
+        "summary",
+        "tags",
+        "page_type",
+        "seo_title",
+        "seo_description",
+        "seo_keywords",
+        "target_words",
+    }
+)
+_ASSEMBLY_KEYS = frozenset(
+    {
+        "version",
+        "content_language",
+        "topic",
+        "metadata",
+        "delivery",
+        "frontmatter",
+        "faq_schema",
+        "faq_schema_block",
+        "draft_markdown",
+        "draft_sha256",
+        "claim_ledger",
+        "audit",
+        "assembly_sha256",
+    }
+)
 _LEDGER_KEYS = frozenset({"version", "draft_sha256", "claims"})
 
 
@@ -129,9 +137,7 @@ def _validate_string_list(
     maximum: int,
 ) -> list[str]:
     if not isinstance(value, list) or not minimum <= len(value) <= maximum:
-        raise SectionAssemblyError(
-            f"{field} must contain {minimum}-{maximum} strings"
-        )
+        raise SectionAssemblyError(f"{field} must contain {minimum}-{maximum} strings")
     cleaned = [_clean_text(item, field) for item in value]
     if len(cleaned) != len({item.casefold() for item in cleaned}):
         raise SectionAssemblyError(f"{field} must not contain duplicates")
@@ -165,9 +171,7 @@ def validate_assembly_metadata(
         "metadata.seo_description",
     )
     if not 150 <= len(seo_description) <= 160:
-        raise SectionAssemblyError(
-            "metadata.seo_description must be 150-160 characters"
-        )
+        raise SectionAssemblyError("metadata.seo_description must be 150-160 characters")
     seo_keywords = _validate_string_list(
         metadata.get("seo_keywords"),
         "metadata.seo_keywords",
@@ -189,7 +193,16 @@ def validate_assembly_metadata(
         or maximum > 10000
     ):
         raise SectionAssemblyError("metadata.target_words range is invalid")
-    english_fields = [title, author, summary, *tags, page_type, seo_title, seo_description, *seo_keywords]
+    english_fields = [
+        title,
+        author,
+        summary,
+        *tags,
+        page_type,
+        seo_title,
+        seo_description,
+        *seo_keywords,
+    ]
     if any(_CJK.search(item) for item in english_fields):
         raise SectionAssemblyError("assembly metadata must be English")
     return {
@@ -238,7 +251,7 @@ def _faq_pairs(delivery: dict[str, Any]) -> list[dict[str, str]]:
     for index, match in enumerate(matches):
         question = _visible_text(match.group(1))
         end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
-        answer = _visible_text(markdown[match.end():end])
+        answer = _visible_text(markdown[match.end() : end])
         if not question.endswith("?") or not answer:
             raise SectionAssemblyError("visible FAQ question or answer is invalid")
         pairs.append({"question": question, "answer": answer})
@@ -306,11 +319,13 @@ def _duplicate_content_issues(delivery: dict[str, Any]) -> list[dict[str, str]]:
             continue
         previous = seen_sentences.get(norm)
         if previous and previous != record["section_id"]:
-            issues.append(_issue(
-                "duplicate_sentence_across_sections",
-                text[:160],
-                section_id=record["section_id"],
-            ))
+            issues.append(
+                _issue(
+                    "duplicate_sentence_across_sections",
+                    text[:160],
+                    section_id=record["section_id"],
+                )
+            )
         else:
             seen_sentences[norm] = record["section_id"]
 
@@ -322,11 +337,13 @@ def _duplicate_content_issues(delivery: dict[str, Any]) -> list[dict[str, str]]:
                 continue
             previous = seen_paragraphs.get(visible)
             if previous and previous != section["section_id"]:
-                issues.append(_issue(
-                    "duplicate_paragraph_across_sections",
-                    visible[:160],
-                    section_id=section["section_id"],
-                ))
+                issues.append(
+                    _issue(
+                        "duplicate_paragraph_across_sections",
+                        visible[:160],
+                        section_id=section["section_id"],
+                    )
+                )
             else:
                 seen_paragraphs[visible] = section["section_id"]
     return issues
@@ -344,33 +361,37 @@ def audit_sectional_delivery(
     words = _word_count(body)
     target = meta["target_words"]
     if words < target["min"]:
-        blockers.append(_issue(
-            "article_below_target_word_minimum",
-            f"{words} < {target['min']}",
-        ))
+        blockers.append(
+            _issue(
+                "article_below_target_word_minimum",
+                f"{words} < {target['min']}",
+            )
+        )
     elif words > target["max"]:
-        warnings.append(_issue(
-            "article_above_target_word_maximum",
-            f"{words} > {target['max']}",
-        ))
+        warnings.append(
+            _issue(
+                "article_above_target_word_maximum",
+                f"{words} > {target['max']}",
+            )
+        )
 
     h1s = re.findall(r"(?m)^#\s+(.+?)\s*$", body)
     if h1s != [meta["title"]]:
         blockers.append(_issue("invalid_h1", "H1 must occur once and equal metadata.title"))
     h2s = re.findall(r"(?m)^##\s+(.+?)\s*$", body)
     body_headings = [
-        item["heading"]
-        for item in resolved["sections"]
-        if item["unit_kind"] == "body_section"
+        item["heading"] for item in resolved["sections"] if item["unit_kind"] == "body_section"
     ]
     expected_h2s = [*body_headings, "Conclusion", "Frequently Asked Questions"]
     if h2s != expected_h2s:
         blockers.append(_issue("invalid_h2_order", "visible H2 order differs from delivery"))
     if not 4 <= len(body_headings) <= 7:
-        warnings.append(_issue(
-            "main_h2_count_outside_recommended_range",
-            f"{len(body_headings)} main H2 sections; recommended 4-7",
-        ))
+        warnings.append(
+            _issue(
+                "main_h2_count_outside_recommended_range",
+                f"{len(body_headings)} main H2 sections; recommended 4-7",
+            )
+        )
     takeaway_count = len(re.findall(r"(?m)^>\s+-\s+", body))
     if not 3 <= takeaway_count <= 5:
         blockers.append(_issue("invalid_key_takeaway_count", str(takeaway_count)))
@@ -387,26 +408,32 @@ def audit_sectional_delivery(
         section_id = binding["section_id"]
         counts[kind] += 1
         if section_id.startswith("frame-"):
-            blockers.append(_issue(
-                "link_in_noncommercial_frame_unit",
-                kind,
-                section_id=section_id,
-            ))
+            blockers.append(
+                _issue(
+                    "link_in_noncommercial_frame_unit",
+                    kind,
+                    section_id=section_id,
+                )
+            )
         url = binding["url"]
         candidate_id = binding["candidate_id"]
         if kind in {"article", "product"}:
             if url in urls_by_kind[kind] or candidate_id in candidates_by_kind[kind]:
-                blockers.append(_issue(
-                    "duplicate_internal_link_target",
+                blockers.append(
+                    _issue(
+                        "duplicate_internal_link_target",
+                        url,
+                        section_id=section_id,
+                    )
+                )
+        elif url in urls_by_kind[kind]:
+            warnings.append(
+                _issue(
+                    "repeated_external_citation",
                     url,
                     section_id=section_id,
-                ))
-        elif url in urls_by_kind[kind]:
-            warnings.append(_issue(
-                "repeated_external_citation",
-                url,
-                section_id=section_id,
-            ))
+                )
+            )
         urls_by_kind[kind].add(url)
         candidates_by_kind[kind].add(candidate_id)
         anchor = _clean_text(binding.get("anchor", ""), "binding.anchor")
@@ -414,18 +441,22 @@ def audit_sectional_delivery(
         if kind in {"article", "product"} and (
             anchor_norm in _GENERIC_ANCHORS or len(anchor_norm.split()) < 2
         ):
-            blockers.append(_issue(
-                "generic_or_too_short_anchor",
-                anchor,
-                section_id=section_id,
-            ))
+            blockers.append(
+                _issue(
+                    "generic_or_too_short_anchor",
+                    anchor,
+                    section_id=section_id,
+                )
+            )
         previous_url = anchors.get(anchor_norm)
         if previous_url and previous_url != url:
-            warnings.append(_issue(
-                "reused_anchor_for_different_targets",
-                anchor,
-                section_id=section_id,
-            ))
+            warnings.append(
+                _issue(
+                    "reused_anchor_for_different_targets",
+                    anchor,
+                    section_id=section_id,
+                )
+            )
         else:
             anchors[anchor_norm] = url
 
@@ -438,22 +469,22 @@ def audit_sectional_delivery(
     )
     binding_urls = Counter(binding["url"] for binding in resolved["bindings"])
     if markdown_urls != binding_urls:
-        blockers.append(_issue(
-            "markdown_links_do_not_match_phase4_bindings",
-            f"markdown={dict(markdown_urls)} bindings={dict(binding_urls)}",
-        ))
+        blockers.append(
+            _issue(
+                "markdown_links_do_not_match_phase4_bindings",
+                f"markdown={dict(markdown_urls)} bindings={dict(binding_urls)}",
+            )
+        )
 
-    hard_caps = {
-        "article": max(3, math.ceil(words / 350)),
-        "product": max(2, math.ceil(words / 450)),
-        "external_citation": max(5, math.ceil(words / 250)),
-    }
+    hard_caps = sectional_link_hard_caps(words)
     for kind, count in counts.items():
         if count > hard_caps[kind]:
-            blockers.append(_issue(
-                "link_density_exceeds_hard_cap",
-                f"{kind}: {count} > {hard_caps[kind]}",
-            ))
+            blockers.append(
+                _issue(
+                    "link_density_exceeds_hard_cap",
+                    f"{kind}: {count} > {hard_caps[kind]}",
+                )
+            )
 
     advisory_targets = {
         "article": round(words / LINK_RATIO_BLOG),
@@ -462,10 +493,12 @@ def audit_sectional_delivery(
     }
     for kind, target_count in advisory_targets.items():
         if target_count > counts[kind]:
-            warnings.append(_issue(
-                "advisory_link_density_below_ratio",
-                f"{kind}: {counts[kind]} < advisory {target_count}",
-            ))
+            warnings.append(
+                _issue(
+                    "advisory_link_density_below_ratio",
+                    f"{kind}: {counts[kind]} < advisory {target_count}",
+                )
+            )
 
     product_positions = [
         body.find(binding["url"]) / max(1, len(body))
@@ -473,10 +506,12 @@ def audit_sectional_delivery(
         if binding["kind"] == "product" and binding["url"] in body
     ]
     if product_positions and min(product_positions) < 0.20:
-        warnings.append(_issue(
-            "product_link_appears_early",
-            f"first product link at {min(product_positions):.1%}",
-        ))
+        warnings.append(
+            _issue(
+                "product_link_appears_early",
+                f"first product link at {min(product_positions):.1%}",
+            )
+        )
 
     primary = meta["seo_keywords"][0].casefold()
     visible = _visible_text(body).casefold()
@@ -487,10 +522,12 @@ def audit_sectional_delivery(
         warnings.append(_issue("primary_keyword_missing_from_first_100_words", primary))
     h2_hits = sum(primary in heading.casefold() for heading in body_headings)
     if h2_hits < 2:
-        warnings.append(_issue(
-            "primary_keyword_in_fewer_than_two_main_h2s",
-            f"{h2_hits} hits",
-        ))
+        warnings.append(
+            _issue(
+                "primary_keyword_in_fewer_than_two_main_h2s",
+                f"{h2_hits} hits",
+            )
+        )
 
     return {
         "version": ASSEMBLY_VERSION,
@@ -553,9 +590,7 @@ def assemble_sectional_article(
         for item in resolved["sentences"]
     ]
     if final_sentences != expected_sentences:
-        raise SectionAssemblyError(
-            "frontmatter or FAQ schema changed canonical body sentence IDs"
-        )
+        raise SectionAssemblyError("frontmatter or FAQ schema changed canonical body sentence IDs")
     final_ledger = dict(ledger)
     final_ledger["draft_sha256"] = _sha256_text(draft)
     try:
@@ -607,12 +642,7 @@ def validate_sectional_assembly(assembly: Any) -> dict[str, Any]:
     schema_block = render_faq_schema(delivery)
     if assembly.get("faq_schema_block") != schema_block:
         raise SectionAssemblyError("assembly FAQ schema block is not deterministic")
-    expected_draft = (
-        frontmatter
-        + delivery["draft_markdown"].rstrip()
-        + "\n\n"
-        + schema_block
-    )
+    expected_draft = frontmatter + delivery["draft_markdown"].rstrip() + "\n\n" + schema_block
     draft = assembly.get("draft_markdown")
     if draft != expected_draft:
         raise SectionAssemblyError("assembly draft is not deterministic")
@@ -707,14 +737,10 @@ def persist_sectional_assembly(
             + "\n"
         ).encode("utf-8"),
         "report": (
-            json.dumps(validated, ensure_ascii=False, indent=2, sort_keys=True)
-            + "\n"
+            json.dumps(validated, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8"),
     }
-    previous = {
-        key: path.read_bytes() if path.exists() else None
-        for key, path in paths.items()
-    }
+    previous = {key: path.read_bytes() if path.exists() else None for key, path in paths.items()}
     temps = {key: _temp_file(paths[key], payload) for key, payload in payloads.items()}
     replaced: list[str] = []
     try:

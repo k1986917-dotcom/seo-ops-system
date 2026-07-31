@@ -6,6 +6,14 @@
 
 ### Changed
 
+- Sectional Cluster Content now targets 3,000–4,200 visible words, with default
+  body-section contracts raised from 220–360 to 350–500 words. This change is
+  scoped to the sectional shadow/assembly path; the formal Legacy pair remains
+  untouched until an explicitly approved promotion.
+- Visible external citations now use a shared full-article hard cap of roughly
+  one unique source link per 600 visible words, with a minimum allowance of
+  three. Evidence may still support claim-ledger entries without repeating the
+  same visible URL throughout the article.
 - 章节化产品推荐改为“内容相关即可推荐”：`compare|select|apply` 中只要存在在售、数据
   无冲突且与文章主题或章节相关的商品，就要求至少 1 个产品链接；不再要求小目录网站的
   每个 SKU 都与细分用途完全匹配。弱匹配商品只能写成 related catalog option，不能
@@ -31,6 +39,12 @@
 
 ### Fixed
 
+- Phase 4 now performs deterministic full-article link allocation before URL
+  binding. Required section minima are allocated first; duplicate ARTICLE and
+  PRODUCT targets keep one canonical link while later occurrences remain plain
+  anchor text, and duplicate/excess CITE placeholders are removed from visible
+  Markdown without removing their approved evidence from section claim
+  packages. The strict Phase 5 duplicate and density gates remain unchanged.
 - Section generation now repairs a narrow formatting-only failure when an AI
   puts multiple ARTICLE/PRODUCT placeholders in one paragraph. The server may
   split that paragraph only at existing sentence boundaries, preserving every

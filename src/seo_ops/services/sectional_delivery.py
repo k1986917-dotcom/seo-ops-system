@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -48,6 +49,115 @@ _FRAME_UNIT_IDS = (
 _SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _PLACEHOLDER_REMAINDER = re.compile(r"\[\[(?:ARTICLE|PRODUCT|CITE):")
 _CLAIM_KEYS = frozenset({"sentence_id", "claim_type", "evidence_ids"})
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def sectional_link_hard_caps(words: int) -> dict[str, int]:
+    """Return the shared full-article link caps for a visible word count."""
+    if not isinstance(words, int) or isinstance(words, bool) or words < 1:
+        raise SectionDeliveryError("visible word count must be a positive integer")
+    return {
+        "article": max(3, math.ceil(words / 350)),
+        "product": max(2, math.ceil(words / 450)),
+        "external_citation": max(3, math.ceil(words / 600)),
+    }
+
+
+def _visible_word_count(markdown: str) -> int:
+    text = re.sub(
+        r"\[\[(?:ARTICLE|PRODUCT):[^|\]]+\|([^\]]+)\]\]",
+        r"\1",
+        markdown,
+    )
+    text = re.sub(r"\[\[CITE:[^\]]+\]\]", "source", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"</?[a-zA-Z][^>]*>", " ", text)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"(?m)^\s*>\s?", "", text)
+    text = re.sub(r"(?m)^\s*(?:[-*+]\s+|\d+\.\s+)", "", text)
+    text = re.sub(r"[*_`]+", "", text)
+    return len(_WORD.findall(" ".join(text.split()).casefold()))
+
+
+def _global_link_selection(
+    run: dict[str, Any],
+    link_by_id: dict[str, dict[str, Any]],
+    indexes: dict[str, dict[str, dict[str, Any]]],
+    frame_units: dict[str, dict[str, Any]],
+) -> set[tuple[str, str, str]]:
+    """Allocate unique full-article link targets before Phase 4 binding."""
+    field_by_kind = {
+        "article": "article_links",
+        "product": "product_links",
+        "external_citation": "external_citations",
+    }
+    registry_by_kind = {
+        "article": indexes["articles"],
+        "product": indexes["products"],
+        "external_citation": indexes["evidence"],
+    }
+    occurrences: dict[str, list[dict[str, str]]] = {kind: [] for kind in field_by_kind}
+    for output in run["outputs"]:
+        section_id = output["section_id"]
+        parsed = parse_section_placeholders(output["markdown"])
+        for kind, field in field_by_kind.items():
+            for record in parsed[field]:
+                candidate = registry_by_kind[kind].get(record["candidate_id"])
+                if candidate is None:
+                    raise SectionDeliveryError(
+                        f"unknown {kind} candidate: {record['candidate_id']}"
+                    )
+                occurrences[kind].append(
+                    {
+                        "section_id": section_id,
+                        "candidate_id": record["candidate_id"],
+                        "url": candidate["url"],
+                    }
+                )
+
+    visible_parts = [
+        frame_units["frame-introduction"]["markdown"],
+        frame_units["frame-takeaways"]["markdown"],
+        *(output["markdown"] for output in run["outputs"]),
+        frame_units["frame-conclusion"]["markdown"],
+        frame_units["frame-faq"]["markdown"],
+    ]
+    caps = sectional_link_hard_caps(_visible_word_count("\n\n".join(visible_parts)))
+    selected: set[tuple[str, str, str]] = set()
+    for kind, field in field_by_kind.items():
+        used_urls: set[str] = set()
+        selected_count = 0
+
+        # Satisfy required section minima before filling recommended links.
+        for section_id in run["section_order"]:
+            gate = link_by_id[section_id][field]
+            minimum = gate["min_required"]
+            section_rows = [item for item in occurrences[kind] if item["section_id"] == section_id]
+            chosen = 0
+            for item in section_rows:
+                if chosen >= minimum or selected_count >= caps[kind]:
+                    break
+                if item["url"] in used_urls:
+                    continue
+                selected.add((section_id, kind, item["candidate_id"]))
+                used_urls.add(item["url"])
+                selected_count += 1
+                chosen += 1
+            if chosen < minimum:
+                raise SectionDeliveryError(
+                    f"global {kind} allocation cannot satisfy required minimum for {section_id}"
+                )
+
+        for item in occurrences[kind]:
+            if selected_count >= caps[kind]:
+                break
+            key = (item["section_id"], kind, item["candidate_id"])
+            if key in selected or item["url"] in used_urls:
+                continue
+            selected.add(key)
+            used_urls.add(item["url"])
+            selected_count += 1
+    return selected
 
 
 class SectionDeliveryError(ContractValidationError):
@@ -84,10 +194,7 @@ def _markdown_digest(markdown: str) -> str:
 def _registry_indexes(registry: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
     validated = validate_candidate_registry(registry)
     return {
-        kind: {
-            candidate["candidate_id"]: candidate
-            for candidate in validated[kind]["candidates"]
-        }
+        kind: {candidate["candidate_id"]: candidate for candidate in validated[kind]["candidates"]}
         for kind in ("articles", "products", "evidence")
     }
 
@@ -121,8 +228,7 @@ def _validate_section_run(section_run: Any) -> dict[str, Any]:
     if [item.get("section_id") for item in outputs if isinstance(item, dict)] != order:
         raise SectionDeliveryError("section_run outputs are out of order")
     if len(order) != len(set(order)) or any(
-        not isinstance(item, str) or not _SECTION_ID.fullmatch(item)
-        for item in order
+        not isinstance(item, str) or not _SECTION_ID.fullmatch(item) for item in order
     ):
         raise SectionDeliveryError("section_run section IDs are invalid")
     return section_run
@@ -136,19 +242,18 @@ def _build_frame_units(
     frame = validate_article_frame_output(article_frame, package)
     faq_lines = ["## Frequently Asked Questions"]
     for item in frame["faq"]:
-        faq_lines.extend([
-            "",
-            f"### {item['question']}",
-            "",
-            item["answer"],
-        ])
+        faq_lines.extend(
+            [
+                "",
+                f"### {item['question']}",
+                "",
+                item["answer"],
+            ]
+        )
     markdown_by_id = {
-        "frame-introduction": (
-            f"# {section_run['topic']}\n\n{frame['introduction']}"
-        ),
+        "frame-introduction": (f"# {section_run['topic']}\n\n{frame['introduction']}"),
         "frame-takeaways": (
-            "> **Key Takeaways**\n"
-            + "\n".join(f"> - {item}" for item in frame["key_takeaways"])
+            "> **Key Takeaways**\n" + "\n".join(f"> - {item}" for item in frame["key_takeaways"])
         ),
         "frame-conclusion": f"## Conclusion\n\n{frame['conclusion']}",
         "frame-faq": "\n".join(faq_lines),
@@ -214,10 +319,7 @@ def _validate_output_integrity(output: dict[str, Any]) -> None:
     if output.get("markdown_sha256") != _markdown_digest(markdown):
         raise SectionDeliveryError("section output markdown SHA mismatch")
     parsed = parse_section_placeholders(markdown)
-    inventory = {
-        key: [item["candidate_id"] for item in records]
-        for key, records in parsed.items()
-    }
+    inventory = {key: [item["candidate_id"] for item in records] for key, records in parsed.items()}
     if output.get("used_ids") != inventory:
         raise SectionDeliveryError("section output used_ids do not match placeholders")
     decisions = output.get("decisions")
@@ -285,6 +387,12 @@ def resolve_section_placeholders(
     if not isinstance(resolved_frame, dict):
         raise SectionDeliveryError("article_frame is required for final delivery")
     frame_units = _build_frame_units(run, resolved_frame)
+    selected_global_links = _global_link_selection(
+        run,
+        link_by_id,
+        indexes,
+        frame_units,
+    )
 
     resolved_sections: list[dict[str, Any]] = [
         frame_units["frame-introduction"],
@@ -317,80 +425,110 @@ def resolve_section_placeholders(
         for record in parsed["article_links"]:
             candidate = indexes["articles"].get(record["candidate_id"])
             if candidate is None:
-                raise SectionDeliveryError(
-                    f"unknown article candidate: {record['candidate_id']}"
-                )
+                raise SectionDeliveryError(f"unknown article candidate: {record['candidate_id']}")
             token = f"[[ARTICLE:{record['candidate_id']}|{record['anchor']}]]"
-            replacement = f"[{record['anchor']}]({candidate['url']})"
+            selected = (
+                section_id,
+                "article",
+                record["candidate_id"],
+            ) in selected_global_links
+            replacement = (
+                f"[{record['anchor']}]({candidate['url']})" if selected else record["anchor"]
+            )
             markdown = _replace_once(markdown, token, replacement)
-            bindings.append({
-                "kind": "article",
-                "candidate_id": record["candidate_id"],
-                "anchor": record["anchor"],
-                "url": candidate["url"],
-            })
+            if selected:
+                bindings.append(
+                    {
+                        "kind": "article",
+                        "candidate_id": record["candidate_id"],
+                        "anchor": record["anchor"],
+                        "url": candidate["url"],
+                    }
+                )
 
         for record in parsed["product_links"]:
             candidate = indexes["products"].get(record["candidate_id"])
             if candidate is None:
-                raise SectionDeliveryError(
-                    f"unknown product candidate: {record['candidate_id']}"
-                )
+                raise SectionDeliveryError(f"unknown product candidate: {record['candidate_id']}")
             if candidate.get("attribute_conflicts"):
                 raise SectionDeliveryError(
                     f"conflicted product cannot be bound: {record['candidate_id']}"
                 )
             token = f"[[PRODUCT:{record['candidate_id']}|{record['anchor']}]]"
-            replacement = f"[{record['anchor']}]({candidate['url']})"
+            selected = (
+                section_id,
+                "product",
+                record["candidate_id"],
+            ) in selected_global_links
+            replacement = (
+                f"[{record['anchor']}]({candidate['url']})" if selected else record["anchor"]
+            )
             markdown = _replace_once(markdown, token, replacement)
-            bindings.append({
-                "kind": "product",
-                "candidate_id": record["candidate_id"],
-                "product_id": candidate.get("product_id", ""),
-                "anchor": record["anchor"],
-                "url": candidate["url"],
-            })
+            if selected:
+                bindings.append(
+                    {
+                        "kind": "product",
+                        "candidate_id": record["candidate_id"],
+                        "product_id": candidate.get("product_id", ""),
+                        "anchor": record["anchor"],
+                        "url": candidate["url"],
+                    }
+                )
 
         for record in parsed["external_citations"]:
             candidate = indexes["evidence"].get(record["candidate_id"])
             if candidate is None:
-                raise SectionDeliveryError(
-                    f"unknown evidence candidate: {record['candidate_id']}"
-                )
+                raise SectionDeliveryError(f"unknown evidence candidate: {record['candidate_id']}")
             token = f"[[CITE:{record['candidate_id']}]]"
             anchor = _citation_anchor(candidate["url"])
-            replacement = f"([{anchor}]({candidate['url']}))"
+            selected = (
+                section_id,
+                "external_citation",
+                record["candidate_id"],
+            ) in selected_global_links
+            replacement = f"([{anchor}]({candidate['url']}))" if selected else ""
             markdown = _replace_once(markdown, token, replacement)
-            bindings.append({
-                "kind": "external_citation",
-                "candidate_id": record["candidate_id"],
-                "evidence_id": candidate.get("evidence_id", record["candidate_id"]),
-                "anchor": anchor,
-                "url": candidate["url"],
-            })
+            if selected:
+                bindings.append(
+                    {
+                        "kind": "external_citation",
+                        "candidate_id": record["candidate_id"],
+                        "evidence_id": candidate.get("evidence_id", record["candidate_id"]),
+                        "anchor": anchor,
+                        "url": candidate["url"],
+                    }
+                )
+
+        markdown = re.sub(r"[ \t]+([,.;:!?])", r"\1", markdown)
+        markdown = re.sub(r"[ \t]{2,}", " ", markdown)
+        markdown = re.sub(r"(?m)[ \t]+$", "", markdown)
 
         if _PLACEHOLDER_REMAINDER.search(markdown) or "[[" in markdown or "]]" in markdown:
             raise SectionDeliveryError("resolved section still contains a placeholder")
-        resolved_sections.append({
-            "section_id": section_id,
-            "unit_kind": "body_section",
-            "heading": output["heading"],
-            "source_markdown_sha256": output["markdown_sha256"],
-            "markdown": markdown,
-            "markdown_sha256": _markdown_digest(markdown),
-            "bindings": bindings,
-            "sentence_ids": [],
-        })
+        resolved_sections.append(
+            {
+                "section_id": section_id,
+                "unit_kind": "body_section",
+                "heading": output["heading"],
+                "source_markdown_sha256": output["markdown_sha256"],
+                "markdown": markdown,
+                "markdown_sha256": _markdown_digest(markdown),
+                "bindings": bindings,
+                "sentence_ids": [],
+            }
+        )
         all_bindings.extend({"section_id": section_id, **item} for item in bindings)
 
-    resolved_sections.extend([
-        frame_units["frame-conclusion"],
-        frame_units["frame-faq"],
-    ])
+    resolved_sections.extend(
+        [
+            frame_units["frame-conclusion"],
+            frame_units["frame-faq"],
+        ]
+    )
 
-    draft_markdown = "\n\n".join(
-        item["markdown"].strip() for item in resolved_sections
-    ).strip() + "\n"
+    draft_markdown = (
+        "\n\n".join(item["markdown"].strip() for item in resolved_sections).strip() + "\n"
+    )
     authoritative = seo_common.extract_draft_sentences(draft_markdown)
     sentence_records: list[dict[str, str]] = []
     cursor = 0
@@ -409,10 +547,12 @@ def resolve_section_placeholders(
                     "section sentence mapping differs from authoritative body extraction"
                 )
             ids.append(global_sentence["sentence_id"])
-            sentence_records.append({
-                **global_sentence,
-                "section_id": section["section_id"],
-            })
+            sentence_records.append(
+                {
+                    **global_sentence,
+                    "section_id": section["section_id"],
+                }
+            )
             cursor += 1
         section["sentence_ids"] = ids
     if cursor != len(authoritative):
@@ -450,8 +590,7 @@ def validate_resolved_delivery(delivery: Any) -> dict[str, Any]:
     ):
         raise SectionDeliveryError("resolved delivery sections/order are invalid")
     if any(
-        not isinstance(item, str) or not _SECTION_ID.fullmatch(item)
-        for item in body_order
+        not isinstance(item, str) or not _SECTION_ID.fullmatch(item) for item in body_order
     ) or len(body_order) != len(set(body_order)):
         raise SectionDeliveryError("resolved delivery body section order is invalid")
     expected_order = [
@@ -529,10 +668,12 @@ def validate_resolved_delivery(delivery: Any) -> dict[str, Any]:
                 raise SectionDeliveryError("resolved binding is not represented in Markdown")
             if url not in markdown:
                 raise SectionDeliveryError("resolved binding URL is missing from Markdown")
-            flattened_bindings.append({
-                "section_id": section["section_id"],
-                **binding,
-            })
+            flattened_bindings.append(
+                {
+                    "section_id": section["section_id"],
+                    **binding,
+                }
+            )
         expected_body_parts.append(markdown.strip())
     draft = delivery.get("draft_markdown")
     if not isinstance(draft, str) or not draft.strip():
@@ -558,11 +699,7 @@ def validate_resolved_delivery(delivery: Any) -> dict[str, Any]:
         if record.get("section_id") not in order:
             raise SectionDeliveryError("resolved sentence has unknown section_id")
     by_section = {
-        section_id: [
-            item["sentence_id"]
-            for item in sentences
-            if item["section_id"] == section_id
-        ]
+        section_id: [item["sentence_id"] for item in sentences if item["section_id"] == section_id]
         for section_id in order
     }
     for section in sections:
@@ -579,13 +716,7 @@ def validate_resolved_delivery(delivery: Any) -> dict[str, Any]:
 
 def resolved_delivery_path(workspace: Path, slug: str) -> Path:
     clean_slug = _validate_slug(slug)
-    return (
-        Path(workspace)
-        / "drafts"
-        / "sectional"
-        / clean_slug
-        / "resolved-delivery.json"
-    )
+    return Path(workspace) / "drafts" / "sectional" / clean_slug / "resolved-delivery.json"
 
 
 def persist_resolved_delivery(
@@ -629,8 +760,7 @@ def _allowed_evidence_for_section(
     manifest_by_id = _manifest_sections(context_manifest)
     registry = validate_candidate_registry(context_manifest["registry"])
     by_id = {
-        candidate["candidate_id"]: candidate
-        for candidate in registry["evidence"]["candidates"]
+        candidate["candidate_id"]: candidate for candidate in registry["evidence"]["candidates"]
     }
     if section_id in _FRAME_UNIT_IDS:
         ranked_rows = [
@@ -655,11 +785,7 @@ def _allowed_evidence_for_section(
             raise SectionDeliveryError("manifest evidence_candidates must be a list")
         ranked_rows = [item for item in ranked if isinstance(item, dict)]
         link_section = next(
-            (
-                item
-                for item in links["sections"]
-                if item.get("section_id") == section_id
-            ),
+            (item for item in links["sections"] if item.get("section_id") == section_id),
             None,
         )
         if not isinstance(link_section, dict):
@@ -677,13 +803,15 @@ def _allowed_evidence_for_section(
             raise SectionDeliveryError(
                 f"manifest evidence candidate missing from registry: {candidate_id}"
             )
-        result.append({
-            "evidence_id": candidate["evidence_id"],
-            "support": candidate["support"],
-            "concepts": candidate.get("concepts", []),
-            "claim_types": candidate.get("claim_types", []),
-            "source_url": candidate["url"],
-        })
+        result.append(
+            {
+                "evidence_id": candidate["evidence_id"],
+                "support": candidate["support"],
+                "concepts": candidate.get("concepts", []),
+                "claim_types": candidate.get("claim_types", []),
+                "source_url": candidate["url"],
+            }
+        )
     return result
 
 
@@ -816,12 +944,8 @@ def parse_section_claim_response(
         raise SectionDeliveryError("claim response top-level shape is invalid")
     if data.get("version") != CONTRACT_VERSION or not isinstance(data.get("claims"), list):
         raise SectionDeliveryError("claim response version/claims are invalid")
-    sentence_by_id = {
-        item["sentence_id"]: item["text"] for item in validated["sentences"]
-    }
-    allowed_evidence = {
-        item["evidence_id"] for item in validated["evidence"]
-    }
+    sentence_by_id = {item["sentence_id"]: item["text"] for item in validated["sentences"]}
+    allowed_evidence = {item["evidence_id"] for item in validated["evidence"]}
     canonical: list[dict[str, Any]] = []
     identities: set[tuple[str, str, tuple[str, ...]]] = set()
     for index, claim in enumerate(data["claims"]):
@@ -847,12 +971,14 @@ def parse_section_claim_response(
         if identity in identities:
             raise SectionDeliveryError(f"claims[{index}] duplicates an earlier claim")
         identities.add(identity)
-        canonical.append({
-            "sentence_id": sentence_id,
-            "claim_text": sentence_by_id[sentence_id],
-            "claim_type": claim_type,
-            "evidence_ids": list(evidence_ids),
-        })
+        canonical.append(
+            {
+                "sentence_id": sentence_id,
+                "claim_text": sentence_by_id[sentence_id],
+                "claim_type": claim_type,
+                "evidence_ids": list(evidence_ids),
+            }
+        )
     return {
         "version": CONTRACT_VERSION,
         "section_id": validated["section_id"],
@@ -932,9 +1058,9 @@ def _atomic_json_write(path: Path, data: dict[str, Any]) -> None:
             dir=path.parent,
         )
         temp_path = Path(temp_name)
-        payload = (
-            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
+        payload = (json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()
@@ -964,11 +1090,14 @@ def persist_section_ledger_checkpoint(
         slug,
         validated_package["section_id"],
     )
-    _atomic_json_write(path, {
-        "version": CONTRACT_VERSION,
-        "package_sha256": validated_package["package_sha256"],
-        "output": validated_output,
-    })
+    _atomic_json_write(
+        path,
+        {
+            "version": CONTRACT_VERSION,
+            "package_sha256": validated_package["package_sha256"],
+            "output": validated_output,
+        },
+    )
     return str(path)
 
 
@@ -1070,11 +1199,7 @@ def run_section_claim_ledger_sequence(
             context_manifest,
             section_id,
         )
-        output = (
-            load_section_ledger_checkpoint(workspace, slug, package)
-            if resume
-            else None
-        )
+        output = load_section_ledger_checkpoint(workspace, slug, package) if resume else None
         if output is None:
             output = _generate_one_section_ledger(package, generate_text)
             persist_section_ledger_checkpoint(workspace, slug, package, output)
@@ -1116,9 +1241,7 @@ def merge_section_claim_ledgers(
         "section_order"
     ]:
         raise SectionDeliveryError("ledger_run outputs are out of order")
-    sentence_by_id = {
-        item["sentence_id"]: item for item in resolved["sentences"]
-    }
+    sentence_by_id = {item["sentence_id"]: item for item in resolved["sentences"]}
     claims: list[dict[str, Any]] = []
     identities: set[tuple[str, str, tuple[str, ...]]] = set()
     for output, section_id in zip(outputs, resolved["section_order"], strict=True):
@@ -1144,12 +1267,14 @@ def merge_section_claim_ledgers(
             if identity in identities:
                 raise SectionDeliveryError("merged ledger contains a duplicate claim")
             identities.add(identity)
-            claims.append({
-                "sentence_id": claim["sentence_id"],
-                "claim_text": claim["claim_text"],
-                "claim_type": claim["claim_type"],
-                "evidence_ids": list(evidence_ids),
-            })
+            claims.append(
+                {
+                    "sentence_id": claim["sentence_id"],
+                    "claim_text": claim["claim_text"],
+                    "claim_type": claim["claim_type"],
+                    "evidence_ids": list(evidence_ids),
+                }
+            )
     claims.sort(key=lambda item: (int(item["sentence_id"][1:]), item["claim_type"]))
     return {
         "version": CONTRACT_VERSION,

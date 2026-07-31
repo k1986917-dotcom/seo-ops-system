@@ -2,6 +2,32 @@
 
 最后更新：2026-07-31（Europe/Paris）
 
+## 2026-07-31 — 第六次 shadow 全文链接协调与字数合同修复
+
+- `fc1b142` 推送后，Action #3 在非沙箱主机环境执行一次
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing`；只发送 1 次正式 POST，
+  HTTP 303 返回 error，没有重试。
+- 流程成功恢复已有 2 个正文 checkpoint，并继续生成全部 6 个正文章节、article frame、
+  10 个 ledger checkpoints 和 `resolved-delivery.json`，共保留 18 个中间产物；数据库
+  `ai_runs` 从 138 增至 153。正式 draft、claim ledger、w2-state、`.env` 和 Action 状态
+  全部不变，promotion manifest 不存在，rollout 最终为 off。
+- 第六个 blocker 为 Phase 5 全文门禁：同一 Professional Use Guide 出现 3 次，B020 与
+  LP40 各出现 2 次，形成 4 个 `duplicate_internal_link_target`；外部引用为 18 个，而
+  2770 词旧候选按新运营要求最多应保留约 5 个。
+- 根因不是全文 gate 过严，而是 Phase 3 各章节独立选择链接，Phase 4 绑定时没有全文
+  唯一目标和总额度协调。旧 brief 还把全文目标写成 1800–2500，默认单节合同仅
+  220–360，导致旧候选只有约 2770 词。
+- 修复方向已落地：Sectional Cluster Content 全文目标改为 3000–4200，默认正文单节
+  350–500；外部可见引用约每 600 词 1 个。Phase 4 先满足 required 章节，再按全文
+  URL 唯一性和硬上限分配链接；重复 ARTICLE/PRODUCT 降级为普通锚文本，重复或超额
+  CITE 只移除可见链接，approved evidence 仍保留给 claim ledger。
+- 对当前真实 7 个 checkpoint 做只读离线重组：旧候选得到 ARTICLE=5、PRODUCT=2、
+  external citation=5，三类 URL 均无重复；可见正文约 2608 词，因此会被新的 3000
+  最低门禁正确拒绝并要求重新生成更完整章节。
+- Phase 1–7 sectional、adapter、repair、rollout 和 runner 联合测试在排除一个已知 MCP
+  `/etc/mime.types` Landlock 导入限制后全部通过；Ruff 与 compileall 通过。尚未运行
+  新的真实 shadow，也未 promotion。
+
 ## 2026-07-31 — 章节化写作与链接机会门禁正式规划
 
 - 已确认整体方向：全局 Article Blueprint 保证逻辑，H2 Section Contract 控制每节完整

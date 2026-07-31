@@ -25,6 +25,7 @@ from seo_ops.services.sectional_delivery import (
     resolved_delivery_path,
     run_section_claim_ledger_sequence,
     section_ledger_checkpoint_path,
+    sectional_link_hard_caps,
 )
 from seo_ops.services.sectional_generation import (
     FRAME_CONCLUSION_MARKER,
@@ -98,15 +99,11 @@ def _response(package):
     if gates["article_links"]["selected_ids"]:
         candidate_id = gates["article_links"]["selected_ids"][0]
         used["article_links"].append(candidate_id)
-        first_links.append(
-            f"[[ARTICLE:{candidate_id}|ceiling tool selection guidance]]"
-        )
+        first_links.append(f"[[ARTICLE:{candidate_id}|ceiling tool selection guidance]]")
     if gates["product_links"]["opportunity_state"] != "none":
         candidate_id = gates["product_links"]["selected_ids"][0]
         used["product_links"].append(candidate_id)
-        second_links.append(
-            f"[[PRODUCT:{candidate_id}|related professional marking tool]]"
-        )
+        second_links.append(f"[[PRODUCT:{candidate_id}|related professional marking tool]]")
     if gates["external_citations"]["selected_ids"]:
         candidate_id = gates["external_citations"]["selected_ids"][0]
         used["external_citations"].append(candidate_id)
@@ -146,31 +143,46 @@ def _response(package):
 
 
 def _frame_response():
-    intro = " ".join([
-        "Professional teams should define the ceiling marking task before selecting equipment.",
-        "They should review distance, visibility, handling, and the surrounding work area.",
-        "The current catalog provides the commercial options that can be discussed honestly.",
-        "Supporting evidence should remain tied to the claims it actually supports.",
-        "A related product can be useful without being described as purpose-built.",
-        "Clear stages help readers compare options without confusing advice and verification.",
-        "Consistent product data also prevents conflicting specifications from entering recommendations.",
-        "This process keeps the article useful when products or site conditions change.",
-    ])
-    conclusion = " ".join([
-        "A reliable marking workflow begins with the real task and the current work area.",
-        "Readers should compare available options against distance, visibility, and handling needs.",
-        "Product recommendations should reflect the live catalog rather than an old writing note.",
-        "Safety and compliance statements should remain connected to appropriate evidence.",
-        "Conflicting catalog data should be reported before an automatic product link is created.",
-        "Related products may still be presented when their limitations are stated accurately.",
-        "This approach produces a recommendation that is useful, maintainable, and transparent.",
-        "It also avoids turning an unsupported assumption into a product or regulatory claim.",
-    ])
-    faq = {"faqs": [
-        {"question": "What should professionals evaluate before choosing a marking tool?", "answer": "They should evaluate the task, working distance, visibility conditions, handling requirements, catalog fit, and relevant site procedures before selecting an option."},
-        {"question": "Why should product data be checked before adding a link?", "answer": "Consistent product data prevents conflicting specifications from entering the article and allows the linked product to be described accurately."},
-        {"question": "Can a historical brief override the current catalog?", "answer": "No. A historical brief may suggest an angle, but the current catalog and approved site policy remain the commercial source of truth."},
-    ]}
+    intro = " ".join(
+        [
+            "Professional teams should define the ceiling marking task before selecting equipment.",
+            "They should review distance, visibility, handling, and the surrounding work area.",
+            "The current catalog provides the commercial options that can be discussed honestly.",
+            "Supporting evidence should remain tied to the claims it actually supports.",
+            "A related product can be useful without being described as purpose-built.",
+            "Clear stages help readers compare options without confusing advice and verification.",
+            "Consistent product data also prevents conflicting specifications from entering recommendations.",
+            "This process keeps the article useful when products or site conditions change.",
+        ]
+    )
+    conclusion = " ".join(
+        [
+            "A reliable marking workflow begins with the real task and the current work area.",
+            "Readers should compare available options against distance, visibility, and handling needs.",
+            "Product recommendations should reflect the live catalog rather than an old writing note.",
+            "Safety and compliance statements should remain connected to appropriate evidence.",
+            "Conflicting catalog data should be reported before an automatic product link is created.",
+            "Related products may still be presented when their limitations are stated accurately.",
+            "This approach produces a recommendation that is useful, maintainable, and transparent.",
+            "It also avoids turning an unsupported assumption into a product or regulatory claim.",
+        ]
+    )
+    faq = {
+        "faqs": [
+            {
+                "question": "What should professionals evaluate before choosing a marking tool?",
+                "answer": "They should evaluate the task, working distance, visibility conditions, handling requirements, catalog fit, and relevant site procedures before selecting an option.",
+            },
+            {
+                "question": "Why should product data be checked before adding a link?",
+                "answer": "Consistent product data prevents conflicting specifications from entering the article and allows the linked product to be described accurately.",
+            },
+            {
+                "question": "Can a historical brief override the current catalog?",
+                "answer": "No. A historical brief may suggest an angle, but the current catalog and approved site policy remain the commercial source of truth.",
+            },
+        ]
+    }
     for item in faq["faqs"]:
         item["answer"] += (
             " This additional explanation keeps the recommendation clear for "
@@ -247,22 +259,22 @@ def _setup():
 
 def _claim_response(package, *, evidence_id=None, sentence_id=None):
     body_sentences = [
-        item
-        for item in package["sentences"]
-        if not item["text"].lstrip().startswith(chr(35))
+        item for item in package["sentences"] if not item["text"].lstrip().startswith(chr(35))
     ]
     selected_sentence = sentence_id or body_sentences[0]["sentence_id"]
     selected_evidence = evidence_id or package["evidence"][0]["evidence_id"]
-    return json.dumps({
-        "version": 1,
-        "claims": [
-            {
-                "sentence_id": selected_sentence,
-                "claim_type": "general",
-                "evidence_ids": [selected_evidence],
-            }
-        ],
-    })
+    return json.dumps(
+        {
+            "version": 1,
+            "claims": [
+                {
+                    "sentence_id": selected_sentence,
+                    "claim_type": "general",
+                    "evidence_ids": [selected_evidence],
+                }
+            ],
+        }
+    )
 
 
 def _generator_from_prompt(calls=None):
@@ -286,9 +298,10 @@ def test_resolve_placeholders_binds_registry_urls_and_assigns_global_sentences()
     assert "https://source.example/" in delivery["draft_markdown"] or (
         "https://safety.example/" in delivery["draft_markdown"]
     )
-    assert delivery["draft_sha256"] == hashlib.sha256(
-        delivery["draft_markdown"].encode("utf-8")
-    ).hexdigest()
+    assert (
+        delivery["draft_sha256"]
+        == hashlib.sha256(delivery["draft_markdown"].encode("utf-8")).hexdigest()
+    )
     assert [item["sentence_id"] for item in delivery["sentences"]] == [
         f"S{index:03d}" for index in range(1, len(delivery["sentences"]) + 1)
     ]
@@ -296,6 +309,42 @@ def test_resolve_placeholders_binds_registry_urls_and_assigns_global_sentences()
     assert any(item["kind"] == "product" for item in delivery["bindings"])
     assert any(item["kind"] == "external_citation" for item in delivery["bindings"])
     assert delivery["topic"] == shadow["context_manifest"]["topic"]
+
+
+def test_global_link_allocation_prefers_required_sections_and_unique_targets():
+    _, shadow, section_run, delivery = _setup()
+    raw_article_ids = [
+        item["candidate_id"]
+        for output in section_run["outputs"]
+        for item in parse_section_placeholders(output["markdown"])["article_links"]
+    ]
+    duplicate_id = next(
+        candidate_id for candidate_id in raw_article_ids if raw_article_ids.count(candidate_id) > 1
+    )
+    required_sections = {
+        item["section_id"]
+        for item in shadow["section_link_contracts"]["sections"]
+        if item["article_links"]["min_required"] > 0
+    }
+    bound_duplicate = [
+        item
+        for item in delivery["bindings"]
+        if item["kind"] == "article" and item["candidate_id"] == duplicate_id
+    ]
+    assert len(bound_duplicate) == 1
+    assert bound_duplicate[0]["section_id"] in required_sections
+
+    for kind in ("article", "product", "external_citation"):
+        urls = [item["url"] for item in delivery["bindings"] if item["kind"] == kind]
+        assert len(urls) == len(set(urls))
+
+
+def test_sectional_link_caps_use_one_external_citation_per_600_words():
+    assert sectional_link_hard_caps(2770) == {
+        "article": 8,
+        "product": 7,
+        "external_citation": 5,
+    }
 
 
 def test_resolved_delivery_round_trip_and_frontmatter_stability(tmp_path):
@@ -374,9 +423,7 @@ def test_delivery_rejects_candidate_not_approved_for_the_section():
     old_token = f"[[ARTICLE:{old['candidate_id']}|{old['anchor']}]]"
     new_token = f"[[ARTICLE:{replacement_id}|{old['anchor']}]]"
     output["markdown"] = output["markdown"].replace(old_token, new_token)
-    output["markdown_sha256"] = hashlib.sha256(
-        output["markdown"].encode("utf-8")
-    ).hexdigest()
+    output["markdown_sha256"] = hashlib.sha256(output["markdown"].encode("utf-8")).hexdigest()
     output["used_ids"]["article_links"] = [replacement_id]
     output["decisions"]["article_links"]["used_ids"] = [replacement_id]
 
@@ -401,9 +448,7 @@ def test_delivery_rejects_conflicted_product_even_if_output_is_tampered():
         for item in context["registry"]["products"]["candidates"]
         if item["candidate_id"] == product_id
     )
-    product["attribute_conflicts"] = [
-        {"field": "power", "table": "100", "detail": "200"}
-    ]
+    product["attribute_conflicts"] = [{"field": "power", "table": "100", "detail": "200"}]
     context["registry_sha256"] = hashlib.sha256(
         json.dumps(
             context["registry"],
@@ -455,9 +500,7 @@ def test_link_contract_none_blocks_manifest_product_candidate():
     candidate_id = manifest["product_candidates"][0]["candidate_id"]
     token = f"[[PRODUCT:{candidate_id}|related marking tool]]"
     target["markdown"] += f"\n\n{token}"
-    target["markdown_sha256"] = hashlib.sha256(
-        target["markdown"].encode("utf-8")
-    ).hexdigest()
+    target["markdown_sha256"] = hashlib.sha256(target["markdown"].encode("utf-8")).hexdigest()
     target["used_ids"]["product_links"] = [candidate_id]
     target["decisions"]["product_links"] = {
         "used_ids": [candidate_id],
@@ -483,9 +526,9 @@ def test_claim_package_contains_only_one_sections_global_ids_and_evidence():
     )
 
     assert {item["sentence_id"] for item in package["sentences"]} == set(
-        next(
-            item for item in delivery["sections"] if item["section_id"] == section_id
-        )["sentence_ids"]
+        next(item for item in delivery["sections"] if item["section_id"] == section_id)[
+            "sentence_ids"
+        ]
     )
     assert all(item["evidence_id"].startswith("ev_") for item in package["evidence"])
     assert all(
@@ -633,11 +676,14 @@ def test_corrupted_ledger_checkpoint_is_not_resumed(tmp_path):
     data["output"]["claims"][0]["claim_text"] = "tampered"
     path.write_text(json.dumps(data), encoding="utf-8")
 
-    assert load_section_ledger_checkpoint(
-        tmp_path,
-        "ceiling-marking",
-        package,
-    ) is None
+    assert (
+        load_section_ledger_checkpoint(
+            tmp_path,
+            "ceiling-marking",
+            package,
+        )
+        is None
+    )
 
 
 def test_checkpoint_atomic_write_restores_previous_bytes(tmp_path, monkeypatch):

@@ -40,14 +40,20 @@ def test_contract_bundle_is_stable_and_aligned():
     blueprint = first["article_blueprint"]
     sections = first["section_contracts"]
     links = first["section_link_contracts"]
-    assert blueprint["content_language"] == sections["content_language"] == links[
-        "content_language"
-    ] == "en"
+    assert (
+        blueprint["content_language"]
+        == sections["content_language"]
+        == links["content_language"]
+        == "en"
+    )
     assert blueprint["section_order"] == sections["section_order"] == links["section_order"]
     assert blueprint["section_order"][0] == stable_section_id(
         1, "Why Ceiling Layout Needs Clear Pointing"
     )
     assert len(set(blueprint["section_order"])) == 5
+    assert all(
+        section["target_words"] == {"min": 350, "max": 500} for section in sections["sections"]
+    )
 
 
 def test_section_ids_survive_outline_reordering():
@@ -88,9 +94,9 @@ def test_reader_stages_control_initial_product_link_policy():
     comparison = by_heading["Compare Red vs Green Visibility"]
     assert comparison["reader_stage"] == "compare"
     assert comparison["product_link_allowed"] is True
-    assert link_by_id[comparison["section_id"]]["product_links"][
-        "opportunity_state"
-    ] == "unassessed"
+    assert (
+        link_by_id[comparison["section_id"]]["product_links"]["opportunity_state"] == "unassessed"
+    )
 
     safety = by_heading["Safety and Compliance Limits"]
     assert safety["reader_stage"] == "verify"
@@ -113,8 +119,7 @@ def test_reader_stage_inference_handles_real_outline_phrasing():
         ],
     )
     stages = {
-        item["heading"]: item["reader_stage"]
-        for item in bundle["section_contracts"]["sections"]
+        item["heading"]: item["reader_stage"] for item in bundle["section_contracts"]["sections"]
     }
 
     assert stages["Why This Professional Use Case Is Different"] == "discover"
@@ -171,9 +176,7 @@ H2: Safety and Regulatory Compliance (300 words)
     safety = sections["Safety and Regulatory Compliance"]
 
     assert considerations["target_words"] == {"min": 450, "max": 750}
-    assert considerations["must_answer"] == [
-        "Key Considerations When Choosing a Pointer"
-    ]
+    assert considerations["must_answer"] == ["Key Considerations When Choosing a Pointer"]
     assert considerations["brief_points"] == [
         "Visibility and durability",
         "FDA ≤5mW limit",
@@ -341,12 +344,14 @@ def test_required_gate_needs_candidate_and_minimum_one():
     bundle = _bundle()
     broken = copy.deepcopy(bundle["section_link_contracts"])
     gate = broken["sections"][0]["article_links"]
-    gate.update({
-        "opportunity_state": "required",
-        "candidate_count": 0,
-        "min_required": 1,
-        "reason_code": "high_relevance_article_candidate",
-    })
+    gate.update(
+        {
+            "opportunity_state": "required",
+            "candidate_count": 0,
+            "min_required": 1,
+            "reason_code": "high_relevance_article_candidate",
+        }
+    )
 
     with pytest.raises(ContractValidationError, match="needs a candidate"):
         validate_section_link_contracts(broken, bundle["section_contracts"])
@@ -373,15 +378,9 @@ def test_bundle_round_trip_is_deterministic(tmp_path):
         "section_contracts",
         "section_link_contracts",
     }
-    first_bytes = {
-        name: Path(path).read_bytes()
-        for name, path in paths.items()
-    }
+    first_bytes = {name: Path(path).read_bytes() for name, path in paths.items()}
     persist_contract_bundle(tmp_path, "ceiling-layout", bundle)
-    second_bytes = {
-        name: Path(path).read_bytes()
-        for name, path in paths.items()
-    }
+    second_bytes = {name: Path(path).read_bytes() for name, path in paths.items()}
     assert first_bytes == second_bytes
 
 
@@ -405,9 +404,7 @@ def test_bundle_validation_rejects_cross_file_topic_mismatch():
         validate_contract_bundle(broken)
 
 
-def test_persist_rolls_back_existing_bundle_on_partial_replace_failure(
-    tmp_path, monkeypatch
-):
+def test_persist_rolls_back_existing_bundle_on_partial_replace_failure(tmp_path, monkeypatch):
     from seo_ops.services import sectional_writing as sw
 
     original = _bundle()

@@ -17,65 +17,79 @@ from typing import Any
 
 CONTRACT_VERSION = 1
 DEFAULT_CONTENT_LANGUAGE = "en"
-READER_STAGES = frozenset({
-    "discover",
-    "understand",
-    "compare",
-    "select",
-    "apply",
-    "verify",
-})
+READER_STAGES = frozenset(
+    {
+        "discover",
+        "understand",
+        "compare",
+        "select",
+        "apply",
+        "verify",
+    }
+)
 OPPORTUNITY_STATES = frozenset({"unassessed", "required", "recommended", "none"})
-PRODUCT_CONSTRAINT_OPERATORS = frozenset({
-    "contains",
-    "equals",
-    "exists",
-    "gte",
-    "lte",
-    "one_of",
-})
-PRODUCT_CONSTRAINT_SOURCES = frozenset({
-    "catalog_policy",
-    "operator_approved",
-    "site_policy",
-})
-_DEFERRED_FRAME_HEADINGS = frozenset({
-    "introduction",
-    "key takeaways",
-    "conclusion",
-    "faq",
-    "faqs",
-    "frequently asked questions",
-})
+PRODUCT_CONSTRAINT_OPERATORS = frozenset(
+    {
+        "contains",
+        "equals",
+        "exists",
+        "gte",
+        "lte",
+        "one_of",
+    }
+)
+PRODUCT_CONSTRAINT_SOURCES = frozenset(
+    {
+        "catalog_policy",
+        "operator_approved",
+        "site_policy",
+    }
+)
+_DEFERRED_FRAME_HEADINGS = frozenset(
+    {
+        "introduction",
+        "key takeaways",
+        "conclusion",
+        "faq",
+        "faqs",
+        "frequently asked questions",
+    }
+)
 
-_VERIFY_TERMS = frozenset({
-    "accident",
-    "compliance",
-    "danger",
-    "injury",
-    "law",
-    "legal",
-    "mistake",
-    "mistakes",
-    "regulation",
-    "safety",
-    "warning",
-})
+_VERIFY_TERMS = frozenset(
+    {
+        "accident",
+        "compliance",
+        "danger",
+        "injury",
+        "law",
+        "legal",
+        "mistake",
+        "mistakes",
+        "regulation",
+        "safety",
+        "warning",
+    }
+)
 _COMPARE_TERMS = frozenset({"compare", "comparison", "versus", "vs"})
-_STRONG_SELECT_TERMS = frozenset({
-    "choose",
-    "choosing",
-    "recommend",
-    "recommendation",
-    "recommendations",
-    "recommended",
-    "selection",
-})
-_WEAK_SELECT_TERMS = frozenset({
-    "best",
-    "top",
-    "which",
-})
+_STRONG_SELECT_TERMS = frozenset(
+    {
+        "choose",
+        "choosing",
+        "recommend",
+        "recommendation",
+        "recommendations",
+        "recommended",
+        "selection",
+    }
+)
+_WEAK_SELECT_TERMS = frozenset(
+    {
+        "best",
+        "top",
+        "which",
+    }
+)
 _APPLY_TERMS = frozenset({"apply", "install", "mount", "setup", "use", "using"})
 
 
@@ -85,9 +99,7 @@ class ContractValidationError(ValueError):
 
 def _text(value: Any, field: str, *, allow_empty: bool = False) -> str:
     if not isinstance(value, str):
-        raise ContractValidationError(
-            f"{field} must be a str, got {type(value).__name__}"
-        )
+        raise ContractValidationError(f"{field} must be a str, got {type(value).__name__}")
     result = " ".join(value.split())
     if not allow_empty and not result:
         raise ContractValidationError(f"{field} must not be empty")
@@ -171,9 +183,7 @@ def build_article_blueprint(
     clean_guidance = _text(guidance, "guidance", allow_empty=True)
     clean_language = _text(content_language, "content_language").casefold()
     if clean_language != DEFAULT_CONTENT_LANGUAGE:
-        raise ContractValidationError(
-            "sectional writing currently requires content_language=en"
-        )
+        raise ContractValidationError("sectional writing currently requires content_language=en")
     if not isinstance(outline, list) or not outline:
         raise ContractValidationError("outline must be a non-empty list")
 
@@ -186,12 +196,14 @@ def build_article_blueprint(
             raise ContractValidationError(f"duplicate outline heading: {heading}")
         seen_headings.add(heading_key)
         section_id = stable_section_id(position, heading)
-        sections.append({
-            "section_id": section_id,
-            "position": position,
-            "heading": heading,
-            "reader_stage": infer_reader_stage(heading, position),
-        })
+        sections.append(
+            {
+                "section_id": section_id,
+                "position": position,
+                "heading": heading,
+                "reader_stage": infer_reader_stage(heading, position),
+            }
+        )
 
     blueprint = {
         "version": CONTRACT_VERSION,
@@ -215,32 +227,32 @@ def build_section_contracts(blueprint: dict[str, Any]) -> dict[str, Any]:
     for index, source in enumerate(source_sections):
         previous_heading = source_sections[index - 1]["heading"] if index else ""
         next_heading = (
-            source_sections[index + 1]["heading"]
-            if index + 1 < len(source_sections)
-            else ""
+            source_sections[index + 1]["heading"] if index + 1 < len(source_sections) else ""
         )
         stage = source["reader_stage"]
         product_allowed, product_reason = _product_link_policy(stage)
-        sections.append({
-            **source,
-            "reader_question": source["heading"],
-            "section_goal": f"Give a complete, useful answer about {source['heading']}.",
-            "must_answer": [source["heading"]],
-            "brief_points": [],
-            "brief_points_rejected": [],
-            "must_not_repeat": (
-                [f"Do not repeat the full explanation from {previous_heading}."]
-                if previous_heading
-                else []
-            ),
-            "previous_section": previous_heading,
-            "next_section": next_heading,
-            "target_words": {"min": 220, "max": 360},
-            "allowed_evidence_ids": [],
-            "product_link_allowed": product_allowed,
-            "product_link_policy_reason": product_reason,
-            "product_constraints": [],
-        })
+        sections.append(
+            {
+                **source,
+                "reader_question": source["heading"],
+                "section_goal": f"Give a complete, useful answer about {source['heading']}.",
+                "must_answer": [source["heading"]],
+                "brief_points": [],
+                "brief_points_rejected": [],
+                "must_not_repeat": (
+                    [f"Do not repeat the full explanation from {previous_heading}."]
+                    if previous_heading
+                    else []
+                ),
+                "previous_section": previous_heading,
+                "next_section": next_heading,
+                "target_words": {"min": 350, "max": 500},
+                "allowed_evidence_ids": [],
+                "product_link_allowed": product_allowed,
+                "product_link_policy_reason": product_reason,
+                "product_constraints": [],
+            }
+        )
     contracts = {
         "version": CONTRACT_VERSION,
         "topic": validated["topic"],
@@ -287,12 +299,14 @@ def build_section_link_contracts(
             if section["product_link_allowed"]
             else _none_link_gate(section["product_link_policy_reason"])
         )
-        sections.append({
-            "section_id": section["section_id"],
-            "article_links": _unassessed_link_gate(2),
-            "product_links": product_gate,
-            "external_citations": _unassessed_link_gate(3),
-        })
+        sections.append(
+            {
+                "section_id": section["section_id"],
+                "article_links": _unassessed_link_gate(2),
+                "product_links": product_gate,
+                "external_citations": _unassessed_link_gate(3),
+            }
+        )
     contracts = {
         "version": CONTRACT_VERSION,
         "topic": validated["topic"],
@@ -364,17 +378,9 @@ def parse_brief_section_specs(brief_text: str) -> list[dict[str, Any]]:
         raw_heading = _english_legacy_heading(match.group(1).strip())
         word_match = re.search(r"\((\d+)\s+words?\)\s*$", raw_heading, re.I)
         target_words = int(word_match.group(1)) if word_match else None
-        heading = (
-            raw_heading[:word_match.start()].strip()
-            if word_match
-            else raw_heading
-        )
-        end = (
-            active_matches[index + 1].start()
-            if index + 1 < len(active_matches)
-            else len(source)
-        )
-        body = source[match.end():end]
+        heading = raw_heading[: word_match.start()].strip() if word_match else raw_heading
+        end = active_matches[index + 1].start() if index + 1 < len(active_matches) else len(source)
+        body = source[match.end() : end]
         bullets = (
             []
             if numbered_matches
@@ -392,11 +398,13 @@ def parse_brief_section_specs(brief_text: str) -> list[dict[str, Any]]:
             )
             if trailing_note:
                 bullets.insert(0, trailing_note)
-        specs.append({
-            "heading": _normalized_heading(heading),
-            "target_words": target_words,
-            "bullets": bullets,
-        })
+        specs.append(
+            {
+                "heading": _normalized_heading(heading),
+                "target_words": target_words,
+                "bullets": bullets,
+            }
+        )
     return specs
 
 
@@ -423,13 +431,9 @@ def build_contract_bundle_from_brief(
     bullets remain writing requirements rather than catalog filters.
     """
     specs = parse_brief_section_specs(brief_text)
-    body_specs = [
-        item for item in specs if not _is_deferred_frame_heading(item["heading"])
-    ]
+    body_specs = [item for item in specs if not _is_deferred_frame_heading(item["heading"])]
     if not body_specs:
-        raise ContractValidationError(
-            "brief contains only deferred article-frame headings"
-        )
+        raise ContractValidationError("brief contains only deferred article-frame headings")
     bundle = build_contract_bundle(
         topic=topic,
         tier=tier,
@@ -443,9 +447,7 @@ def build_contract_bundle_from_brief(
         spec = by_heading[section["heading"]]
         bullets = spec["bullets"]
         if bullets:
-            section["brief_points"] = [
-                point for point in bullets if not _contains_cjk(point)
-            ]
+            section["brief_points"] = [point for point in bullets if not _contains_cjk(point)]
             section["brief_points_rejected"] = [
                 {
                     "text": point,
@@ -464,19 +466,13 @@ def build_contract_bundle_from_brief(
                 "min": max(1, round(target_words * 0.75)),
                 "max": round(target_words * 1.25),
             }
-        if approved_product_constraints and section["heading"] in (
-            approved_product_constraints
-        ):
-            section["product_constraints"] = approved_product_constraints[
-                section["heading"]
-            ]
+        if approved_product_constraints and section["heading"] in (approved_product_constraints):
+            section["product_constraints"] = approved_product_constraints[section["heading"]]
     validate_section_contracts(
         bundle["section_contracts"],
         bundle["article_blueprint"],
     )
-    bundle["section_link_contracts"] = build_section_link_contracts(
-        bundle["section_contracts"]
-    )
+    bundle["section_link_contracts"] = build_section_link_contracts(bundle["section_contracts"])
     return validate_contract_bundle(bundle)
 
 
@@ -491,9 +487,7 @@ def validate_article_blueprint(data: Any) -> dict[str, Any]:
     _text(data.get("core_task"), "article_blueprint.core_task")
     _text(data.get("guidance"), "article_blueprint.guidance", allow_empty=True)
     if data.get("content_language") != DEFAULT_CONTENT_LANGUAGE:
-        raise ContractValidationError(
-            "article_blueprint.content_language must be en"
-        )
+        raise ContractValidationError("article_blueprint.content_language must be en")
     order = data.get("section_order")
     sections = data.get("sections")
     if not isinstance(order, list) or not isinstance(sections, list) or not sections:
@@ -572,7 +566,9 @@ def validate_section_contracts(
                 )
         target = section.get("target_words")
         if not isinstance(target, dict):
-            raise ContractValidationError(f"section contract {index} target_words must be an object")
+            raise ContractValidationError(
+                f"section contract {index} target_words must be an object"
+            )
         minimum = target.get("min")
         maximum = target.get("max")
         if (
@@ -598,9 +594,7 @@ def validate_section_contracts(
                 f"section contract {index}.product_constraints must be a list"
             )
         for constraint_index, constraint in enumerate(product_constraints, start=1):
-            field = (
-                f"section contract {index}.product_constraints[{constraint_index}]"
-            )
+            field = f"section contract {index}.product_constraints[{constraint_index}]"
             if not isinstance(constraint, dict):
                 raise ContractValidationError(f"{field} must be an object")
             _text(constraint.get("field"), f"{field}.field")
@@ -620,9 +614,7 @@ def validate_section_contracts(
                 isinstance(value, bool) or not isinstance(value, (int, float))
             ):
                 raise ContractValidationError(f"{field}.value must be numeric")
-            if operator == "one_of" and (
-                not isinstance(value, list) or not value
-            ):
+            if operator == "one_of" and (not isinstance(value, list) or not value):
                 raise ContractValidationError(f"{field}.value must be a non-empty list")
         ids.append(section_id)
     if len(ids) != len(set(ids)) or order != ids:
@@ -632,9 +624,7 @@ def validate_section_contracts(
         if topic != validated_blueprint["topic"]:
             raise ContractValidationError("section contracts topic does not match blueprint")
         if data["content_language"] != validated_blueprint["content_language"]:
-            raise ContractValidationError(
-                "section contracts language does not match blueprint"
-            )
+            raise ContractValidationError("section contracts language does not match blueprint")
         if order != validated_blueprint["section_order"]:
             raise ContractValidationError("section contracts do not match article blueprint")
     return data
@@ -691,9 +681,7 @@ def _validate_link_gate(gate: Any, field: str) -> None:
             )
     else:
         if candidate_count != len(selected_ids):
-            raise ContractValidationError(
-                f"{field}.candidate_count must equal selected_ids length"
-            )
+            raise ContractValidationError(f"{field}.candidate_count must equal selected_ids length")
         if candidate_count > maximum:
             raise ContractValidationError(f"{field}.candidate_count exceeds max_allowed")
         if state == "none" and (candidate_count or selected_ids or maximum != 0):
@@ -712,9 +700,7 @@ def validate_section_link_contracts(
         raise ContractValidationError("section link contracts version must be 1")
     topic = _text(data.get("topic"), "section_link_contracts.topic")
     if data.get("content_language") != DEFAULT_CONTENT_LANGUAGE:
-        raise ContractValidationError(
-            "section_link_contracts.content_language must be en"
-        )
+        raise ContractValidationError("section_link_contracts.content_language must be en")
     sections = data.get("sections")
     order = data.get("section_order")
     if not isinstance(sections, list) or not sections or not isinstance(order, list):
@@ -778,10 +764,7 @@ def persist_contract_bundle(
     for path in paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    snapshots = {
-        name: path.read_bytes() if path.exists() else None
-        for name, path in paths.items()
-    }
+    snapshots = {name: path.read_bytes() if path.exists() else None for name, path in paths.items()}
     temp_paths: dict[str, Path] = {}
     try:
         for name, path in paths.items():

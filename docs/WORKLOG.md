@@ -1,3 +1,42 @@
+## 2026-07-31 — 全文链接配额协调与 Cluster 字数合同
+
+### 第六次真实 shadow 结果
+
+- 在 `fc1b14259df19ecf3f405ceb25c4d66a917d6b99` 上通过非沙箱主机执行一次
+  existing-pair resume shadow；`http.post_attempts=1`，未重试。
+- 成功生成/恢复 7 个正文与 frame checkpoints、10 个 ledger checkpoints 和
+  `resolved-delivery.json`；`ai_runs 138→153`。正式 draft、claim ledger、w2-state、
+  `.env`、Action `w1b_pre_check/in_progress` 全部不变，未生成 promotion manifest。
+- Phase 5 全文门禁拒绝：4 个重复内链目标，以及外部引用密度超上限。独立检查确认旧
+  delivery 为 ARTICLE=7、PRODUCT=4、external citation=18；Professional Use Guide
+  出现 3 次，B020 与 LP40 各出现 2 次。
+
+### 根因与修复
+
+- Phase 3 每节只知道自己的链接机会；Phase 4 原先逐节直接绑定全部占位符，没有全篇
+  唯一 URL、required 优先级和总链接预算，因此局部门禁都通过后仍会在全文失败。
+- 新增共享 `sectional_link_hard_caps()`：ARTICLE 约每 350 词、PRODUCT 约每 450 词，
+  external citation 改为约每 600 词一个且最低允许 3 个。Phase 5 继续严格审计，不放宽
+  duplicate 或 density blocker。
+- Phase 4 新增确定性全文分配：先为 `min_required>0` 的章节分配唯一目标，再按章节顺序
+  补充 recommended 链接。重复 ARTICLE/PRODUCT 只保留一个链接，其他位置保留原锚文本；
+  重复或超额 CITE 去掉可见链接，但候选仍在 Link Contract 与 claim package 中供事实审计。
+- Sectional Cluster Content assembly 目标从旧 tier 的 1200–1920 提升到 3000–4200；
+  默认正文 H2 合同从 220–360 提升到 350–500。旧 brief 的 1800–2500 不再控制该
+  sectional shadow 的全文最低门禁。
+
+### 验证
+
+- 当前真实 7 个 checkpoint 只读离线重组：可见词数约 2608；ARTICLE=5、PRODUCT=2、
+  external citation=5；所有 ARTICLE/PRODUCT/CITE URL 均唯一。没有调用 AI、没有写正式
+  draft/ledger/state/database。
+- Sectional writing/context/generation/delivery/assembly/adapter/pipeline/repair/rollout/runner
+  联合专项通过（排除唯一已知 MCP Landlock 测试导入限制：`openpyxl` 读取
+  `/etc/mime.types`）。Ruff 和 `compileall` 通过。
+- 下一步：提交并推送修复；推送核验后只执行一次
+  `.venv/bin/python tools/run_sectional_shadow.py --action-id 3 --resume-existing`。成功也不得
+  promotion，必须先独立检查 assembly、comparison 和正式 SHA。
+
 ## 2026-07-31 — 章节化写作架构与链接机会门禁规划
 
 ### 背景

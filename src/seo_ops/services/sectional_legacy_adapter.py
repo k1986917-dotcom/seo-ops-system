@@ -56,9 +56,7 @@ def _frontmatter_scalar(value: str) -> str:
         return decoded
     inner = clean[1:-1]
     if "'" in inner.replace("''", ""):
-        raise SectionalLegacyAdapterError(
-            "Legacy frontmatter single-quoted scalar is invalid"
-        )
+        raise SectionalLegacyAdapterError("Legacy frontmatter single-quoted scalar is invalid")
     return inner.replace("''", "'")
 
 
@@ -72,9 +70,7 @@ def _frontmatter(draft: str) -> dict[str, str]:
     for line in parts[1].splitlines():
         match = re.match(r"^([^:]+?):\s*(.+?)\s*$", line.strip())
         if match:
-            result[match.group(1).strip().casefold()] = _frontmatter_scalar(
-                match.group(2)
-            )
+            result[match.group(1).strip().casefold()] = _frontmatter_scalar(match.group(2))
     return result
 
 
@@ -213,6 +209,8 @@ def build_legacy_assembly_metadata(
 ) -> dict[str, Any]:
     meta = _frontmatter(draft)
     minimum = int(TIER_MIN_WORDS.get(tier, 1200))
+    if tier in {"Cluster Content", "cluster"}:
+        minimum = max(minimum, 3000)
     title = meta.get("title") or topic
     description = meta.get("description", "")
     topic_phrases = _topic_metadata_phrases(topic)
@@ -254,7 +252,10 @@ def build_legacy_assembly_metadata(
             ),
         ),
         "seo_keywords": seo_keywords,
-        "target_words": {"min": minimum, "max": max(minimum, round(minimum * 1.6))},
+        "target_words": {
+            "min": minimum,
+            "max": max(minimum, round(minimum * 1.4)),
+        },
     }
 
 
@@ -270,9 +271,7 @@ def _load_json(path: Path, field: str) -> dict[str, Any]:
 
 def _latest_formal_draft(workspace: Path, slug: str) -> Path:
     candidates = [
-        path
-        for path in (Path(workspace) / "drafts").glob(f"{slug}-*.md")
-        if path.is_file()
+        path for path in (Path(workspace) / "drafts").glob(f"{slug}-*.md") if path.is_file()
     ]
     if not candidates:
         raise SectionalLegacyAdapterError("formal Legacy draft is missing")
@@ -390,9 +389,7 @@ async def run_existing_legacy_sectional_shadow(
         draft_before = formal_draft_path.read_bytes()
         claim_before = formal_claim_path.read_bytes()
     except OSError as exc:
-        raise SectionalLegacyAdapterError(
-            f"cannot snapshot formal Legacy pair: {exc}"
-        ) from exc
+        raise SectionalLegacyAdapterError(f"cannot snapshot formal Legacy pair: {exc}") from exc
 
     contracts = {
         "brief": _load_json(
@@ -463,9 +460,7 @@ async def run_existing_legacy_sectional_shadow(
         )
     decision = result.get("decision")
     if not isinstance(decision, dict) or decision.get("promotion_allowed") is not False:
-        raise SectionalLegacyAdapterError(
-            "existing-pair shadow unexpectedly allowed promotion"
-        )
+        raise SectionalLegacyAdapterError("existing-pair shadow unexpectedly allowed promotion")
 
     result["formal_pair"] = {
         "draft_path": str(formal_draft_path),
