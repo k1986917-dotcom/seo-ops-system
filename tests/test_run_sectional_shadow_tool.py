@@ -94,6 +94,7 @@ def test_invalid_action_id_fails_before_starting_server(monkeypatch):
         ai_call_limit=24,
         startup_timeout=60,
         request_timeout=3600,
+        resume_existing=False,
         log_file=Path("/tmp/unused.log"),
     )
     with pytest.raises(runner.ShadowRunnerError, match="positive"):
@@ -103,3 +104,28 @@ def test_invalid_action_id_fails_before_starting_server(monkeypatch):
 def test_health_payload_requires_ai_enabled():
     assert runner._health_is_ready({"status": "ok", "ai_enabled": True}) is True
     assert runner._health_is_ready({"status": "ok", "ai_enabled": False}) is False
+
+
+def test_resumable_root_accepts_known_checkpoint_files(tmp_path):
+    root = tmp_path / "sectional-root"
+    checkpoint = root / "checkpoints" / "section-901f779818.json"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text("{}\n", encoding="utf-8")
+
+    assert runner._validate_resumable_root(root, 3) == [
+        "checkpoints/section-901f779818.json"
+    ]
+
+
+def test_resumable_root_rejects_complete_or_unknown_artifacts(tmp_path):
+    root = tmp_path / "sectional-root"
+    root.mkdir()
+    (root / "assembled-draft.md").write_text("draft", encoding="utf-8")
+
+    with pytest.raises(runner.ShadowRunnerError, match="complete or promotion"):
+        runner._validate_resumable_root(root, 3)
+
+    (root / "assembled-draft.md").unlink()
+    (root / "unexpected.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(runner.ShadowRunnerError, match="unknown resume artifacts"):
+        runner._validate_resumable_root(root, 3)

@@ -51,6 +51,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--startup-timeout", type=int, default=60)
     parser.add_argument("--request-timeout", type=int, default=3600)
     parser.add_argument(
+        "--resume-existing",
+        action="store_true",
+        help=(
+            "Resume only from known sectional checkpoint/intermediate files. "
+            "Complete, promoted, or unknown artifact sets are refused."
+        ),
+    )
+    parser.add_argument(
         "--log-file",
         type=Path,
         default=None,
@@ -169,6 +177,46 @@ def _formal_hashes(paths: dict[str, Path], env_file: Path) -> dict[str, str]:
     return {name: _sha256(path) for name, path in required.items()}
 
 
+def _validate_resumable_root(root: Path, action_id: int) -> list[str]:
+    files = sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+    if not files:
+        raise ShadowRunnerError("sectional root exists but contains no resumable files")
+    forbidden = {
+        "assembled-draft.md",
+        "assembled-claim-ledger.json",
+        "assembly-report.json",
+        f"shadow-comparison-action-{action_id}.json",
+        "promotion-manifest.json",
+    }
+    if forbidden.intersection(files):
+        raise ShadowRunnerError(
+            "sectional root contains complete or promotion artifacts; refusing resume"
+        )
+    checkpoint = re.compile(
+        r"checkpoints/(?:section-[a-f0-9]{10}|article-frame)\.json"
+    )
+    ledger_checkpoint = re.compile(
+        r"ledger-checkpoints/(?:section-[a-f0-9]{10}|"
+        r"frame-(?:introduction|takeaways|conclusion|faq))\.json"
+    )
+    unknown = [
+        item
+        for item in files
+        if item != "resolved-delivery.json"
+        and not checkpoint.fullmatch(item)
+        and not ledger_checkpoint.fullmatch(item)
+    ]
+    if unknown:
+        raise ShadowRunnerError(
+            f"sectional root contains unknown resume artifacts: {unknown}"
+        )
+    return files
+
+
 def _port_is_free(host: str, port: int) -> bool:
     probe = socket.socket()
     probe.settimeout(0.5)
@@ -279,10 +327,15 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     action_before = _read_action(settings.database_path, args.action_id)
     paths = _paths(settings.data_dir, args.action_id, action_before["target_ref"])
     root = paths["sectional_root"]
+    partial_artifacts_before: list[str] = []
     if root.exists():
-        raise ShadowRunnerError(
-            "sectional root already exists; refusing to delete or overwrite it"
-        )
+        if not args.resume_existing:
+            raise ShadowRunnerError(
+                "sectional root already exists; use --resume-existing only after review"
+            )
+        partial_artifacts_before = _validate_resumable_root(root, args.action_id)
+    elif args.resume_existing:
+        raise ShadowRunnerError("--resume-existing requires an existing sectional root")
     if not _port_is_free("127.0.0.1", args.port):
         raise ShadowRunnerError(f"port {args.port} is already in use")
 
@@ -380,6 +433,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "added": ai_runs_after - ai_runs_before,
         },
         "sectional_root": str(root),
+        "resume_existing": args.resume_existing,
+        "partial_artifacts_before": partial_artifacts_before,
         "artifacts": artifacts,
         "artifacts_complete": artifacts_complete,
         "promotion_manifest_exists": promotion_manifest.exists(),

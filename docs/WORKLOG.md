@@ -161,6 +161,39 @@ blocker 前不启用 promotion。
   `264 passed, 1 warning`。唯一 warning 仍为既有 Starlette/httpx。
 - Ruff 通过；直接执行 `tools/run_sectional_shadow.py --help` 成功。
 
+## 2026-07-31 — 单段多内链安全拆分与 checkpoint resume
+
+### 第四次真实失败
+
+- `7a3bb17` 推送后，Action #3 通过受测 runner 发送一次正式 shadow POST。
+- 第一节从已生成结果继续，第二节 AI 正文成功返回；数据库新增两条
+  `legacy_write_sectional_body` 成功审计记录（`ai_runs #135/#136`）。
+- parser 因 `a paragraph may contain at most one internal link placeholder` 停止：模型把多个
+  ARTICLE/PRODUCT placeholder 放进同一段，违反每段最多一个内部链接的硬合同。
+- 正式 draft、claim ledger、w2-state、`.env` 与 Action 行均不变；无 promotion manifest。
+  sectional root 只保留已通过完整校验的第一节 checkpoint，失败的第二节未持久化。
+
+### 修复
+
+- 生成 prompt 明确要求每段最多一个 ARTICLE/PRODUCT placeholder；CITE 不计入该限制。
+- parser 增加窄范围确定性规范化：仅当多个内部链接位于同一段的不同句子时，在既有句末
+  插入段落边界。可见文字、placeholder、candidate ID、decisions 和词数均保持不变。
+- 若两个内部链接位于同一句，仍保留原文并由严格 validator fail-closed，不猜测拆分位置。
+- runner 新增 `--resume-existing`，只接受 `checkpoints/*.json`、已知 ledger checkpoints 和
+  `resolved-delivery.json`；assembled、comparison、promotion 或未知文件均拒绝。
+- 不删除现有 checkpoint；pipeline 按 package SHA 重新验证后恢复有效章节。
+
+### 验证
+
+- generation + runner 专项：`38 passed`。
+- Phase 1–7 sectional、版本及 runner：`171 passed`。
+- Legacy 主流程 `186`、W1b/FAQ `52`、sentence-ID strict `26`，合计
+  `264 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx。
+- 对真实 Action #3 只读预检：可恢复文件仅
+  `checkpoints/section-901f779818.json`；`ai_runs=136`；Action 仍为
+  `w1b_pre_check/in_progress`；四个正式 SHA 全部保持原值。
+- 完整项目 pytest 在 MCP 长会话完成前被执行器回收，未获得可靠终态，因此未计为通过。
+
 ## 2026-07-31 — 外部静态审计核实与 article-frame 合同 hotfix
 
 ### 核实结论

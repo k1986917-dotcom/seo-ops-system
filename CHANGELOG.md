@@ -31,6 +31,11 @@
 
 ### Fixed
 
+- Section generation now repairs a narrow formatting-only failure when an AI
+  puts multiple ARTICLE/PRODUCT placeholders in one paragraph. The server may
+  split that paragraph only at existing sentence boundaries, preserving every
+  visible word and placeholder. Multiple internal links in the same sentence
+  still fail closed.
 - Section decisions no longer fail because the model repeats an inconsistent
   `reason_code` for a candidate that is visibly used. ARTICLE/PRODUCT/CITE
   placeholders and `used_ids` remain strictly matched and allowlisted; once
@@ -67,7 +72,9 @@
 
 - 新增 `tools/run_sectional_shadow.py`：通过隔离本地服务和正式 Web POST 对单个 Action
   执行一次 existing-pair shadow。工具拒绝脏工作区、未同步分支、非 `off` 默认 rollout、
-  已存在的 sectional 目录和占用端口；允许 `ai_runs` 审计记录正常写入，但要求 Action 行、
+  未经确认的 sectional 目录和占用端口；`--resume-existing` 只接受已知 checkpoint、
+  ledger checkpoint 或 resolved-delivery 中间文件，完整、promotion 或未知产物一律拒绝；
+  允许 `ai_runs` 审计记录正常写入，但要求 Action 行、
   正式 draft/claim ledger、w2-state、`.env`、Git 状态和 promotion 状态保持不变。
 - 新增章节化写作 Phase 7 controlled rollout：默认 `off`，支持只读 `shadow` 和显式
   Action ID 白名单 `action`；旧 W0 始终先成功，sectional 失败保留 Legacy 正式 pair。

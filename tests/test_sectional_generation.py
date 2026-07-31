@@ -218,6 +218,7 @@ def test_generation_prompt_contains_protocol_but_not_full_registry():
     assert SECTION_MARKDOWN_MARKER in prompt["system"]
     assert SECTION_DECISIONS_MARKER in prompt["system"]
     assert "Do not invent URLs" in prompt["system"]
+    assert "at most one ARTICLE or PRODUCT placeholder" in prompt["system"]
     assert "set reason_code to used_approved_candidate" in prompt["system"]
     assert package["section_id"] in prompt["user"]
     assert "catalog_data_issues" not in prompt["user"]
@@ -419,6 +420,48 @@ def test_blank_unused_reason_code_is_rejected():
 
     with pytest.raises(SectionGenerationError, match="reason_code when unused"):
         parse_section_generation_response(response, package)
+
+
+def test_internal_links_in_separate_sentences_are_split_into_paragraphs():
+    package = _package_for_stage("select")
+    response = _response(package)
+    markdown_text, decisions_text = response.split(SECTION_DECISIONS_MARKER, 1)
+    blocks = markdown_text.split("\n\n")
+    assert len(blocks) == 3
+    dense_response = (
+        f"{blocks[0]}\n\n{blocks[1]} {blocks[2]}"
+        f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+    )
+
+    output = parse_section_generation_response(dense_response, package)
+
+    assert output["paragraph_count"] == 2
+    assert output["used_ids"]["article_links"]
+    assert output["used_ids"]["product_links"]
+    for block in output["markdown"].split("\n\n")[1:]:
+        assert block.count("[[ARTICLE:") + block.count("[[PRODUCT:") <= 1
+
+
+def test_two_internal_links_in_one_sentence_still_fail_closed():
+    package = _package_for_stage("select")
+    response = _response(package)
+    markdown_text, decisions_text = response.split(SECTION_DECISIONS_MARKER, 1)
+    blocks = markdown_text.split("\n\n")
+    assert len(blocks) == 3
+    first, second = blocks[1], blocks[2]
+    product_start = second.index("[[PRODUCT:")
+    product_end = second.index("]]", product_start) + 2
+    product_placeholder = second[product_start:product_end]
+    second = second[:product_start] + second[product_end:]
+    article_end = first.index("]]", first.index("[[ARTICLE:")) + 2
+    first = first[:article_end] + f" and {product_placeholder}" + first[article_end:]
+    invalid_response = (
+        f"{blocks[0]}\n\n{first}\n\n{second}"
+        f"{SECTION_DECISIONS_MARKER}{decisions_text}"
+    )
+
+    with pytest.raises(SectionGenerationError, match="at most one internal link"):
+        parse_section_generation_response(invalid_response, package)
 
 
 @pytest.mark.parametrize(

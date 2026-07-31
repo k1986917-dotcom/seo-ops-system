@@ -59,6 +59,7 @@ _RAW_URL = re.compile(r"https?://", re.IGNORECASE)
 _RAW_MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\((?:https?://|/)[^)]+\)")
 _HTML_LINK = re.compile(r"<a\s+[^>]*href\s*=", re.IGNORECASE)
 _WORD = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
 
 class SectionGenerationError(ContractValidationError):
@@ -374,6 +375,7 @@ Use approved placeholders only:
 [[CITE:evidence_id]]
 The first content line must be the exact requested H2. Write 2-5 coherent paragraphs and answer directly before expanding.
 Respect every link gate. A required gate must meet min_required. A none gate must not be used. If a recommended gate is unused, give a concise machine-readable reason_code in the decisions JSON.
+Each paragraph may contain at most one ARTICLE or PRODUCT placeholder. Put additional internal links in separate sentences and separate paragraphs. CITE placeholders do not count toward this internal-link limit.
 Decision reason codes are deterministic: whenever used_ids is non-empty, set reason_code to used_approved_candidate. When a recommended gate is unused, use a concise rejection reason such as not_needed_for_this_section. When a none gate is unused, copy that gate's supplied reason_code.
 Return exactly two blocks and no other text:
 ===SECTION_MARKDOWN===
@@ -485,6 +487,50 @@ def _paragraph_count(markdown: str) -> int:
     return len([block for block in re.split(r"\n\s*\n", body) if block.strip()])
 
 
+def _internal_placeholder_count(value: str) -> int:
+    return len(_ARTICLE_PLACEHOLDER.findall(value)) + len(
+        _PRODUCT_PLACEHOLDER.findall(value)
+    )
+
+
+def _split_dense_internal_link_paragraphs(markdown: str) -> str:
+    """Split prose only at existing sentence boundaries when links collide.
+
+    The visible wording and placeholder inventory stay byte-for-byte identical
+    apart from whitespace.  If two internal placeholders occur inside one
+    sentence, the function leaves that paragraph unchanged so the strict
+    validator still fails closed instead of guessing where a link belongs.
+    """
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", markdown.strip())]
+    if len(blocks) <= 1:
+        return markdown
+    normalized = [blocks[0]]
+    for block in blocks[1:]:
+        if _internal_placeholder_count(block) <= 1:
+            normalized.append(block)
+            continue
+        sentences = [item.strip() for item in _SENTENCE_BREAK.split(block) if item.strip()]
+        if not sentences or any(_internal_placeholder_count(item) > 1 for item in sentences):
+            normalized.append(block)
+            continue
+        groups: list[list[str]] = []
+        current: list[str] = []
+        current_has_internal = False
+        for sentence in sentences:
+            sentence_has_internal = _internal_placeholder_count(sentence) == 1
+            if sentence_has_internal and current_has_internal:
+                groups.append(current)
+                current = [sentence]
+                current_has_internal = True
+                continue
+            current.append(sentence)
+            current_has_internal = current_has_internal or sentence_has_internal
+        if current:
+            groups.append(current)
+        normalized.extend(" ".join(group) for group in groups)
+    return "\n\n".join(normalized)
+
+
 def _validate_decisions(
     decisions: Any,
     inventory: dict[str, list[str]],
@@ -563,6 +609,7 @@ def parse_section_generation_response(
         SECTION_MARKDOWN_MARKER,
         SECTION_DECISIONS_MARKER,
     )
+    markdown = _split_dense_internal_link_paragraphs(markdown)
     if _CJK.search(markdown):
         raise SectionGenerationError("section markdown must be English")
     if _RAW_URL.search(markdown) or _RAW_MARKDOWN_LINK.search(markdown):

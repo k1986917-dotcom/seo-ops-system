@@ -260,13 +260,24 @@
   push 与 shadow 必须分成两个原子阶段。
 - 本轮最终验证：sectional 加版本及 runner `167 passed`；Legacy/W1b/sentence-ID/FAQ
   `264 passed, 1 warning`；唯一 warning 仍为既有 Starlette/httpx。
+- 第四次真实 existing-pair shadow 通过 reason-code 修复并恢复第一节生成，随后第二节 AI
+  正文因一个段落包含多个 internal link placeholder 被严格拒绝。`ai_runs` 从 134 增至
+  136；正式 pair/w2-state/`.env` 与 Action 行不变。只留下一个已验证 checkpoint：
+  `checkpoints/section-901f779818.json`，无 assembly/comparison/promotion 产物。
+- 已新增窄范围格式规范化：同一段的多个 ARTICLE/PRODUCT 若位于不同句子，只在原句界
+  插入段落边界，保留全部可见文字、候选 ID 与 decisions；同一句内多个内链继续
+  fail-closed。生成 prompt 同步声明每段最多一个内部链接。
+- runner 新增显式 `--resume-existing`；仅允许系统已知的可验证中间文件继续，完整、未知或
+  promotion 产物一律拒绝。真实 Action #3 只读预检确认当前 root 可恢复且只有上述 checkpoint。
+- 修复后 sectional 加版本及 runner `171 passed`；Legacy/W1b/sentence-ID/FAQ 仍为
+  `264 passed, 1 warning`。完整项目 pytest 的 MCP 长会话结果再次丢失，未计为通过。
 
 ### 当前下一步
 
-1. 提交并推送 decisions 规范化与短命令 shadow runner。
+1. 提交并推送段落规范化与安全 resume 修复。
 2. MCP 核验远端同步后，单独运行
-   `.venv/bin/python tools/run_sectional_shadow.py --action-id 3`；不得重跑 W0，不允许
-   promotion，也不得与 push 放进同一执行块。
+   `.venv/bin/python tools/run_sectional_shadow.py --action-id 3 --resume-existing`；不得删除
+   checkpoint、重跑 W0 或启用 promotion，也不得与 push 放进同一执行块。
 3. 只有 shadow 报告无 blocker，才把 Action #3 加入 `action` 白名单进行单 Action验收。
 4. B303 产品页/目录修正后重新生成产品报告，确认 catalog data issues 自动清零。
 
