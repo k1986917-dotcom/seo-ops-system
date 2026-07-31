@@ -429,6 +429,30 @@ def _placeholder_inventory(markdown: str) -> dict[str, list[str]]:
     }
 
 
+def parse_section_placeholders(markdown: str) -> dict[str, list[dict[str, str]]]:
+    """Return validated placeholder records without exposing registry URLs.
+
+    Phase 4 resolves these records server-side.  Keeping parsing in the
+    generation module prevents the writer and delivery layers from drifting to
+    different placeholder grammars.
+    """
+    _placeholder_inventory(markdown)
+    return {
+        "article_links": [
+            {"candidate_id": candidate_id, "anchor": anchor}
+            for candidate_id, anchor in _ARTICLE_PLACEHOLDER.findall(markdown)
+        ],
+        "product_links": [
+            {"candidate_id": candidate_id, "anchor": anchor}
+            for candidate_id, anchor in _PRODUCT_PLACEHOLDER.findall(markdown)
+        ],
+        "external_citations": [
+            {"candidate_id": candidate_id}
+            for candidate_id in _CITE_PLACEHOLDER.findall(markdown)
+        ],
+    }
+
+
 def _visible_markdown(markdown: str) -> str:
     value = _ARTICLE_PLACEHOLDER.sub(lambda match: match.group(2), markdown)
     value = _PRODUCT_PLACEHOLDER.sub(lambda match: match.group(2), value)

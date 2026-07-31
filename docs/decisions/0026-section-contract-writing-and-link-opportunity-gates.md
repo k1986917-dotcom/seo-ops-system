@@ -155,9 +155,16 @@ prompt 或修改正式草稿，便于根据真实结果快速迭代。
 
 ### 7. 章节级 claim ledger 与修订
 
-每个章节只对 W1b 确定性规则认定的事实句生成 ledger，并保留它们在最终全文中的稳定
-映射。每批只携带该章节允许的证据。服务端合并章节 ledger 后，仍执行全文 draft SHA、
-claim/evidence ID 和逐句覆盖的最终门禁。
+全局 S-ID 只能在最终可见 Markdown 确定后分配。固定顺序为：正文 H2 和 article frame
+完成 → 服务端绑定 ARTICLE/PRODUCT/CITE → 组装 H1、Introduction、Key Takeaways、正文
+H2、Conclusion、FAQ → 从该最终 Markdown 分配全局 S-ID → 分单元生成 ledger。不得先给
+正文编号，再在前后插入 frame 内容，否则 claim ledger 会与正式草稿漂移。frontmatter
+可在之后添加，因为权威分句器会先剥离 frontmatter。
+
+每个正文 H2 和 article-frame 单元只对自己的全局句子生成 ledger。每批只携带最终 Link
+Contract 允许的证据；frame 单元使用正文已批准 evidence 的确定性并集。模型只能返回
+sentence_id、claim_type 和 evidence_ids，claim_text 由服务端从最终 Markdown 注入。
+服务端合并章节 ledger 后，仍执行全文 draft SHA、claim/evidence ID 和逐句覆盖的最终门禁。
 
 W1b/W2 根据失败句定位章节，只重写失败章节；已通过章节保持不变。全文组装后必须重新
 执行全部正式门禁。

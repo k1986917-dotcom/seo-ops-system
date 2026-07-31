@@ -25,8 +25,39 @@
 
 ### 下一步
 
-Phase 3 已完成本机全量验证；提交后立即进入 Phase 4。继续保持 shadow-only，
-不接管正式 W0。
+Phase 4 已完成 shadow 代码、专项与本机完整 pytest；下一步提交并推送 Phase 4，随后
+进入 Phase 5。继续保持 shadow-only，不接管正式 W0。
+
+## 2026-07-31 — Phase 4 最终草稿绑定、全局 S-ID 与章节 ledger
+
+### 本次完成
+
+- 新增 `sectional_delivery.py`，服务端依据最终 Link Contract 白名单绑定
+  ARTICLE/PRODUCT/CITE；全站 registry 中存在但未获本节授权的 ID 仍不可使用。
+- registry SHA、context topic/order、冲突商品、未知 ID、残留占位符、绑定 URL 和最终
+  Markdown 结构全部 fail-closed。
+- 修正 ledger 架构顺序：先组装 H1、Introduction、Key Takeaways、正文 H2、Conclusion、
+  FAQ，再从最终可见 Markdown 统一分配全局 S-ID；frontmatter 后置不会改变正文句子表。
+- 旧 brief 中的 FAQ/Introduction/Takeaways/Conclusion 被识别为 deferred frame headings，
+  不再重复进入正文 Section Contracts。Action #3 正文合同从 7 节变为 6 节。
+- 正文章节与四个 frame 单元分别生成 claim ledger；每个 package 只包含该单元全局 S-ID
+  和最终 Link Contract 允许的 evidence。frame 单元只取正文已批准 evidence 的并集。
+- 模型不得返回 claim_text；服务端从最终 Markdown 注入。thinking 显式关闭，输出预算
+  4000；不可重试 length/content_filter/tool_calls 立即停止，非法 JSON 最多重试一次。
+- resolved delivery 和每单元 ledger 均使用 SHA 绑定与原子 checkpoint；损坏、过期或
+  上下文变化后不得恢复。
+- 合并后的 ledger 已通过现有 Legacy `_validate_claim_ledger_json` 权威校验器。
+
+### 验证与安全状态
+
+- Phase 1–4 联合专项：`72 passed`。
+- Ruff、compileall、`git diff --check`：通过。
+- 本机完整 pytest：`497 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx
+  弃用提示，无其他 warning。
+- Action #3 只读合同重建：正文 6 节；未调用 AI、未写 checkpoint、未修改正式 Action。
+- 正式 W0/W1b/W2 未导入新模块；draft、claim ledger、w2-state、数据库均未修改。
+- Phase 3 已提交并由本机认证环境成功推送：
+  `7894080fe944fbb2ad96905bbeca73c809caf011`；本地与远端一致。
 
 ## 2026-07-31 — Phase 3 章节生成、断点恢复与相关产品推荐
 
@@ -47,7 +78,8 @@ Phase 3 已完成本机全量验证；提交后立即进入 Phase 4。继续保�
 
 ### 真实只读验收
 
-- Action #3 构建 7 个 generation packages，单节 user prompt 约 3.6K–6.5K 字符。
+- Action #3 正文合同现构建 6 个 generation packages；FAQ 延后到 article frame，单节
+  user prompt 约 3.6K–6.5K 字符。
 - Class 对比和选型章节产品门禁为 `required + min_required=1`；开头、安全、常见错误和
   FAQ 为 0。
 - B303 继续因标题 532nm、目录 650nm 冲突被排除；未调用 AI、未写 checkpoint、未改

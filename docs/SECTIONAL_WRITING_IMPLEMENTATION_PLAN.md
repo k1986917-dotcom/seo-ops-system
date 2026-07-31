@@ -147,7 +147,7 @@ W0/W1b/W2 未改变。
 
 ### Phase 3 — 章节生成引擎与 checkpoint
 
-状态：**代码完成并通过本机全量验证，待形成提交**
+状态：**已完成本机全量验证并形成本地原子提交；远端推送待本机认证环境完成**
 
 - [x] 逐 H2 生成，每节包含 2–5 个完整段落而非逐自然段调用；
 - [x] 输入仅包含当前合同、相关证据/链接、前一节短摘要和下一节提示；
@@ -165,24 +165,39 @@ W0/W1b/W2 未改变。
 feature flag 默认关闭。旧 W0 仍为正式路径。
 
 专项验收：Phase 1–3 联合 `54 passed`；Ruff、compileall、`git diff --check` 通过。
-Action #3 只读构建 7 个 generation packages，单节 user prompt 约 3.6K–6.5K 字符；
-对比/选型章节产品最低 1，安全/错误/FAQ 产品 0，B303 继续被排除。
+Action #3 只读构建的正文合同现为 6 个 generation packages；旧 brief 的 FAQ 已延后到
+article frame，不再重复成为正文 H2。单节 user prompt 约 3.6K–6.5K 字符；对比/选型
+章节产品最低 1，安全/错误产品 0，B303 继续被排除。
 
 本机完整 pytest：`479 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx 弃用提示。
 Phase 1–3 专项：`54 passed`；Ruff、compileall、`git diff --check` 全部通过。
 MCP 完整 pytest 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码失败。
+Phase 3 本地提交：`7894080fe944fbb2ad96905bbeca73c809caf011`
+(`feat: add resumable sectional generation`)；已由本机认证环境推送，本地与远端一致。
 
 ### Phase 4 — 章节 claim ledger 与链接绑定
 
-状态：**待实施**
+状态：**shadow-only 代码与全量验证完成，待原子提交**
 
-- claim-ledger 关闭 DeepSeek thinking；
-- 只处理本节 W1b 事实句；
-- 每节只带相关证据；
-- 不可重试 `length/content_filter/tool_calls` 立即停止；
-- 验证模型只能使用本节允许的 evidence IDs；
-- 解析 ARTICLE/PRODUCT/CITE 占位符并注入真实 URL；
-- 合并 ledger 后执行全文最终验证。
+- [x] ARTICLE/PRODUCT/CITE 只按本节最终 Link Contract 白名单绑定真实 URL；
+- [x] registry SHA、候选 ID、冲突产品、章节授权和残留占位符全部 fail-closed；
+- [x] H1、Introduction、Key Takeaways、正文 H2、Conclusion、FAQ 先确定性组装，再分配
+  全局 S-ID，避免后插内容导致 ledger 句子编号漂移；
+- [x] frontmatter 后置添加不会改变正文 S-ID；
+- [x] 正文 H2 和四个 article-frame 单元分别生成 claim ledger checkpoint；
+- [x] 每个单元只带最终 Link Contract 允许的 evidence IDs；frame 单元使用正文已批准
+  evidence 的确定性并集，不读取完整 evidence ledger；
+- [x] claim-ledger 调用显式 `thinking_mode=disabled`，输出预算 4000；
+- [x] 非重试型 `length/content_filter/tool_calls` 空响应立即停止，非法 JSON 最多重试一次；
+- [x] 模型只能返回 sentence_id、claim_type、evidence_ids；claim_text 由服务端从最终
+  Markdown 注入；
+- [x] resolved delivery 与每单元 ledger 均使用 SHA 绑定、原子 checkpoint 和损坏恢复拒绝；
+- [x] 合并 ledger 已通过现有 Legacy `_validate_claim_ledger_json` 权威校验器。
+
+专项验收：Phase 1–4 联合 `72 passed`；Ruff、compileall、`git diff --check` 通过。
+本机完整 pytest：`497 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx 弃用提示。
+Action #3 只读合同重建确认正文 6 节，未调用 AI、未写入 Action 文件。正式 W0/W1b/W2
+仍未导入 Phase 4 模块。
 
 ### Phase 5 — 确定性组装与全局编辑门禁
 
@@ -228,5 +243,5 @@ MCP 完整 pytest 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，�
 
 ## 当前下一步
 
-提交并推送 Phase 3；随后立即进入 Phase 4：章节 claim ledger、占位符服务端绑定和
-全文 ledger 合并。继续保持 feature flag 关闭，不接管正式 W0。
+形成并推送 Phase 4 原子提交；随后进入 Phase 5：frontmatter/FAQ JSON-LD、全局链接
+审计和最终组装门禁。

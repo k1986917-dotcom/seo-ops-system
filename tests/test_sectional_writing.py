@@ -226,6 +226,10 @@ def test_numbered_bold_legacy_outline_rebuilds_english_h2_contracts():
     )
     sections = bundle["section_contracts"]["sections"]
 
+    assert [item["heading"] for item in sections] == [
+        "Why Ceiling Work Is Different",
+        "Class 2 vs Class 3R — Which Option Fits the Task?",
+    ]
     assert sections[0]["brief_points"] == []
     assert sections[0]["brief_points_rejected"] == [
         {
@@ -234,6 +238,25 @@ def test_numbered_bold_legacy_outline_rebuilds_english_h2_contracts():
         }
     ]
     assert sections[1]["brief_points"] == ["Compare the options with evidence"]
+
+
+def test_brief_with_only_deferred_frame_headings_is_rejected():
+    brief = """## 3. Recommended Outline (H2)
+
+```
+H2: Introduction
+H2: Key Takeaways
+H2: Conclusion
+H2: Frequently Asked Questions
+```
+"""
+    with pytest.raises(ContractValidationError, match="only deferred"):
+        build_contract_bundle_from_brief(
+            topic="Deferred article frame",
+            tier="Cluster Content",
+            intent="Build an article frame.",
+            brief_text=brief,
+        )
 
 
 def test_only_structured_approved_product_constraints_become_hard_rules():

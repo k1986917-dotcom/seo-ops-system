@@ -39,6 +39,14 @@ PRODUCT_CONSTRAINT_SOURCES = frozenset({
     "operator_approved",
     "site_policy",
 })
+_DEFERRED_FRAME_HEADINGS = frozenset({
+    "introduction",
+    "key takeaways",
+    "conclusion",
+    "faq",
+    "faqs",
+    "frequently asked questions",
+})
 
 _VERIFY_TERMS = frozenset({
     "accident",
@@ -392,6 +400,11 @@ def parse_brief_section_specs(brief_text: str) -> list[dict[str, Any]]:
     return specs
 
 
+def _is_deferred_frame_heading(heading: str) -> bool:
+    normalized = " ".join(re.findall(r"[a-z0-9]+", heading.casefold()))
+    return normalized in _DEFERRED_FRAME_HEADINGS
+
+
 def build_contract_bundle_from_brief(
     *,
     topic: str,
@@ -410,15 +423,22 @@ def build_contract_bundle_from_brief(
     bullets remain writing requirements rather than catalog filters.
     """
     specs = parse_brief_section_specs(brief_text)
+    body_specs = [
+        item for item in specs if not _is_deferred_frame_heading(item["heading"])
+    ]
+    if not body_specs:
+        raise ContractValidationError(
+            "brief contains only deferred article-frame headings"
+        )
     bundle = build_contract_bundle(
         topic=topic,
         tier=tier,
         intent=intent,
-        outline=[item["heading"] for item in specs],
+        outline=[item["heading"] for item in body_specs],
         guidance=guidance,
         content_language=content_language,
     )
-    by_heading = {item["heading"]: item for item in specs}
+    by_heading = {item["heading"]: item for item in body_specs}
     for section in bundle["section_contracts"]["sections"]:
         spec = by_heading[section["heading"]]
         bullets = spec["bullets"]

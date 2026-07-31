@@ -31,6 +31,17 @@
 
 ### Added
 
+- 新增章节化写作 Phase 4 delivery/ledger 层：ARTICLE/PRODUCT/CITE 由服务端按最终
+  Section Link Contract 白名单绑定真实 URL，registry SHA、章节授权、冲突商品、未知 ID
+  和残留占位符全部 fail-closed。
+- 最终可见文章先确定性组装 H1、Introduction、Key Takeaways、正文 H2、Conclusion 和
+  FAQ，再统一分配全局 S-ID；旧 brief 中的 FAQ/Introduction/Takeaways/Conclusion 不再
+  重复成为正文 Section Contract。
+- 新增正文与 article-frame 单元的独立 claim-ledger package、non-thinking AI 调用、
+  原子 checkpoint、中断续跑和严格 evidence 白名单；claim_text 由服务端从最终 Markdown
+  注入，合并结果兼容现有 Legacy claim-ledger 权威校验器。
+- 新增 resolved delivery 的 SHA 绑定原子持久化；损坏、过期、上下文或 registry 变化后
+  不得恢复。frontmatter 后置添加不会改变正文 S-ID。
 - 新增章节化写作 Phase 3 生成引擎：逐 H2 精简上下文、严格英文 Markdown/链接占位符
   协议、条件最低链接门禁、章节级原子 checkpoint 和中断续跑。
 - 新增主体完成后的 Introduction、Key Takeaways、Conclusion、FAQ 独立短调用与

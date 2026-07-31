@@ -64,12 +64,13 @@
 - Phase 2 已提交并推送：`666b3cd4a107ac8a3a3a5eed9b91a5eedfd831cc`
   (`feat: add site-aware sectional context shadowing`)；本地与远端一致，工作区干净。
 
-### Phase 3 已完成全量验证，待形成提交
+### Phase 3 已完成全量验证并形成本地提交
 
 - 新增 `src/seo_ops/services/sectional_generation.py`，提供完全独立、shadow-only、可注入
   generator 的逐 H2 生成引擎；没有导入或替换正式 Legacy W0。
 - 每节只接收当前 Section Contract、相关 evidence/文章/产品候选、前一节短摘要和下一节
-  标题；真实 Action #3 的 7 个 user prompt 约为 3.6K–6.5K 字符，远小于整篇上下文。
+  标题；真实 Action #3 的正文合同现为 6 节，单节 user prompt 约为 3.6K–6.5K 字符，
+  远小于整篇上下文。旧 brief 的 FAQ 已延后到 article frame，不再重复生成正文 H2。
 - AI 必须返回精确 H2、2–5 个完整段落、ARTICLE/PRODUCT/CITE 占位符和机器可读链接
   决策；原始 URL、HTML/Markdown 链接、越权 ID、中文正文、重复 H2、词数越界和链接
   最低值不足全部 fail-closed。
@@ -94,13 +95,36 @@
   `git diff --check` 全部通过。
 - MCP 完整 pytest 仍会在收集阶段被既有 Landlock 权限阻止：`openpyxl -> mimetypes`
   读取 `/etc/mime.types` 返回 `PermissionError`；这不是代码回归。
+- Phase 3 已提交并由本机认证环境成功推送：
+  `7894080fe944fbb2ad96905bbeca73c809caf011`
+  (`feat: add resumable sectional generation`)；本地与远端一致。
+
+### Phase 4 shadow 代码与全量验证已完成，待提交
+
+- 新增 `src/seo_ops/services/sectional_delivery.py`，服务端只按最终 Link Contract 白名单
+  绑定 ARTICLE/PRODUCT/CITE 占位符；全站 registry 中存在但未获本节授权的 ID 仍被拒绝。
+- registry SHA、上下文 topic/order、候选 ID、冲突商品、残留占位符和 URL 绑定均
+  fail-closed；B303 等目录冲突商品无法被绑定。
+- H1、Introduction、Key Takeaways、正文 H2、Conclusion、FAQ 全部确定性组装后才分配
+  全局 S-ID；后续添加 frontmatter 不改变正文句子表，避免 claim ledger 与最终草稿漂移。
+- 正文章节和 `frame-introduction|takeaways|conclusion|faq` 四个单元分别生成 claim ledger；
+  每次只传本单元全局 S-ID 和批准 evidence，模型不得返回 claim_text 或越权 evidence。
+- claim_text 由服务端从最终 Markdown 注入；thinking 显式关闭，输出预算 4000；不可重试
+  `length/content_filter/tool_calls` 立即停止，非法 JSON 最多重试一次。
+- resolved delivery 和每单元 ledger 使用 SHA 绑定、原子 checkpoint、损坏/过期恢复拒绝。
+- 合并结果已通过现有 Legacy `_validate_claim_ledger_json` 权威校验器。
+- Phase 1–4 联合专项 `72 passed`；Ruff、compileall、`git diff --check` 通过。
+- 本机完整 `pytest -q`：`497 passed, 1 warning`；唯一 warning 为既有
+  Starlette/httpx 弃用提示，无其他 warning。
+- Action #3 只读合同重建确认正文 6 节；未调用 AI、未写真实 Action 文件，正式
+  W0/W1b/W2 仍未导入新模块。
 
 ### 当前下一步
 
-1. 提交并推送 Phase 3 原子变更。
-2. 立即进入 Phase 4：章节 claim ledger、ARTICLE/PRODUCT/CITE 服务端绑定与全文 ledger 合并。
+1. 提交并推送 Phase 4 原子变更。
+2. 进入 Phase 5：frontmatter、FAQ JSON-LD、全局链接审计和最终组装门禁。
 3. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
-4. 只有 Phase 4–6 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
+4. 只有 Phase 5–6 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 
