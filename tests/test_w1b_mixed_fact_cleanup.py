@@ -35,6 +35,32 @@ def test_uncovered_fact_cleanup_does_not_remove_protected_copy():
     assert f"\n{sentence}\n\n<script" not in cleaned
 
 
+def test_uncovered_fact_cleanup_removes_checker_sentence_span():
+    sentence = (
+        "**Not checking OSHA compliance.** Some project sites prohibit any "
+        "laser above Class 2 on active commercial jobs."
+    )
+    draft = (
+        "---\nTitle: Example\n---\n\n"
+        "# Example\n\n"
+        "Keep this surrounding paragraph for the next retry.\n\n"
+        f"- {sentence}\n\n"
+        "```text\n"
+        f"- {sentence}\n"
+        "```\n"
+    )
+
+    cleaned, removed = lw._remove_uncovered_fact_sentences(
+        draft,
+        [{"reason": "uncovered_factual_sentence", "sentence": f"- {sentence}"}],
+    )
+
+    assert removed == 1
+    assert "Keep this surrounding paragraph" in cleaned
+    assert f"\n- {sentence}\n\n```" not in cleaned
+    assert f"```text\n- {sentence}\n```" in cleaned
+
+
 def test_w1b_mixed_word_and_fact_failures_cleanup_before_retry(
     tmp_path,
     monkeypatch,

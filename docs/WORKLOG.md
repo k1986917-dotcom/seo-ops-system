@@ -6,14 +6,22 @@
 
 - 将 `_remove_uncovered_fact_sentences` 从整篇字符串替换改为保护代码围栏和 FAQ
   JSON-LD 后，仅在正文中删除结构化 `uncovered_factual_sentence`。
+- 将正文删除逻辑加固为按 W1b checker 同源分句跨度删除，并用 shared
+  `normalize_claim_text` 匹配结构化失败句；覆盖列表项、加粗片段和换行差异，
+  避免真实候选中已识别的无证据事实句因为 Markdown 形态漏删。
 - 修复 `_w1b_repair_contract` 把换行写成字面量 `\\n` 的提示词问题，使第 10、11 条
   合同真正分行传给模型。
-- 新增正文、代码示例、FAQ JSON-LD 含同一事实句时只删除正文实例的回归测试。
+- 新增正文、代码示例、FAQ JSON-LD 含同一事实句时只删除正文实例，以及
+  加粗列表事实句按 checker 句子跨度删除的回归测试。
 
 ### 验证
 
-- W1b/事实/FAQ/SEO Title 专项：`74 passed`。
+- W1b mixed cleanup 专项：`3 passed`。
+- W1b/FAQ/SEO Title 合同专项：`50 passed`。
 - 变更文件 Ruff：通过；`compileall`：通过；`git diff --check`：通过。
+- `tests/test_legacy_workflow.py -k "w1b or fact or claim or sentence or precheck"`
+  在受限执行器中有 1 个环境失败：`openpyxl` 导入触发 Python 读取
+  `/etc/mime.types`，被插件沙盒拒绝；其余筛选项完成运行。
 - 受限执行器运行全量 pytest 时，环境在收集 `openpyxl` 阶段因禁止读取
   `/etc/mime.types` 失败；这不是代码失败，需在本机完整复跑。
 

@@ -2865,6 +2865,7 @@ def _remove_uncovered_fact_sentences(
     frontmatter, body = _split_frontmatter_text(draft_md)
     removed = 0
     seen: set[str] = set()
+    removable_norms: set[str] = set()
 
     # Mask delivery-only blocks before removing a sentence.  A factual
     # sentence can legitimately appear in a fenced example or FAQ JSON-LD
@@ -2896,9 +2897,56 @@ def _remove_uncovered_fact_sentences(
         if not sentence or sentence in seen:
             continue
         seen.add(sentence)
-        if sentence not in masked_body:
+        removable_norms.add(seo_common.normalize_claim_text(sentence))
+
+    if not removable_norms:
+        return draft_md, 0
+
+    spans_to_remove: list[tuple[int, int]] = []
+    consumed_norms: set[str] = set()
+    paragraph_re = re.compile(r"(?s)(^|\n{2,})(.*?)(?=\n{2,}|\Z)")
+    splitter_re = re.compile(r"(?<=[.!?])\s+")
+
+    for paragraph_match in paragraph_re.finditer(masked_body):
+        paragraph = paragraph_match.group(2)
+        if not paragraph.strip() or "\x00W1BPROTECTED" in paragraph:
             continue
-        masked_body = masked_body.replace(sentence, "", 1)
+        paragraph_offset = paragraph_match.start(2)
+        cursor = 0
+        sentence_spans: list[tuple[int, int]] = []
+        for split_match in splitter_re.finditer(paragraph):
+            sentence_spans.append((cursor, split_match.start()))
+            cursor = split_match.end()
+        sentence_spans.append((cursor, len(paragraph)))
+
+        for start, end in sentence_spans:
+            sentence_text = paragraph[start:end].strip()
+            sentence_norm = seo_common.normalize_claim_text(sentence_text)
+            if not sentence_norm or sentence_norm in consumed_norms:
+                continue
+            if sentence_norm not in removable_norms:
+                continue
+            absolute_start = paragraph_offset + start
+            absolute_end = paragraph_offset + end
+            while (
+                absolute_start < absolute_end
+                and masked_body[absolute_start].isspace()
+            ):
+                absolute_start += 1
+            while (
+                absolute_end > absolute_start
+                and masked_body[absolute_end - 1].isspace()
+            ):
+                absolute_end -= 1
+            if absolute_start < absolute_end:
+                spans_to_remove.append((absolute_start, absolute_end))
+                consumed_norms.add(sentence_norm)
+
+    if not spans_to_remove:
+        return draft_md, 0
+
+    for start, end in sorted(spans_to_remove, reverse=True):
+        masked_body = masked_body[:start] + masked_body[end:]
         removed += 1
 
     if not removed:
