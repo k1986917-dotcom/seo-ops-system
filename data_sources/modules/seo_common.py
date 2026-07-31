@@ -399,6 +399,23 @@ def slugify(text: str) -> str:
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
+def _strip_sentence_id_non_prose(text: str) -> str:
+    """Remove delivery metadata that must never affect canonical sentence IDs."""
+    without_fences = re.sub(
+        r"```[\s\S]*?```",
+        "",
+        text or "",
+        flags=re.MULTILINE,
+    )
+    return re.sub(
+        r"<script\b[^>]*\btype\s*=\s*([\"'])\s*application/ld\+json\s*\1[^>]*>"
+        r"[\s\S]*?</script\s*>",
+        "",
+        without_fences,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_claim_text(text: str) -> str:
     """Normalize a claim_text or draft sentence for exact full-string match.
 
@@ -420,15 +437,18 @@ def extract_draft_sentences(draft_md: str) -> list[dict[str, str]]:
     same algorithm every consumer must use.
 
     1. Strip YAML frontmatter (``---...---``).
-    2. Split by blank lines (``\\n\\n+``) into paragraphs.
-    3. Within each paragraph split by ``(?<=[.!?])\\s+``.
-    4. Strip each sentence, normalise via ``normalize_claim_text``, skip
+    2. Remove fenced code and FAQ/other JSON-LD ``<script>`` blocks. They are
+       delivery metadata, not reader-visible factual prose, and therefore must
+       never renumber body sentence IDs.
+    3. Split by blank lines (``\\n\\n+``) into paragraphs.
+    4. Within each paragraph split by ``(?<=[.!?])\\s+``.
+    5. Strip each sentence, normalise via ``normalize_claim_text``, skip
        empty results.
-    5. Assign sequential IDs ``S001``, ``S002``, …
+    6. Assign sequential IDs ``S001``, ``S002``, …
 
     Returns ``[{"sentence_id": "S001", "text": <original>, "norm": <norm>}, …]``
     """
-    body = strip_frontmatter(draft_md or "")
+    body = _strip_sentence_id_non_prose(strip_frontmatter(draft_md or ""))
     sentences: list[dict[str, str]] = []
     for para in re.split(r"\n\n+", body):
         for sent in _SENTENCE_SPLIT_RE.split(para):

@@ -177,7 +177,7 @@ Phase 3 本地提交：`7894080fe944fbb2ad96905bbeca73c809caf011`
 
 ### Phase 4 — 章节 claim ledger 与链接绑定
 
-状态：**shadow-only 代码与全量验证完成，待原子提交**
+状态：**已完成全量验证并形成本地原子提交，待推送**
 
 - [x] ARTICLE/PRODUCT/CITE 只按本节最终 Link Contract 白名单绑定真实 URL；
 - [x] registry SHA、候选 ID、冲突产品、章节授权和残留占位符全部 fail-closed；
@@ -197,17 +197,30 @@ Phase 3 本地提交：`7894080fe944fbb2ad96905bbeca73c809caf011`
 专项验收：Phase 1–4 联合 `72 passed`；Ruff、compileall、`git diff --check` 通过。
 本机完整 pytest：`497 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx 弃用提示。
 Action #3 只读合同重建确认正文 6 节，未调用 AI、未写入 Action 文件。正式 W0/W1b/W2
-仍未导入 Phase 4 模块。
+仍未导入 Phase 4 模块。Phase 4 提交
+`347fb832d51db5ebfb3332b006970487bc5810af` 已推送，本地与远端一致。
 
 ### Phase 5 — 确定性组装与全局编辑门禁
 
-状态：**待实施**
+状态：**shadow-only 代码与全量验证完成，待原子提交**
 
-- 组装 frontmatter、主体、FAQ JSON-LD；
-- 检查章节顺序、重复、过渡、词数；
-- 全局链接去重、商业密度、锚文本和位置；
-- 将原有“按字数最低链接数”降为 shadow 指标或警告；
-- 保留 URL 无效、下架产品、自链接、越权 ID 等硬阻塞。
+- [x] 确定性组装 canonical frontmatter、Phase 4 body 和 FAQPage JSON-LD；
+- [x] FAQ schema 只从可见 FAQ 问答生成，问题与答案逐项一致；
+- [x] frontmatter、FAQ JSON-LD、fenced metadata 不改变正文 S-ID；
+- [x] Key Takeaways 输出为旧 W1b 可识别的 blockquote；
+- [x] 检查目标词数、H1/H2 顺序、Takeaways/FAQ 数量、跨章节重复句和重复段落；
+- [x] Markdown URL 必须与 Phase 4 bindings 完全一致，未登记链接 fail-closed；
+- [x] 文章/产品重复目标、泛化锚文本和链接硬上限阻塞；外部域名锚文本允许；
+- [x] blog/product/external 按字数比例只生成 advisory metrics/warnings，不强塞链接；
+- [x] product link 过早仅警告；是否内容相关沿用 Phase 2–3 Link Contract；
+- [x] final claim ledger 只重绑定最终 draft SHA，句子与 evidence 决策保持 Phase 4 结果；
+- [x] assembled draft/ledger/report 三文件事务写入与损坏恢复拒绝。
+
+专项验收：Phase 1–5 sectional 联合 `84 passed`；sentence-ID 与旧 W1b/FAQ/修订兼容
+回归 `78 passed`；Ruff、compileall、`git diff --check` 通过。本机完整 pytest：
+`510 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx 弃用提示。MCP 完整 pytest
+仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码失败。正式 W0/W1b/W2
+未导入 Phase 5。
 
 ### Phase 6 — W1b/W2 章节定位与局部修订
 
@@ -243,5 +256,5 @@ Action #3 只读合同重建确认正文 6 节，未调用 AI、未写入 Action
 
 ## 当前下一步
 
-形成并推送 Phase 4 原子提交；随后进入 Phase 5：frontmatter/FAQ JSON-LD、全局链接
-审计和最终组装门禁。
+本机运行完整 pytest；通过后形成并推送 Phase 5 原子提交，同时推送尚未上远端的
+Phase 4 提交。随后进入 Phase 6：章节失败定位、局部修订和 Link Repair。

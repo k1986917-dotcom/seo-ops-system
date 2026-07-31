@@ -99,7 +99,7 @@
   `7894080fe944fbb2ad96905bbeca73c809caf011`
   (`feat: add resumable sectional generation`)；本地与远端一致。
 
-### Phase 4 shadow 代码与全量验证已完成，待提交
+### Phase 4 已完成全量验证并形成本地提交
 
 - 新增 `src/seo_ops/services/sectional_delivery.py`，服务端只按最终 Link Contract 白名单
   绑定 ARTICLE/PRODUCT/CITE 占位符；全站 registry 中存在但未获本节授权的 ID 仍被拒绝。
@@ -118,13 +118,40 @@
   Starlette/httpx 弃用提示，无其他 warning。
 - Action #3 只读合同重建确认正文 6 节；未调用 AI、未写真实 Action 文件，正式
   W0/W1b/W2 仍未导入新模块。
+- Phase 4 已提交并由本机认证环境成功推送：
+  `347fb832d51db5ebfb3332b006970487bc5810af`
+  (`feat: add sectional delivery and ledgers`)；本地与远端一致。
+
+### Phase 5 shadow 代码与全量验证已完成，待提交
+
+- 新增 `src/seo_ops/services/sectional_assembly.py`：不调用 AI，确定性生成 canonical
+  frontmatter、可见 FAQ 对应的 FAQPage JSON-LD、最终 draft 与重新绑定最终 draft SHA
+  的 claim ledger。
+- frontmatter 和 FAQ JSON-LD 不得改变正文 S-ID。共享权威分句器现明确忽略 fenced code
+  与 `application/ld+json` script；新增回归测试锁定添加 metadata 后句子表字节级不变。
+- Key Takeaways 改为旧 W1b 可识别的 blockquote 格式：`> **Key Takeaways**` + 3–5 条。
+- 全局门禁检查目标字数、H1/H2 顺序、FAQ/Takeaways 数量、跨章节重复句/段、未登记 URL、
+  重复文章/产品目标、泛化锚文本和硬性链接上限。
+- 原有 blog/product/external 按字数比例仅保留为 advisory metrics/warnings；不会为了比例
+  强塞链接。产品是否相关仍由 Phase 2–3 的 Link Contract 决定，Phase 5 不重新卡用途场景。
+- 外部引用允许使用域名锚文本；描述性锚文本硬门禁只适用于文章与产品链接。
+- assembled draft、assembled claim ledger、assembly report 三文件事务写入；部分 replace
+  失败会恢复旧版本，损坏或 SHA 不一致的 bundle 不会恢复。
+- Phase 1–5 sectional 专项 `84 passed`；额外 sentence-ID 与旧 W1b/FAQ/修订兼容回归通过；
+  Ruff、compileall、`git diff --check` 通过。
+- 本机完整 `pytest -q`：`510 passed, 1 warning`；唯一 warning 为既有
+  Starlette/httpx 弃用提示，无其他 warning。
+- 兼容回归 `78 passed`；覆盖 sentence-ID、FAQ schema、W1b 修订、mixed fact cleanup 和
+  SEO Title normalization。
+- MCP 完整 pytest 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码回归。
+- 正式 W0/W1b/W2 尚未导入 Phase 5；未调用真实 API、未运行真实 Action、未写正式产物。
 
 ### 当前下一步
 
-1. 提交并推送 Phase 4 原子变更。
-2. 进入 Phase 5：frontmatter、FAQ JSON-LD、全局链接审计和最终组装门禁。
+1. 提交并推送 Phase 5 原子变更。
+2. 进入 Phase 6：W1b/W2 失败定位、章节局部修订和 Link Repair。
 3. B303 产品页/目录修正后重新生成产品报告，确认 Catalog Data Quality Report 自动清零。
-4. 只有 Phase 5–6 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
+4. 只有 Phase 6–7 的 shadow、测试和质量对比通过后，才切换正式 W0/W1b/W2。
 
 ## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
 

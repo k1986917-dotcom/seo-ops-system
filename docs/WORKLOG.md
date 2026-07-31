@@ -25,8 +25,41 @@
 
 ### 下一步
 
-Phase 4 已完成 shadow 代码、专项与本机完整 pytest；下一步提交并推送 Phase 4，随后
-进入 Phase 5。继续保持 shadow-only，不接管正式 W0。
+Phase 5 已完成 shadow 代码、专项与旧 W1b 兼容回归；本机完整 pytest 通过后提交
+Phase 5，并将尚未推送的 Phase 4 一并推送。继续保持 shadow-only，不接管正式 W0。
+
+## 2026-07-31 — Phase 5 canonical assembly、FAQ schema 与全局链接审计
+
+### 本次完成
+
+- 新增 `sectional_assembly.py`，确定性生成 canonical frontmatter、FAQPage JSON-LD、
+  assembled draft、最终 draft SHA 对齐的 claim ledger 和 assembly report，全程不调用 AI。
+- 共享权威分句器新增非正文保护：剥离 frontmatter 后继续忽略 fenced code 与
+  `application/ld+json` script。FAQ schema 或交付 metadata 不再重排正文 S-ID。
+- Key Takeaways 从 H2 列表改为旧 W1b 可识别的 blockquote，不改变正文事实内容。
+- 全局门禁覆盖目标词数、H1/H2 顺序、Takeaways/FAQ 数量、跨章节重复句/段、未登记
+  Markdown URL、重复文章/产品目标、泛化锚文本和链接硬上限。
+- 原有按字数链接比例降为 advisory metrics/warnings。产品链接仍依据前序 Link Contract；
+  Phase 5 不因用途不够精确而移除“内容沾边”的商品。
+- 外部引用可使用来源域名锚文本；文章和产品链接仍要求描述性自然锚文本。
+- assembled draft、assembled claim ledger、assembly report 三文件事务写入；第二次 replace
+  等部分失败会恢复旧 bundle，损坏或 SHA 不一致时 load 返回空。
+
+### 验证与安全状态
+
+- Phase 1–5 sectional 专项：`84 passed`。
+- sentence-ID strict、FAQ schema repair、W1b revision/mixed fact/SEO title 兼容回归：
+  `78 passed`。
+- Ruff、compileall、`git diff --check`：通过；`seo_common.py` 仅忽略既有 UP006/UP035/UP045。
+- 本机完整 pytest：`510 passed, 1 warning`；唯一 warning 为既有 Starlette/httpx
+  弃用提示，无其他 warning。
+- MCP 完整 pytest 仍因既有 Landlock 限制无法读取 `/etc/mime.types`，不是代码失败。
+- Phase 4 提交 `347fb832d51db5ebfb3332b006970487bc5810af` 已由本机认证环境推送；
+  本地与远端一致。
+- 正式 W0/W1b/W2 未导入新模块；未调用真实 AI/API，未运行真实 Action，未修改正式
+  draft、claim ledger、w2-state、数据库或产品数据。
+- Phase 4 已本地提交为 `347fb832d51db5ebfb3332b006970487bc5810af`，当前分支相对
+  远端 `ahead=1`。
 
 ## 2026-07-31 — Phase 4 最终草稿绑定、全局 S-ID 与章节 ledger
 

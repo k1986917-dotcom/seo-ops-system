@@ -280,7 +280,7 @@ def test_resolve_placeholders_binds_registry_urls_and_assigns_global_sentences()
     _, shadow, _, delivery = _setup()
 
     assert "[[" not in delivery["draft_markdown"]
-    assert "## Key Takeaways" in delivery["draft_markdown"]
+    assert "> **Key Takeaways**" in delivery["draft_markdown"]
     assert "## Frequently Asked Questions" in delivery["draft_markdown"]
     assert "https://example.com/" in delivery["draft_markdown"]
     assert "https://source.example/" in delivery["draft_markdown"] or (

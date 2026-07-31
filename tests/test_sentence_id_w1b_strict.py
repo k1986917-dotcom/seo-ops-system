@@ -171,6 +171,23 @@ class TestSharedExtractorConsistency:
         assert "Real sentence." in texts
         assert not any("Title" in t for t in texts), "frontmatter leaked"
 
+    def test_jsonld_and_fenced_code_do_not_change_sentence_ids(self):
+        from data_sources.modules.seo_common import extract_draft_sentences
+
+        body = "# Topic\n\nVisible sentence one. Visible sentence two.\n"
+        decorated = (
+            "---\nTitle: Topic\nSlug: topic\n---\n\n"
+            + body
+            + "\n```json\n{\"note\": \"Not reader-visible.\"}\n```\n"
+            + '<script type="application/ld+json">\n'
+            + '{"@context":"https://schema.org","@type":"FAQPage",'
+            + '"mainEntity":[{"@type":"Question","name":"Hidden question?",'
+            + '"acceptedAnswer":{"@type":"Answer","text":"Hidden answer."}}]}\n'
+            + "</script>\n"
+        )
+
+        assert extract_draft_sentences(decorated) == extract_draft_sentences(body)
+
     def test_heading_handling_is_identical(self):
         from data_sources.modules.write_pre_check import _draft_sentence_table
         from src.seo_ops.services.legacy_workflow import _extract_draft_sentences

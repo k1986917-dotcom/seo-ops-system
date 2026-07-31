@@ -140,6 +140,24 @@ AI 不得创造 URL、产品 ID 或 evidence ID。
 若 `min_required=1` 而模型输出 0，章节门禁失败，只执行一次窄范围 Link Repair；不得为了
 补链接重写整个章节。若 `min_required=0`，仍必须返回链接决策；缺失决策视为合同失败。
 
+### 5.1 全局 assembly 不重新定义产品相关性
+
+Phase 5 只审计前序已批准并已绑定的链接，不重新以用途场景精确度筛掉商品。只要
+Phase 2–3 已判定产品与内容相关、目录数据无冲突且章节允许商业链接，Phase 5 接受该
+产品；弱匹配仍必须使用 `related_catalog` 语义，禁止宣称专用、认证或未提供的兼容性。
+
+旧系统的 blog/product/external “每 N 词一个”比例在新路径中只作为 advisory metric 或
+warning。它不能把 `none` 变成 `required`，也不能为了数量要求模型添加不自然链接。
+全局硬门禁仅保留：未知/未授权 URL、重复文章或产品目标、垃圾锚文本、frame 单元商业
+链接、以及明显超过硬上限的链接堆砌。
+
+### 5.2 交付 metadata 不得改变正文 S-ID
+
+最终顺序固定为：Phase 4 先产生完整可见 Markdown 并分配 S-ID；Phase 5 只在其外层添加
+frontmatter 和从可见 FAQ 确定性生成的 FAQPage JSON-LD。共享权威分句器必须忽略
+frontmatter、fenced code 和 `application/ld+json` script。若添加这些 metadata 后正文
+句子表发生任何变化，assembly 必须 fail-closed，不能重用原 claim ledger。
+
 ### 6. 上下文有效性必须可观测、可调节
 
 每个章节保存 Context Manifest，记录：

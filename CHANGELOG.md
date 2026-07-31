@@ -31,6 +31,12 @@
 
 ### Added
 
+- 新增章节化写作 Phase 5 canonical assembly：确定性生成 frontmatter、可见 FAQ 对应的
+  FAQPage JSON-LD、最终 draft、最终 claim ledger 和 assembly report；目前仍为 shadow-only。
+- 新增全局交付门禁：目标词数、H1/H2 顺序、Takeaways/FAQ 数量、跨章节重复、未登记
+  URL、重复文章/产品目标、泛化锚文本和链接硬上限均可 fail-closed。
+- assembled draft、claim ledger 和 report 使用三文件事务写入与回滚；损坏或 SHA 不匹配
+  的 bundle 不会恢复。
 - 新增章节化写作 Phase 4 delivery/ledger 层：ARTICLE/PRODUCT/CITE 由服务端按最终
   Section Link Contract 白名单绑定真实 URL，registry SHA、章节授权、冲突商品、未知 ID
   和残留占位符全部 fail-closed。
@@ -81,6 +87,10 @@
 - 站点真实在售目录优先于旧 Research Brief；brief 自然语言不会自动成为产品过滤规则。
 - 正式章节合同固定输出语言为 English；旧中文备注只进入审计字段，不进入写作上下文、
   产品评分或链接决策。
+- frontmatter、FAQ JSON-LD 和 fenced delivery metadata 不参与 canonical sentence-ID；
+  assembled draft 的 claim ledger 只重绑定最终 draft SHA，不改变正文 claim 决策。
+- 旧的按字数最低链接比例只作为 advisory 诊断，不会覆盖章节 Link Contract 或强塞商品；
+  URL/ID 授权、重复目标和垃圾锚文本仍保持硬阻塞。
 
 ## [0.11.5] - 2026-07-29
 

@@ -147,8 +147,8 @@ def _build_frame_units(
             f"# {section_run['topic']}\n\n{frame['introduction']}"
         ),
         "frame-takeaways": (
-            "## Key Takeaways\n\n"
-            + "\n".join(f"- {item}" for item in frame["key_takeaways"])
+            "> **Key Takeaways**\n"
+            + "\n".join(f"> - {item}" for item in frame["key_takeaways"])
         ),
         "frame-conclusion": f"## Conclusion\n\n{frame['conclusion']}",
         "frame-faq": "\n".join(faq_lines),
@@ -496,6 +496,8 @@ def validate_resolved_delivery(delivery: Any) -> dict[str, Any]:
         expected_first_line = (
             f"# {delivery['topic']}"
             if section_id == "frame-introduction"
+            else "> **Key Takeaways**"
+            if section_id == "frame-takeaways"
             else f"## {heading}"
         )
         if markdown.splitlines()[0].strip() != expected_first_line:
