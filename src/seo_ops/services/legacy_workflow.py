@@ -651,8 +651,15 @@ def _combined_output(stdout: str, stderr: str) -> str:
 
 # ── AI helper ───────────────────────────────────────────────────────────
 
-async def _run_ai_text(purpose: str, system: str, user: str, *,
-                       settings=None, max_tokens: int | None = None) -> str:
+async def _run_ai_text(
+    purpose: str,
+    system: str,
+    user: str,
+    *,
+    settings=None,
+    max_tokens: int | None = None,
+    thinking_mode: str | None = None,
+) -> str:
     from seo_ops.config import get_settings
     from seo_ops.services.ai import build_ai_provider, complete_text_logged
 
@@ -667,6 +674,7 @@ async def _run_ai_text(purpose: str, system: str, user: str, *,
         system_prompt=system,
         user_prompt=user,
         max_tokens=max_tokens,
+        thinking_mode=thinking_mode,
         settings=active,
     )
 
@@ -2479,7 +2487,7 @@ article Markdown only."""
     try:
         draft_md = _strip_code_fence(await _run_ai_text(
             "legacy_write_body", _WRITE_BODY_AI_SYSTEM, user_prompt,
-            settings=settings, max_tokens=16000)
+            settings=settings, max_tokens=16000, thinking_mode="disabled")
         )
     except Exception as exc:
         return {"success": False, "error": str(exc), "report": report}
@@ -3691,8 +3699,11 @@ Return the revised article Markdown only."""
         new_draft_md = _strip_code_fence(await _run_ai_text(
             "legacy_write_revise_body", _REVISE_BODY_AI_SYSTEM, user_prompt,
             settings=settings, max_tokens=_W1B_REVISE_BODY_MAX_TOKENS,
+            thinking_mode="disabled",
         ))
     except Exception as exc:
+        from seo_ops.services.ai import AIEmptyTextError
+
         error = str(exc)
         # Some OpenAI-compatible providers occasionally return a successful
         # HTTP response with an empty assistant message.  No candidate exists
@@ -3702,7 +3713,9 @@ Return the revised article Markdown only."""
         return {
             "success": False,
             "revised": False,
-            "retryable": error == "AI 返回空文本",
+            "retryable": (
+                isinstance(exc, AIEmptyTextError) and exc.retryable
+            ),
             "error": error,
         }
 
@@ -4301,7 +4314,7 @@ Return the revised article Markdown only."""
     try:
         draft_md = _strip_code_fence(await _run_ai_text(
             "legacy_write_revise_body", _REVISE_BODY_AI_SYSTEM, user_prompt,
-            settings=settings, max_tokens=16000))
+            settings=settings, max_tokens=16000, thinking_mode="disabled"))
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 

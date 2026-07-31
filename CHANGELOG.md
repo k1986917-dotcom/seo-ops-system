@@ -6,6 +6,13 @@
 
 ### Changed
 
+- 官方 DeepSeek V4 的 W0、W1b、W2 长正文任务现在显式使用 non-thinking 模式，
+  避免复杂修订把输出预算消耗在 `reasoning_content` 后没有最终文章正文；其他
+  OpenAI-compatible 服务不会收到 DeepSeek 专用参数。
+- AI 返回 HTTP 成功但正文为空时，现在显示 `finish_reason`、completion/reasoning token
+  用量、reasoning 字符数和实际响应模型等安全诊断；完整 reasoning 内容不会写入日志。
+- W1b 空正文只在供应商资源不足、正常停止却空正文或缺少终止原因时有限重试；
+  长度耗尽、内容过滤和工具调用结果不会重复提交同一请求。
 - R3→W0 现在生成可恢复的紧凑写作 Brief、覆盖合同和章节证据卡。正文模型只接收
   与本篇相关的编辑要求和短证据卡，完整 material pack 仍留作权威归档与后续检查。
 - W0、W1b 与 W2 现在将“写完整正文”和“生成 claim ledger JSON”分为两个独立 AI

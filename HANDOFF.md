@@ -2,6 +2,53 @@
 
 最后更新：2026-07-31（Europe/Paris）
 
+## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复（待真实 API 验收）
+
+- 真实 Action #3 在 `4b3c914` 上再次验收：一次 W1b 批次内部两次
+  `legacy_write_revise_body` 均为 HTTP 成功但 `message.content` 为空；正式 draft、
+  claim-ledger、w2-state 和数据库业务状态未被手工修改，W2/W3 未运行。
+- 根因定位到 OpenAI-compatible 适配层与 DeepSeek V4 默认 thinking 模式的交互：
+  旧代码只读取 `message.content`，不读取 `reasoning_content`、`finish_reason` 或
+  reasoning token 用量；复杂长正文任务可能把输出预算消耗在 thinking 阶段后没有最终正文。
+- `complete_text` 新增可选 `thinking_mode`。只有官方 `api.deepseek.com` 会收到
+  `{"thinking":{"type":"disabled"}}`；其他 OpenAI-compatible 服务不会被发送
+  DeepSeek 专用参数。
+- W0 初稿、W1b 正文修订和 W2 正文修订现均显式关闭 DeepSeek thinking；研究分析、
+  claim-ledger 等其他任务未被改变。
+- 新增 `AIEmptyTextError`：空正文时安全记录 `finish_reason`、completion tokens、
+  reasoning tokens、reasoning 字符数和实际响应模型，但绝不保存完整
+  `reasoning_content`。
+- W1b 只对缺少终止原因、`stop` 但空正文、或
+  `insufficient_system_resource` 允许批次内再试一次；`length`、`content_filter`
+  和 `tool_calls` 立即停止，避免重复完全相同且已确定无效的请求。
+- evidence/claim ledger、事实校验、原子写和 W1b/W2/W3 gate 均未放宽。
+
+### 已完成验证
+
+- 相关 AI/W1b/W0/W2 专项与回归测试全部通过：
+  `tests/test_ai.py`、`tests/test_w1b_revision_contract.py`、
+  `tests/test_w1b_mixed_fact_cleanup.py`、`tests/test_w1b_seo_title_normalization.py`、
+  `tests/test_faq_schema_repair.py`，以及 W0/W2 两个定向合同测试。
+- `ruff check` 对本次生产代码和专项测试通过；`tests/test_legacy_workflow.py`
+  忽略两处既有 F841 后通过。本次没有新增 Ruff 问题。
+- `compileall` 与 `git diff --check` 通过。
+- 本机首次完整 `pytest -q` 得到 `5 failed, 399 passed`；5 项均来自
+  `tests/integration/test_hermes_orchestrator_smoke.py`，共同原因不是 W0 业务逻辑，
+  而是共享测试替身 `tests/legacy_workflow_helpers.py::ai_text` 仍使用旧
+  `_run_ai_text` 签名，不接受新增的 `thinking_mode` 关键字。该测试替身已补齐
+  `thinking_mode=None`，生产代码未为测试放宽或回退。
+- `tests/legacy_workflow_helpers.py` 的 Ruff、compileall 与 `git diff --check` 已通过；
+  MCP 内直接收集 Hermes integration 测试仍被既有 Landlock 系统路径读取限制阻断，
+  因此修复后的完整测试需由本机环境复跑。
+- 未调用真实 API，未运行真实 Web workflow，未修改 `data/`、正式 Action 文件或数据库。
+
+### 下一步
+
+1. 本机运行一次完整 `.venv/bin/python -m pytest -q`。
+2. 全量通过后提交并推送当前补丁。
+3. 在新 HEAD 上只运行一次真实 Action #3 W1b 批次；重点核对是否产出候选稿，
+   若仍为空，读取新的 `finish_reason` / token 诊断后停止。W1b 通过前不得运行 W2/W3。
+
 ## 2026-07-31 — W1b 修订上下文精简（待本机完整验证）
 
 - 真实 Action #3 在 `0307a3b` 上已验收：一次正式 W1b POST 内部按设计执行两次

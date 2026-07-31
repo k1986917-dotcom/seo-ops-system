@@ -1311,9 +1311,11 @@ class TestRevisionLoop:
         old_draft = tmp_path / "drafts" / "test-topic-2026-01-01.md"
         original = old_draft.read_text(encoding="utf-8")
         new_draft = tmp_path / "drafts" / f"test-topic-{today}.md"
+        body_kwargs = {}
 
         async def fake_ai(purpose, *args, **kwargs):
             if purpose == "legacy_write_revise_body":
+                body_kwargs.update(kwargs)
                 return "---\nTitle: T\n---\nrevised body line.\n"
             assert purpose == "legacy_write_claim_ledger"
             return (
@@ -1360,6 +1362,7 @@ class TestRevisionLoop:
         assert backup.exists()
         assert backup.read_text(encoding="utf-8") == original
         assert lw.load_w2_state(tmp_path, "test-topic")["rounds"] == 1
+        assert body_kwargs["thinking_mode"] == "disabled"
 
     def test_revision_stops_when_new_draft_fails_precheck(
         self, tmp_path, monkeypatch
@@ -2829,9 +2832,11 @@ class TestW0AtomicWriteFailure:
             "Material pack content.", encoding="utf-8"
         )
         captured = {}
+        captured_kwargs = {}
 
         async def fake_ai(purpose, system_prompt, user_prompt, **kwargs):
             captured[purpose] = (system_prompt, user_prompt)
+            captured_kwargs[purpose] = kwargs
             if purpose == "legacy_write_body":
                 return "# Draft\n\nUse the material pack as the source of truth.\n"
             assert purpose == "legacy_write_claim_ledger"
@@ -2852,6 +2857,7 @@ class TestW0AtomicWriteFailure:
         assert "Compact Write Brief" in body_user
         assert "Coverage Contract" in body_user
         assert "Material Pack" not in body_user
+        assert captured_kwargs["legacy_write_body"]["thinking_mode"] == "disabled"
         assert "You are an evidence auditor for an SEO article." in ledger_system
         assert "sentence_id" in ledger_system
         assert "Article sentences (use these S-IDs verbatim)" in ledger_user

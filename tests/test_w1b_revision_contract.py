@@ -148,6 +148,7 @@ class TestW1bRevisionContract:
             captured["purpose"] = purpose
             captured["prompt"] = user_prompt
             captured["max_tokens"] = kwargs["max_tokens"]
+            captured["thinking_mode"] = kwargs["thinking_mode"]
             raise RuntimeError("stop after prompt capture")
 
         monkeypatch.setattr(lw, "_run_ai_text", stop_after_prompt)
@@ -160,6 +161,7 @@ class TestW1bRevisionContract:
         assert result["error"] == "stop after prompt capture"
         assert captured["purpose"] == "legacy_write_revise_body"
         assert captured["max_tokens"] == 8000
+        assert captured["thinking_mode"] == "disabled"
         assert "STRUCTURED_DETAIL_SENTINEL" in prompt
         assert "FACT_SENTENCE_SENTINEL" in prompt
         assert "Repair focus summary" in prompt
@@ -1025,7 +1027,15 @@ class TestW1bCandidateGate:
         )
 
         async def empty_ai(*args, **kwargs):
-            raise ValueError("AI 返回空文本")
+            from seo_ops.services.ai import AIEmptyTextError
+
+            raise AIEmptyTextError(
+                finish_reason="insufficient_system_resource",
+                completion_tokens=8000,
+                reasoning_tokens=7984,
+                reasoning_chars=1234,
+                response_model="deepseek-v4-flash",
+            )
 
         monkeypatch.setattr(lw, "_run_ai_text", empty_ai)
 
@@ -1037,12 +1047,11 @@ class TestW1bCandidateGate:
             )
         )
 
-        assert result == {
-            "success": False,
-            "revised": False,
-            "retryable": True,
-            "error": "AI 返回空文本",
-        }
+        assert result["success"] is False
+        assert result["revised"] is False
+        assert result["retryable"] is True
+        assert "finish_reason=insufficient_system_resource" in result["error"]
+        assert "reasoning_tokens=7984" in result["error"]
         assert draft.read_bytes() == old_draft
         assert claim.read_bytes() == old_claim
         assert not list((workspace / "drafts").glob("*.precheck-rev*.md"))

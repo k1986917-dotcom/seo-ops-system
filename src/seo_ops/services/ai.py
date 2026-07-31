@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -14,6 +15,42 @@ from seo_ops.utils import json_dumps, utc_now
 
 class AIUnavailable(RuntimeError):
     """Raised when the optional AI provider is not configured."""
+
+
+class AIEmptyTextError(ValueError):
+    """Provider succeeded but returned no final assistant text."""
+
+    def __init__(
+        self,
+        *,
+        finish_reason: str | None = None,
+        completion_tokens: int | None = None,
+        reasoning_tokens: int | None = None,
+        reasoning_chars: int = 0,
+        response_model: str | None = None,
+    ) -> None:
+        self.finish_reason = finish_reason
+        self.completion_tokens = completion_tokens
+        self.reasoning_tokens = reasoning_tokens
+        self.reasoning_chars = reasoning_chars
+        self.response_model = response_model
+        self.retryable = finish_reason in {
+            None,
+            "stop",
+            "insufficient_system_resource",
+        }
+
+        diagnostics = [
+            f"finish_reason={finish_reason or 'missing'}",
+            "completion_tokens="
+            f"{completion_tokens if completion_tokens is not None else 'unknown'}",
+            "reasoning_tokens="
+            f"{reasoning_tokens if reasoning_tokens is not None else 'unknown'}",
+            f"reasoning_chars={reasoning_chars}",
+        ]
+        if response_model:
+            diagnostics.append(f"response_model={response_model}")
+        super().__init__(f"AI 返回空文本（{'; '.join(diagnostics)}）")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +90,7 @@ class AIProvider(Protocol):
         *,
         temperature: float = 0.3,
         max_tokens: int | None = None,
+        thinking_mode: str | None = None,
     ) -> AITextResponse: ...
 
 
@@ -67,8 +105,56 @@ class DisabledAIProvider:
         *,
         temperature: float = 0.3,
         max_tokens: int | None = None,
+        thinking_mode: str | None = None,
     ) -> AITextResponse:
         raise AIUnavailable("AI 尚未配置；核心分析仍可正常使用")
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _supports_deepseek_thinking(settings: Settings) -> bool:
+    hostname = urlparse(settings.ai_base_url or "").hostname
+    return bool(hostname and hostname.lower() == "api.deepseek.com")
+
+
+def _empty_text_error(
+    response_payload: dict[str, Any],
+    choice: dict[str, Any],
+    message: dict[str, Any],
+) -> AIEmptyTextError:
+    usage = response_payload.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    token_details = usage.get("completion_tokens_details")
+    if not isinstance(token_details, dict):
+        token_details = {}
+
+    finish_reason = choice.get("finish_reason")
+    completion_tokens = _non_negative_int(usage.get("completion_tokens"))
+    reasoning_tokens = _non_negative_int(token_details.get("reasoning_tokens"))
+    reasoning_content = message.get("reasoning_content")
+    reasoning_chars = (
+        len(reasoning_content) if isinstance(reasoning_content, str) else 0
+    )
+    response_model = response_payload.get("model")
+
+    return AIEmptyTextError(
+        finish_reason=(
+            finish_reason if isinstance(finish_reason, str) else None
+        ),
+        completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+        reasoning_chars=reasoning_chars,
+        response_model=(
+            response_model.strip()
+            if isinstance(response_model, str) and response_model.strip()
+            else None
+        ),
+    )
 
 
 class OpenAICompatibleProvider:
@@ -129,7 +215,10 @@ class OpenAICompatibleProvider:
         *,
         temperature: float = 0.3,
         max_tokens: int | None = None,
+        thinking_mode: str | None = None,
     ) -> AITextResponse:
+        if thinking_mode not in (None, "enabled", "disabled"):
+            raise ValueError("thinking_mode 必须是 enabled、disabled 或 None")
         prompt_text = json_dumps({"system": system_prompt, "user": user_prompt})
         prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
         headers = {"Content-Type": "application/json"}
@@ -145,6 +234,8 @@ class OpenAICompatibleProvider:
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
+        if thinking_mode and _supports_deepseek_thinking(self.settings):
+            payload["thinking"] = {"type": thinking_mode}
         timeout = httpx.Timeout(TEXT_TIMEOUT_SECONDS, connect=20.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(self.endpoint, headers=headers, json=payload)
@@ -155,13 +246,24 @@ class OpenAICompatibleProvider:
                 response = await client.post(self.endpoint, headers=headers, json=payload)
             response.raise_for_status()
             response_payload = response.json()
-        raw_content = response_payload["choices"][0]["message"]["content"]
+        if not isinstance(response_payload, dict):
+            raise ValueError("AI 响应不是 JSON 对象")
+        choices = response_payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("AI 响应缺少 choices")
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ValueError("AI 响应 choice 不是对象")
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("AI 响应缺少 assistant message")
+        raw_content = message.get("content")
         text = str(raw_content or "").strip()
         if not text:
-            raise ValueError("AI 返回空文本")
+            raise _empty_text_error(response_payload, choice, message)
         return AITextResponse(
             provider=self.settings.ai_provider,
-            model=self.settings.ai_model or "unknown",
+            model=str(response_payload.get("model") or self.settings.ai_model or "unknown"),
             text=text,
             prompt_sha256=prompt_hash,
         )
@@ -177,6 +279,7 @@ async def complete_text_logged(
     input_refs: Any = None,
     temperature: float = 0.3,
     max_tokens: int | None = None,
+    thinking_mode: str | None = None,
     settings: Settings | None = None,
 ) -> str:
     """Run a free-form completion and record it in ai_runs, success or failure.
@@ -193,6 +296,7 @@ async def complete_text_logged(
             user_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            thinking_mode=thinking_mode,
         )
     except AIUnavailable:
         raise
@@ -236,7 +340,10 @@ async def complete_text_logged(
                 response.model,
                 response.prompt_sha256,
                 json_dumps(refs),
-                json_dumps({"chars": len(response.text)}),
+                json_dumps({
+                    "chars": len(response.text),
+                    "thinking_mode": thinking_mode,
+                }),
                 utc_now(),
             ),
         )

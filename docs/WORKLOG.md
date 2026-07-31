@@ -1498,3 +1498,60 @@ W0/W1b/W2 gate。
 1. 本机运行全量 `pytest -q`。
 2. 全量通过后提交并推送本补丁。
 3. 在当前 HEAD 上只运行一次真实 Action #3 W1b 批次；W1b 通过前绝不运行 W2/W3。
+
+## 2026-07-31 — DeepSeek V4 长正文空响应兼容修复
+
+### 完成内容
+
+- 复核 Action #3 在 `4b3c914` 上的真实结果：W1b 两次正文修订均为 HTTP 成功但
+  `message.content` 为空，候选稿、claim ledger、事实清理和预检均未开始；正式产物保持不变。
+- 根据 DeepSeek V4 官方接口行为，将长正文任务与默认 thinking 模式显式分离：
+  `complete_text` 新增 `thinking_mode`，仅官方 `api.deepseek.com` 接收 DeepSeek
+  专用 `thinking` 参数。
+- W0、W1b、W2 的完整正文生成全部传入 `thinking_mode="disabled"`；其他 AI 任务保持原样。
+- 新增 `AIEmptyTextError`，解析并安全报告 `finish_reason`、completion/reasoning tokens、
+  reasoning 字符数和响应模型；完整 `reasoning_content` 不进入异常文本或 `ai_runs`。
+- 空正文重试改为按原因决定：仅缺失原因、`stop` 空正文或
+  `insufficient_system_resource` 可重试；`length`、`content_filter`、`tool_calls` 停止。
+- 补充 W0/W1b/W2 调用合同、DeepSeek 参数、非 DeepSeek 参数隔离、空响应诊断、
+  日志隐私和重试分类测试。
+
+### 验证
+
+- `.venv/bin/python -m pytest tests/test_ai.py tests/test_w1b_revision_contract.py tests/test_w1b_mixed_fact_cleanup.py tests/test_w1b_seo_title_normalization.py tests/test_faq_schema_repair.py tests/test_legacy_workflow.py::TestW0AtomicWriteFailure::test_w0_uses_compact_body_and_separate_claim_ledger_prompts tests/test_legacy_workflow.py::TestRevisionLoop::test_revision_backs_up_and_reruns -q`：通过。
+- `.venv/bin/python -m ruff check src/seo_ops/services/ai.py src/seo_ops/services/legacy_workflow.py tests/test_ai.py tests/test_w1b_revision_contract.py`：通过。
+- `.venv/bin/python -m ruff check --ignore F841 tests/test_legacy_workflow.py`：通过；未忽略时仅报告第 2221、2269 行两处既有 F841。
+- `.venv/bin/python -m compileall -q ...`：通过。
+- `git diff --check`：通过。
+- 未运行真实 API、真实 Action 或 Web workflow；未修改正式 draft、claim ledger、
+  w2-state、数据库、evidence ledger 或 material pack。
+
+### 下一步
+
+1. 本机完整运行 `.venv/bin/python -m pytest -q`。
+2. 全量通过后提交并推送。
+3. 新 HEAD 上仅执行一次真实 Action #3 W1b；若失败，使用新增诊断判断是长度、过滤、
+   资源不足还是响应结构错误，停止后报告，不得继续 W2/W3。
+
+## 2026-07-31 — Hermes smoke 测试替身签名同步
+
+### 问题与修复
+
+- 本机完整测试首次返回 `5 failed, 399 passed`；失败全部位于
+  `tests/integration/test_hermes_orchestrator_smoke.py`，表现为 W0 后仍停在
+  `r0_pending`、没有 draft 或 w2-state。
+- 根因是 integration 测试 monkeypatch 的共享 `ai_text` 替身仍只接受
+  `settings` / `max_tokens`，而生产 `_run_ai_text` 的 W0/W1b/W2 调用已新增
+  `thinking_mode="disabled"`。测试替身抛出 unexpected keyword argument，W0 正常
+  走失败重定向，所以后续 5 项状态断言同时失败。
+- 仅修改 `tests/legacy_workflow_helpers.py`，给 `ai_text` 增加可选
+  `thinking_mode=None`，继续保持其“镜像真实 `_run_ai_text` 签名”的既有职责。
+  未修改生产逻辑、门禁、正式数据或 Action 状态。
+
+### 验证
+
+- `.venv/bin/python -m ruff check tests/legacy_workflow_helpers.py`：通过。
+- `.venv/bin/python -m compileall -q tests/legacy_workflow_helpers.py`：通过。
+- `git diff --check`：通过。
+- MCP 内运行 Hermes integration 测试在 pytest 收集阶段被 Landlock 系统路径读取限制
+  阻断，尚未进入测试断言；需由本机环境重新运行完整测试确认。

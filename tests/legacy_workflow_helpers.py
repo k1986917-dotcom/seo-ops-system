@@ -19,7 +19,15 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "legacy_pipeline"
 ACTION_SLUG = "example-topic-for-testing-the-legacy-pipeline"
 
 
-async def ai_text(purpose: str, system: str, user: str, *, settings=None, max_tokens=None):
+async def ai_text(
+    purpose: str,
+    system: str,
+    user: str,
+    *,
+    settings=None,
+    max_tokens=None,
+    thinking_mode=None,
+):
     """Deterministic async AI replacement.
 
     Mirrors the signature of seo_ops.services.legacy_workflow._run_ai_text so
