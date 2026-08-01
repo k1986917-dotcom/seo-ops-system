@@ -39,6 +39,16 @@
 
 ### Fixed
 
+- Missing required sectional placeholders now receive one bounded repair instead
+  of failing immediately. The server identifies the exact missing ARTICLE,
+  PRODUCT, or CITE gate, selects only approved IDs needed to satisfy
+  `min_required`, and instructs the model to add those placeholders without
+  changing existing placeholder tokens or inventing claims. Product repairs are
+  restricted to neutral catalog navigation—especially for `related_catalog`
+  candidates—and all existing allowed/max/required/prohibited, technical,
+  evidence, word-count, and paragraph gates still run. A dedicated
+  `section_required_link_retries` metric distinguishes this repair from layout
+  and evidence retries.
 - Section decisions now treat validated Markdown placeholders as the sole
   authoritative `used_ids` inventory on every generation path, not only after a
   formatting repair. Model-supplied decisions must still be valid JSON with the

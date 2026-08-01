@@ -2,6 +2,37 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十九次普通 resume：decisions 已稳定，429 缺 required PRODUCT
+
+- `c6d756c` 已推送并核验；随后只执行一次普通 resume，POST=1、无外层重试、未
+  refresh/promotion。901、049 恢复；429 初稿通过字数、布局、技术一致性以及 decisions
+  规范化，但正文没有任何 PRODUCT placeholder，严格报
+  `product_links does not meet min_required`。这证明 ARTICLE/CITE decisions 抄写问题已
+  消失，同时 required gate 未被规范化绕过。
+- `ai_runs 211→212`，DB SHA 变为
+  `716eb252f4169a6be635011f56ff5ab53b3d9b92a9f473a5cacbe1baf7f1ead3`；
+  active=17、archive=2、无终态文件和 promotion manifest。正式四个 SHA、Action、Git
+  均未变化。
+- 根因是 `product_links does not meet min_required` 不属于任何已有 repair 类型；parser
+  正确 fail-closed 后，pipeline 没有一次受控机会补回合同明确要求的已批准 PRODUCT。
+- 本次新增独立 `required_link` repair：
+  1. 服务端从 parser 错误识别缺失的 ARTICLE/PRODUCT/CITE 类型、`min_required` 和正文当前
+     inventory，只选 `selected_ids` 中尚未使用且满足缺口所需的最少 ID；
+  2. 模型只能把这些精确 ID 各添加一次，不得删除、替换或重排现有 placeholder，也不得
+     添加其他 ID；
+  3. PRODUCT 只能包裹现有中性 catalog wording，或增加一句仅称为 `related catalog option`
+     的导航语；禁止 designed/proven/safe/compliant/preferred/best/suitable 等适用性结论；
+  4. CITE 只能附在已由该 evidence 支撑的现有句子后，不得为了放引用新增或强化事实；
+  5. 新 ARTICLE/PRODUCT 必须放在无其他内部 placeholder 的段落；若仍产生布局冲突，最多再
+     进入一次现有 final link-layout repair；同类 required-link 不能循环；
+  6. 新指标 `section_required_link_retries` 独立记录补链调用，旧 v1 结果缺该字段仍兼容。
+- 验证：required-link/pipeline 专项 5/5 passed；sectional 非 Web 209/209 passed；
+  Legacy/W1b 非 Web 237/237 passed；Ruff、format、compileall、`git diff --check` passed。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=212`，DB SHA=
+  `716eb252f4169a6be635011f56ff5ab53b3d9b92a9f473a5cacbe1baf7f1ead3`，active=17，
+  archive=2，无 promotion manifest，正式四个 SHA 未变。提交并推送后只运行一次普通
+  `--resume-existing --ai-call-limit 36`；不得 refresh、第二次 runner 或 promotion。
+
 ## 2026-08-01 — 第十八次普通 resume：429 初稿停在 CITE decisions 抄写不一致
 
 - `1733d2e` 已推送并核验；随后只执行一次普通 resume，POST=1、无外层重试、未

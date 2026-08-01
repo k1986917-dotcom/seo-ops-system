@@ -1,3 +1,15 @@
+## 2026-08-01 — Add one bounded required-placeholder repair
+
+- 第十九次普通 resume 只调用一次 429 初稿；ARTICLE/CITE decisions 规范化已生效，
+  新首错为正文缺 required PRODUCT，报 `product_links does not meet min_required`。
+- 新 `required_link` repair 只选完成 `min_required` 所需的最少 approved selected IDs，
+  禁止修改现有 placeholders 或添加其他 ID。PRODUCT 仅允许中性 related-catalog 导航，
+  CITE 仅能附到已有受支持句子；全部 gate、事实、技术、字数和布局校验继续 fail-closed。
+- 若补链后暴露同段双内链，只允许一次 final link-layout；若补后仍缺，则立即以
+  `required_link repair failed` 停止。新增 `section_required_link_retries`，旧结果兼容。
+- 专项 5/5、sectional 非 Web 209/209、Legacy/W1b 非 Web 237/237，静态检查全部通过。
+  当前 ai_runs=212、DB SHA=`716eb252...`、active=17、archive=2、正式四个 SHA 未变。
+
 ## 2026-08-01 — Canonicalize decisions inventory on every parse path
 
 - 第十八次普通 resume 只调用一次 429 初稿；字数与布局均通过，但模型正文 CITE 与

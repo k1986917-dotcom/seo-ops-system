@@ -228,6 +228,7 @@ def run_sectional_shadow_candidate(
         "resumed_sections": section_run["resumed_count"],
         "section_word_count_retries": section_run["word_count_retry_count"],
         "section_link_layout_retries": section_run["link_layout_retry_count"],
+        "section_required_link_retries": section_run["required_link_retry_count"],
         "section_technical_consistency_retries": section_run["technical_consistency_retry_count"],
         "frame_generated": bool(frame_run["generated"]),
         "frame_resumed": bool(frame_run["resumed"]),
@@ -284,6 +285,13 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         or link_layout_retry_count < 0
     ):
         raise SectionalPipelineError("pipeline result section_link_layout_retries is invalid")
+    required_link_retry_count = result.get("section_required_link_retries")
+    if required_link_retry_count is not None and (
+        not isinstance(required_link_retry_count, int)
+        or isinstance(required_link_retry_count, bool)
+        or required_link_retry_count < 0
+    ):
+        raise SectionalPipelineError("pipeline result section_required_link_retries is invalid")
     technical_retry_count = result.get("section_technical_consistency_retries")
     if technical_retry_count is not None and (
         not isinstance(technical_retry_count, int)

@@ -719,6 +719,10 @@ _SECTION_WORD_COUNT_ERROR = re.compile(
     r"^section word count (?P<count>\d+) is outside "
     r"(?P<minimum>\d+)-(?P<maximum>\d+)$"
 )
+_REQUIRED_LINK_ERROR = re.compile(
+    r"^(?P<link_type>article_links|product_links|external_citations) "
+    r"does not meet min_required$"
+)
 
 
 def _build_word_count_repair_prompt(
@@ -845,6 +849,83 @@ def _build_internal_link_layout_repair_prompt(
     return {"system": system, "user": user}
 
 
+def _build_required_link_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    """Build one bounded repair that restores only missing required placeholders."""
+    match = _REQUIRED_LINK_ERROR.fullmatch(str(error))
+    if match is None:
+        return None
+    validated = validate_section_generation_package(package)
+    link_type = match.group("link_type")
+    gate = validated["link_gates"][link_type]
+    if gate["opportunity_state"] != "required":
+        return None
+    markdown, _ = _split_response(
+        response_text,
+        SECTION_MARKDOWN_MARKER,
+        SECTION_DECISIONS_MARKER,
+    )
+    inventory = _placeholder_inventory(markdown)
+    missing_count = int(gate["min_required"]) - len(inventory[link_type])
+    if missing_count <= 0:
+        return None
+    available_ids = [
+        candidate_id
+        for candidate_id in gate["selected_ids"]
+        if candidate_id not in inventory[link_type]
+    ]
+    if len(available_ids) < missing_count:
+        return None
+    required_ids = available_ids[:missing_count]
+    if link_type == "article_links":
+        placeholder_rule = (
+            "Add exactly one ARTICLE placeholder for each listed ID by wrapping an "
+            "existing relevant phrase with a natural English anchor. Do not add a new "
+            "article claim or summary."
+        )
+    elif link_type == "product_links":
+        placeholder_rule = (
+            "Add exactly one PRODUCT placeholder for each listed ID. Place it around "
+            "existing neutral catalog-reference wording, or add one short neutral "
+            "navigation sentence identifying it only as a related catalog option. Do "
+            "not claim that a product was designed for, proven for, safe for, compliant "
+            "with, preferred for, best for, or specifically suitable for this use case."
+        )
+    else:
+        placeholder_rule = (
+            "Add exactly one CITE placeholder for each listed evidence ID immediately "
+            "after an existing sentence already supported by that evidence. Do not add, "
+            "strengthen, or rephrase a factual claim merely to place the citation."
+        )
+    base = build_section_generation_prompt(validated)
+    system = (
+        base["system"] + "\nREQUIRED LINK REPAIR. This is the only attempt to restore a missing "
+        "required placeholder. Preserve the exact H2, supported factual meaning, "
+        "existing placeholder tokens and order, word-count contract, and 2-5 paragraph "
+        "structure. Do not remove, replace, or reorder an existing placeholder. Do not "
+        "add any placeholder except the exact approved IDs listed below. Place any new "
+        "ARTICLE or PRODUCT placeholder in a paragraph that contains no other ARTICLE "
+        "or PRODUCT placeholder. Keep the decisions JSON valid; the server will derive "
+        "used_ids from the final Markdown."
+    )
+    user = (
+        base["user"]
+        + "\n\nREQUIRED LINK REPAIR\n"
+        + f"Missing link type: {link_type}. Minimum required: {gate['min_required']}. "
+        + "Add exactly these approved IDs once each: "
+        + ", ".join(required_ids)
+        + ".\n"
+        + placeholder_rule
+        + " If the added placeholder would push the body over its word-count maximum, "
+        "delete only equivalent non-essential prose that contains no placeholder or "
+        "citation. Return the complete two-block response.\n\nPREVIOUS RESPONSE\n" + response_text
+    )
+    return {"system": system, "user": user}
+
+
 def _build_technical_consistency_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -896,6 +977,13 @@ def _build_section_repair_prompt(
     )
     if link_layout_prompt is not None:
         return link_layout_prompt, "link_layout"
+    required_link_prompt = _build_required_link_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if required_link_prompt is not None:
+        return required_link_prompt, "required_link"
     technical_prompt = _build_technical_consistency_repair_prompt(
         package,
         response_text,
@@ -1018,6 +1106,14 @@ def _build_final_section_repair_prompt(
         )
         if link_layout is not None:
             return link_layout, "link_layout"
+    if prior_kind != "required_link":
+        required_link = _build_required_link_repair_prompt(
+            package,
+            response_text,
+            error,
+        )
+        if required_link is not None:
+            return required_link, "required_link"
     authority_free = _build_authority_free_repair_prompt(
         package,
         response_text,
@@ -1641,6 +1737,7 @@ def run_section_generation_sequence(
     word_count_retry_count = 0
     evidence_strength_retry_count = 0
     link_layout_retry_count = 0
+    required_link_retry_count = 0
     technical_consistency_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
@@ -1675,6 +1772,8 @@ def run_section_generation_sequence(
                     word_count_retry_count += 1
                 elif repair_kind == "link_layout":
                     link_layout_retry_count += 1
+                elif repair_kind == "required_link":
+                    required_link_retry_count += 1
                 elif repair_kind == "technical_consistency":
                     technical_consistency_retry_count += 1
                 else:
@@ -1706,6 +1805,8 @@ def run_section_generation_sequence(
                     )
                     if final_kind == "link_layout":
                         link_layout_retry_count += 1
+                    elif final_kind == "required_link":
+                        required_link_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
                     elif final_kind == "word_count_strict_trim":
@@ -1742,6 +1843,7 @@ def run_section_generation_sequence(
         "word_count_retry_count": word_count_retry_count,
         "evidence_strength_retry_count": evidence_strength_retry_count,
         "link_layout_retry_count": link_layout_retry_count,
+        "required_link_retry_count": required_link_retry_count,
         "technical_consistency_retry_count": technical_consistency_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }

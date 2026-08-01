@@ -1486,6 +1486,108 @@ def test_link_layout_repair_rejects_changed_placeholder_inventory(tmp_path):
     assert len(select_calls) == 2
 
 
+def test_sequence_repairs_one_missing_required_product_placeholder(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            if target_attempts == 1:
+                return _response(package, omit_required={"product_links"})
+        return _response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["required_link_retry_count"] == 1
+    assert result["link_layout_retry_count"] == 0
+    assert len(select_calls) == 2
+    assert "REQUIRED LINK REPAIR" in select_calls[1][1]
+    assert "Missing link type: product_links" in select_calls[1][2]
+    output = next(
+        item for item in result["outputs"] if item["section_id"] == sections["section_order"][1]
+    )
+    assert output["used_ids"]["product_links"]
+
+
+def test_sequence_stops_after_one_required_link_retry(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def remain_missing(system, user):
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] == "select":
+            return _response(package, omit_required={"product_links"})
+        return _response(package)
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="required_link repair failed: product_links does not meet min_required",
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_missing,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 2
+    assert "REQUIRED LINK REPAIR" in select_calls[1][1]
+
+
+def test_required_link_repair_can_expose_one_final_link_layout_repair(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] != "select":
+            return _response(package)
+        target_attempts += 1
+        if target_attempts == 1:
+            return _response(package, omit_required={"product_links"})
+        if target_attempts == 2:
+            return _same_sentence_internal_link_collision_response(package)
+        return _separated_internal_link_response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["required_link_retry_count"] == 1
+    assert result["link_layout_retry_count"] == 1
+    assert len(select_calls) == 3
+    assert "REQUIRED LINK REPAIR" in select_calls[1][1]
+    assert "INTERNAL LINK LAYOUT REPAIR" in select_calls[2][1]
+
+
 def test_sequence_stops_after_one_link_layout_retry(tmp_path):
     sections, shadow = _setup()
     calls = []
