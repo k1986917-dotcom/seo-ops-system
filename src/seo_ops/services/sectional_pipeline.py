@@ -229,12 +229,14 @@ def run_sectional_shadow_candidate(
         "section_word_count_retries": section_run["word_count_retry_count"],
         "section_link_layout_retries": section_run["link_layout_retry_count"],
         "section_required_link_retries": section_run["required_link_retry_count"],
+        "section_product_fit_retries": section_run["product_fit_retry_count"],
         "section_technical_consistency_retries": section_run["technical_consistency_retry_count"],
         "frame_generated": bool(frame_run["generated"]),
         "frame_resumed": bool(frame_run["resumed"]),
         "section_evidence_strength_retries": section_run["evidence_strength_retry_count"],
         "frame_evidence_strength_repaired": bool(frame_run["evidence_strength_repaired"]),
         "frame_evidence_strength_retries": frame_run["evidence_strength_retry_count"],
+        "frame_authority_free_fallback_applied": bool(frame_run["authority_free_fallback_applied"]),
         "generated_ledgers": ledger_run["generated_count"],
         "resumed_ledgers": ledger_run["resumed_count"],
         "run_metrics": counters,
@@ -292,6 +294,13 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         or required_link_retry_count < 0
     ):
         raise SectionalPipelineError("pipeline result section_required_link_retries is invalid")
+    product_fit_retry_count = result.get("section_product_fit_retries")
+    if product_fit_retry_count is not None and (
+        not isinstance(product_fit_retry_count, int)
+        or isinstance(product_fit_retry_count, bool)
+        or product_fit_retry_count < 0
+    ):
+        raise SectionalPipelineError("pipeline result section_product_fit_retries is invalid")
     technical_retry_count = result.get("section_technical_consistency_retries")
     if technical_retry_count is not None and (
         not isinstance(technical_retry_count, int)
@@ -309,6 +318,11 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         raise SectionalPipelineError("pipeline ledger counts do not reconcile")
     if not isinstance(result.get("frame_evidence_strength_repaired"), bool):
         raise SectionalPipelineError("pipeline result frame_evidence_strength_repaired is invalid")
+    frame_fallback = result.get("frame_authority_free_fallback_applied")
+    if frame_fallback is not None and not isinstance(frame_fallback, bool):
+        raise SectionalPipelineError(
+            "pipeline result frame_authority_free_fallback_applied is invalid"
+        )
     counters = result.get("run_metrics")
     if not isinstance(counters, dict):
         raise SectionalPipelineError("pipeline run_metrics are missing")

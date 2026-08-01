@@ -259,6 +259,24 @@ def _replace_response_decisions(response, decisions):
     return markdown + SECTION_DECISIONS_MARKER + "\n" + json.dumps(decisions, sort_keys=True)
 
 
+def _neutral_related_catalog_response(package):
+    response = _response(package)
+    product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+    token = f"[[PRODUCT:{product_id}|professional ceiling marking tool]]"
+    old = (
+        "Professionals should match the tool to the working distance, surrounding "
+        "conditions, handling needs, and established site procedures. The choice "
+        "should remain easy to explain, suitable for the actual task, and supported "
+        "by the available catalog and evidence rather than an invented specification. " + token
+    )
+    new = (
+        "Professionals can compare the working distance, surrounding conditions, "
+        "handling needs, and established site procedures without treating a catalog "
+        "entry as proof of an exact fit. For a related catalog option, review " + token
+    )
+    return response.replace(old, new)
+
+
 def _package_from_prompt(user_prompt: str):
     payload = user_prompt.split("SECTION PACKAGE\n", 1)[1]
     return json.JSONDecoder().raw_decode(payload)[0]
@@ -730,6 +748,76 @@ def test_decision_used_ids_cannot_fake_a_missing_required_placeholder():
             _replace_response_decisions(response, decisions),
             package,
         )
+
+
+def test_related_catalog_product_rejects_performance_or_suitability_language():
+    package = _package_for_stage("select")
+    for item in package["candidates"]["products"]:
+        item["fit_level"] = "related_catalog"
+        item["fit_reason"] = "related_to_article_topic_without_exact_use_case_match"
+    unsigned = dict(package)
+    unsigned.pop("package_sha256")
+    package["package_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="related_catalog product language must remain neutral catalog navigation",
+    ):
+        parse_section_generation_response(_response(package), package)
+
+    output = parse_section_generation_response(
+        _neutral_related_catalog_response(package),
+        package,
+    )
+    assert output["used_ids"]["product_links"]
+
+
+def test_sequence_repairs_related_catalog_language_once(tmp_path):
+    sections, shadow = _setup()
+    section = next(item for item in sections["sections"] if item["reader_stage"] == "select")
+    manifest_section = next(
+        item
+        for item in shadow["context_manifest"]["sections"]
+        if item["section_id"] == section["section_id"]
+    )
+    for item in manifest_section["product_candidates"]:
+        item["fit_level"] = "related_catalog"
+        item["fit_reason"] = "related_to_article_topic_without_exact_use_case_match"
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] != "select":
+            return _response(package)
+        target_attempts += 1
+        if target_attempts == 1:
+            return _response(package)
+        return _neutral_related_catalog_response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["product_fit_retry_count"] == 1
+    assert len(select_calls) == 2
+    assert "RELATED CATALOG LANGUAGE REPAIR" in select_calls[1][1]
 
 
 def test_unknown_product_fit_level_is_rejected():
@@ -1536,7 +1624,10 @@ def test_sequence_stops_after_one_required_link_retry(tmp_path):
 
     with pytest.raises(
         SectionGenerationError,
-        match="required_link repair failed: product_links does not meet min_required",
+        match=(
+            "required_link repair failed: required_link repair did not add exactly "
+            "the planned placeholder IDs"
+        ),
     ):
         run_section_generation_sequence(
             workspace=tmp_path,
@@ -1550,6 +1641,47 @@ def test_sequence_stops_after_one_required_link_retry(tmp_path):
     select_calls = [item for item in calls if item[0] == "select"]
     assert len(select_calls) == 2
     assert "REQUIRED LINK REPAIR" in select_calls[1][1]
+
+
+def test_required_link_repair_rejects_an_extra_approved_product(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def add_extra_product(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] != "select":
+            return _response(package)
+        target_attempts += 1
+        if target_attempts == 1:
+            return _response(package, omit_required={"product_links"})
+        selected = package["link_gates"]["product_links"]["selected_ids"]
+        assert len(selected) >= 2
+        response = _response(package)
+        first_token = f"[[PRODUCT:{selected[0]}|professional ceiling marking tool]]"
+        extra_token = f"[[PRODUCT:{selected[1]}|another catalog option]]"
+        return response.replace(first_token, first_token + "\n\n" + extra_token)
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=(
+            "required_link repair failed: required_link repair did not add exactly "
+            "the planned placeholder IDs"
+        ),
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=add_extra_product,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 2
 
 
 def test_required_link_repair_can_expose_one_final_link_layout_repair(tmp_path):
@@ -2158,7 +2290,7 @@ def test_article_frame_uses_final_authority_free_repair(tmp_path):
     assert "FINAL FRAME AUTHORITY-FREE REPAIR" in calls[2][1]
 
 
-def test_article_frame_reports_final_authority_free_failure(tmp_path):
+def test_article_frame_uses_deterministic_fallback_after_final_authority_failure(tmp_path):
     section_run = _completed_section_run()
     calls = []
 
@@ -2170,19 +2302,56 @@ def test_article_frame_reports_final_authority_free_failure(tmp_path):
             "Professional ceiling marking depends on a clear method,",
         )
 
+    result = run_article_frame_generation(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_run=section_run,
+        generate_text=remain_unsupported,
+    )
+
+    assert len(calls) == 3
+    assert "FINAL FRAME AUTHORITY-FREE REPAIR" in calls[2][1]
+    assert result["authority_free_fallback_applied"] is True
+    assert result["evidence_strength_retry_count"] == 2
+    combined = "\n".join(
+        [
+            result["output"]["introduction"],
+            *result["output"]["key_takeaways"],
+            result["output"]["conclusion"],
+            *[item["question"] + " " + item["answer"] for item in result["output"]["faq"]],
+        ]
+    )
+    assert "OSHA" not in combined
+    assert article_frame_checkpoint_path(tmp_path, "marking-guide").exists()
+
+
+def test_article_frame_fallback_does_not_hide_final_structure_failure(tmp_path):
+    section_run = _completed_section_run()
+    calls = []
+
+    def fail_structure_on_final(system, user):
+        calls.append((system, user))
+        if len(calls) < 3:
+            return _frame_response().replace(
+                "Professional ceiling marking depends on a clear method,",
+                "OSHA guidance states that employers must follow this rule. "
+                "Professional ceiling marking depends on a clear method,",
+            )
+        return _frame_response().replace(FRAME_FAQ_MARKER, "")
+
     with pytest.raises(
         SectionGenerationError,
-        match="article frame authority_free repair failed",
+        match="article frame authority_free repair failed: article frame marker",
     ):
         run_article_frame_generation(
             workspace=tmp_path,
             slug="marking-guide",
             section_run=section_run,
-            generate_text=remain_unsupported,
+            generate_text=fail_structure_on_final,
         )
 
     assert len(calls) == 3
-    assert "FINAL FRAME AUTHORITY-FREE REPAIR" in calls[2][1]
+    assert not article_frame_checkpoint_path(tmp_path, "marking-guide").exists()
 
 
 @pytest.mark.parametrize(

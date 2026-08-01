@@ -1,3 +1,17 @@
+## 2026-08-01 — Enforce neutral product links and deterministic frame fallback
+
+- 第二十次普通 resume 使六节正文写入 checkpoint，但 article frame 三次 AI 后仍因
+  authority-free 门禁失败；`ai_runs 212→220`，DB SHA=`3717d0fb...`，正式产物未变。
+- 独立审查发现 429 多加了未计划的 B016，并把 B017USB/B016 写成性能建议；7bb 也含
+  related-catalog 规格、充电、人体工学和适用性宣传，因此不能直接保留这些 checkpoints。
+- required-link repair 现严格验证只增加服务端计划的最少 ID；related-catalog 段落只允许
+  中性 catalog navigation，并提供一次 placeholder-preserving `product_fit` 修订。
+- frame 第三次 AI 若只剩 authority overstatement，改用经过完整 validator 的确定性中性
+  fallback，不发第四次 AI；结构和协议错误仍 fail-closed。
+- 新指标：`section_product_fit_retries`、`frame_authority_free_fallback_applied`。
+- 专项 9/9、sectional 非 Web 213/213、Legacy/W1b/FAQ 237/237；静态检查全部通过。
+  当前 ai_runs=220、active=17、archive=2、promotion manifest=false、正式四个 SHA 未变。
+
 ## 2026-08-01 — Add one bounded required-placeholder repair
 
 - 第十九次普通 resume 只调用一次 429 初稿；ARTICLE/CITE decisions 规范化已生效，

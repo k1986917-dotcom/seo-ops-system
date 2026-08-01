@@ -39,6 +39,17 @@
 
 ### Fixed
 
+- Required-link repairs now have an atomic server-side postcondition: every
+  existing placeholder token and order must remain unchanged, and the repair may
+  add only the exact minimum approved IDs selected by the server. Adding a second
+  approved product is rejected. `related_catalog` products now have a dedicated
+  semantic gate and one bounded repair; their paragraphs must remain neutral
+  catalog navigation and may not contain product specifications, performance,
+  visibility, feature, ergonomic, safety, compliance, preference, or exact-use
+  suitability claims. After all three bounded article-frame AI attempts, an
+  authority-only failure may use a deterministic, fully validated neutral frame
+  without a fourth AI call; structural or protocol failures still stop closed.
+  New metrics expose product-fit retries and deterministic frame fallback use.
 - Missing required sectional placeholders now receive one bounded repair instead
   of failing immediately. The server identifies the exact missing ARTICLE,
   PRODUCT, or CITE gate, selects only approved IDs needed to satisfy

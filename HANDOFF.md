@@ -2,6 +2,42 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第二十次普通 resume：正文完成后 frame authority-free 失败
+
+- `c869bf0` 已推送并核验；随后只执行一次普通 resume，POST=1、无外层重试、未
+  refresh/promotion。429 的 required PRODUCT repair 触发一次并成功，之后 2d、7bb、b92
+  也生成；六节正文均写入 checkpoint。frame 共调用三次 AI，最终仍报
+  `article frame authority_free repair failed`，因此未进入 delivery/ledger/assembly。
+- `ai_runs 212→220`，DB SHA 变为
+  `3717d0fb8b3917285d7a2c196dede7f0289b3311b103002815b0568957f43183`；
+  active=17、archive=2、无 promotion manifest。Action、正式 draft、claim ledger、
+  w2-state、`.env` 和 Git 均未变化。
+- MCP 独立审查发现不能只修 frame：
+  1. 429 required-link prompt 只计划加入 B017USB，但模型最终同时加入 B017USB 与 B016；
+  2. 429 把两个 `related_catalog` 候选写成远距离可见度/输出性能建议；
+  3. 7bb 又写入充电、人体工学、疲劳和 job-site 适用性宣传；
+  4. 因而“六节 parser 通过”不等于正文质量可接受，429、7bb 必须自动失效重生成。
+- 本次修复：
+  1. required-link repair 增加原子后置条件：已有 placeholder token 和顺序必须不变，新增
+     token 的类型、数量和 ID 必须与服务端计划完全一致；多加另一个 approved ID 也失败；
+  2. `related_catalog` PRODUCT 所在段落必须明确为 `related catalog option`，token 外禁止
+     规格数值、功率/波长、可见度/性能、功能、人体工学、安全、合规、优选或 exact-use
+     suitability；只允许一次 `product_fit` 修订且 placeholder inventory/order 不得改变；
+  3. 新增 `section_product_fit_retries` 指标；
+  4. frame 的第三次 AI 若唯一剩余错误仍是 authority/compliance/safety/superlative
+     overstatement，服务端不再发第四次 AI，而生成固定中性 introduction/takeaways/
+     conclusion/FAQ，并完整运行原 validator；marker、JSON、结构、字数等错误仍停止；
+  5. 新增 `frame_authority_free_fallback_applied` 指标。
+- 当前真实 checkpoint 预判：901、049、2d、b92 可通过各自当前 package 校验；429 与 7bb
+  会被新 related-catalog 门禁判无效；旧 article-frame checkpoint 的 package SHA 也无效。
+  429 新 summary 可能导致后续 package SHA 连锁变化，因此普通 resume 可安全按顺序重算。
+- 验证：专项 9/9 passed；sectional 非 Web 213/213 passed；Legacy/W1b/FAQ 非 Web
+  237/237 passed；Ruff、format、compileall、`git diff --check` passed。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=220`，DB SHA=
+  `3717d0fb8b3917285d7a2c196dede7f0289b3311b103002815b0568957f43183`，active=17，
+  archive=2，无 promotion manifest，正式四个 SHA 未变。推送后只允许一次普通
+  `--resume-existing --ai-call-limit 36`；不得 refresh、第二次 runner 或 promotion。
+
 ## 2026-08-01 — 第十九次普通 resume：decisions 已稳定，429 缺 required PRODUCT
 
 - `c6d756c` 已推送并核验；随后只执行一次普通 resume，POST=1、无外层重试、未

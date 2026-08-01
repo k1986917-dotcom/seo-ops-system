@@ -194,8 +194,10 @@ def test_shadow_pipeline_builds_complete_candidate_without_formal_artifacts(tmp_
     assert result["generated_sections"] == 3
     assert result["section_link_layout_retries"] == 0
     assert result["section_required_link_retries"] == 0
+    assert result["section_product_fit_retries"] == 0
     assert result["section_technical_consistency_retries"] == 0
     assert result["frame_generated"] is True
+    assert result["frame_authority_free_fallback_applied"] is False
     assert result["generated_ledgers"] == len(result["assembly"]["delivery"]["section_order"])
     assert result["run_metrics"]["ai_calls"] == len(calls)
     assert result["run_metrics"]["completion_tokens"] is None
@@ -288,7 +290,9 @@ def test_pipeline_result_accepts_legacy_version_one_without_new_retry_counts(tmp
     result.pop("frame_evidence_strength_retries")
     result.pop("section_link_layout_retries")
     result.pop("section_required_link_retries")
+    result.pop("section_product_fit_retries")
     result.pop("section_technical_consistency_retries")
+    result.pop("frame_authority_free_fallback_applied")
     unsigned = dict(result)
     unsigned.pop("result_sha256")
     result["result_sha256"] = hashlib.sha256(
