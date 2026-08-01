@@ -55,6 +55,11 @@ _UNAPPROVED_CANDIDATE_ERROR = re.compile(
     r"(?P<link_type>article_links|product_links|external_citations) "
     r"uses an unapproved candidate"
 )
+_RESPONSE_FORMAT_ERRORS = {
+    "generator response markers are missing or duplicated",
+    "unexpected text before the first response marker",
+    "generator response blocks must not be empty",
+}
 _CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _RAW_URL = re.compile(r"https?://", re.IGNORECASE)
 _RAW_MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\((?:https?://|/)[^)]+\)")
@@ -1103,6 +1108,44 @@ def _build_final_candidate_selection_repair_prompt(
     return {"system": system, "user": user}
 
 
+def _build_response_format_repair_prompt(
+    package: dict[str, Any],
+    error: SectionGenerationError,
+    *,
+    final: bool = False,
+) -> dict[str, str] | None:
+    """Retry a malformed two-block response from the clean section package."""
+
+    if str(error) not in _RESPONSE_FORMAT_ERRORS:
+        return None
+    validated = validate_section_generation_package(package)
+    base = build_section_generation_prompt(validated)
+    label = "FINAL RESPONSE FORMAT REPAIR" if final else "RESPONSE FORMAT REPAIR"
+    system = (
+        base["system"] + f"\n{label}. The previous completion could not be parsed as the required "
+        "two-block response. Start again from the clean SECTION PACKAGE. Do not echo "
+        "instructions, use a code fence, add commentary, or mention this repair. Emit "
+        f"{SECTION_MARKDOWN_MARKER} exactly once as the first output line and "
+        f"{SECTION_DECISIONS_MARKER} exactly once after the complete section Markdown. "
+        "Return valid JSON after the decisions marker and no text after that JSON. All "
+        "content, word-count, paragraph, evidence, product, and link gates remain "
+        "unchanged and will be validated server-side."
+    )
+    user = (
+        base["user"]
+        + f"\n\n{label}\n"
+        + "Generate a fresh complete response from the clean package above. The exact "
+        "output shape is:\n"
+        + f"{SECTION_MARKDOWN_MARKER}\n"
+        + "## <exact requested H2>\n\n<section body>\n"
+        + f"{SECTION_DECISIONS_MARKER}\n"
+        + '{"article_links":{"used_ids":[],"reason_code":"..."},'
+        + '"product_links":{"used_ids":[],"reason_code":"..."},'
+        + '"external_citations":{"used_ids":[],"reason_code":"..."}}'
+    )
+    return {"system": system, "user": user}
+
+
 def _build_technical_consistency_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -1140,6 +1183,12 @@ def _build_section_repair_prompt(
     response_text: str,
     error: SectionGenerationError,
 ) -> tuple[dict[str, str], str] | None:
+    response_format_prompt = _build_response_format_repair_prompt(
+        package,
+        error,
+    )
+    if response_format_prompt is not None:
+        return response_format_prompt, "response_format"
     word_count_prompt = _build_word_count_repair_prompt(
         package,
         response_text,
@@ -1266,6 +1315,13 @@ def _build_final_section_repair_prompt(
     prior_kind: str,
 ) -> tuple[dict[str, str], str] | None:
     """Choose one final bounded repair from the newly exposed failure kind."""
+    response_format = _build_response_format_repair_prompt(
+        package,
+        error,
+        final=True,
+    )
+    if response_format is not None:
+        return response_format, "response_format"
     if prior_kind == "candidate_selection":
         return _build_final_candidate_selection_repair_prompt(package), "candidate_selection"
     if prior_kind == "word_count":
@@ -1988,6 +2044,7 @@ def run_section_generation_sequence(
     link_layout_retry_count = 0
     required_link_retry_count = 0
     candidate_selection_retry_count = 0
+    response_format_retry_count = 0
     technical_consistency_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
@@ -2026,6 +2083,8 @@ def run_section_generation_sequence(
                     required_link_retry_count += 1
                 elif repair_kind == "candidate_selection":
                     candidate_selection_retry_count += 1
+                elif repair_kind == "response_format":
+                    response_format_retry_count += 1
                 elif repair_kind == "technical_consistency":
                     technical_consistency_retry_count += 1
                 else:
@@ -2067,6 +2126,8 @@ def run_section_generation_sequence(
                         required_link_retry_count += 1
                     elif final_kind == "candidate_selection":
                         candidate_selection_retry_count += 1
+                    elif final_kind == "response_format":
+                        response_format_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
                     elif final_kind == "word_count_strict_trim":
@@ -2112,6 +2173,7 @@ def run_section_generation_sequence(
         "link_layout_retry_count": link_layout_retry_count,
         "required_link_retry_count": required_link_retry_count,
         "candidate_selection_retry_count": candidate_selection_retry_count,
+        "response_format_retry_count": response_format_retry_count,
         "technical_consistency_retry_count": technical_consistency_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }

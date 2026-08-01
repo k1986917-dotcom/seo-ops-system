@@ -1,3 +1,21 @@
+## 2026-08-01 — Add bounded response-marker repair after b92 failure
+
+- 推送 `9d7ce23` 后执行一次普通 resume：901/049/429/2d resumed；7bb 以 B025
+  (`product-718d54a72161`) 成功落盘；b92 因新 previous summary 失效重生成，但 AI 响应
+  缺失或重复 `===SECTION_MARKDOWN===` / `===SECTION_DECISIONS===`，没有 repair 分支而停止。
+  POST=1，`ai_runs 237→240`，正式产物与 Action 不变，无终态文件或 promotion manifest。
+- 新增 `_build_response_format_repair_prompt`，仅处理三类解析外壳错误：marker 缺失/重复、
+  首 marker 前出现额外文本、任一块为空。修订从 clean Section Package 重新生成，不读取
+  或回灌损坏响应，也不放宽 `_split_response`。
+- 第一次格式修订失败时，`_build_final_section_repair_prompt` 允许一次 final format retry；
+  若格式修订暴露 candidate、required-link、layout、technical 或 evidence 错误，现有最终
+  分支仍继续按原 gate 处理。所有最终响应仍经过完整 section validator。
+- 新增 `response_format_retry_count` / `section_response_format_retries`；测试覆盖一次修订成功、
+  final 修订成功、两次仍损坏时 fail-closed，以及 candidate repair 后 marker 损坏时按格式
+  修订计数。验证：Sectional 非 Web 231 passed、1 deselected；Legacy/W1b 当前范围
+  225 passed、5 deselected；Ruff、format、compileall 与 `git diff --check` 通过。未运行
+  新的真实 Shadow、未修改任何 checkpoint 或正式数据。
+
 ## 2026-08-01 — Split minimal candidate repair from clean final gate rebuild
 
 - 推送 `1b8825e` 后只执行一次普通 resume。901/049/429/2d resumed；7bb 初始响应使用

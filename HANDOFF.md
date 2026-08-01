@@ -2,6 +2,31 @@
 
 最后更新：2026-08-01（Europe/Berlin）
 
+## 2026-08-01 — 7bb 已使用 B025 落盘；b92 marker 格式修订已补齐
+
+- `9d7ce23` 已推送并只执行一次普通 `--resume-existing --ai-call-limit 36`。POST=1，
+  `ai_runs 237→240`；901/049/429/2d resumed，7bb 经过初始生成和一次 repair 后成功持久化，
+  b92 因 `generator response markers are missing or duplicated` 停止。正式 draft、claim
+  ledger、w2-state、`.env`、Action 与 Git 全部不变，无 promotion manifest、无终态产物。
+- MCP 独立读取 7bb checkpoint：package SHA `df74c451…e2d5da`、markdown SHA
+  `1e63b18b…4bc0d`、404 words、5 paragraphs；PRODUCT 仅
+  `product-718d54a72161`（B025），ARTICLE 仅 `article-a4a3f651d855`，CITE 仅
+  `ev_342a1c3c35f7`。旧 B017USB/B016/B023/B019/B030/B01.6 均未残留。
+- b92 旧 checkpoint 因 7bb summary 改变而失效；本轮新响应的两块 marker 缺失或重复。
+  原 `_build_section_repair_prompt` 没有对应分支，因此一次 AI 后直接 fail-closed。
+- 当前新增 response-format repair：
+  1. 只识别缺失/重复 marker、首 marker 前额外文字、空响应块三类 envelope 错误；
+  2. 不尝试宽松解析或修补损坏文本，从 clean Section Package 重新生成完整两块响应；
+  3. 第一次仍失败时允许一次 final format retry，同样不继承失败正文；
+  4. 每次输出仍需通过所有内容、证据和链接 gate；第三次仍损坏则停止；
+  5. 新增 `section_response_format_retries` 指标。
+- 尚未 push 本次 marker 修复，尚未再次运行真实 Shadow。active root 仍为 17 个
+  checkpoint/ledger-checkpoint，无终态文件；下一次仍只能普通 resume，禁止
+  `--refresh-complete` 和 promotion。
+- 验证：Sectional 非 Web 231 passed、1 deselected；Legacy/W1b 当前范围 225 passed、
+  5 deselected；Ruff、关键文件 format、compileall、`git diff --check` 全部通过。MCP
+  沙箱限制的 Web 路由测试继续单独排除，与本次修复无关。
+
 ## 2026-08-01 — 7bb 第二次实跑暴露 final repair 合同冲突，已修复
 
 - `1b8825e` 已推送并只执行一次普通 `--resume-existing --ai-call-limit 36`。POST=1，

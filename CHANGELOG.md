@@ -1,3 +1,16 @@
+## [Unreleased] — Retry malformed sectional response envelopes
+
+### Fixed
+
+- Section body AI 返回缺失/重复 `===SECTION_MARKDOWN===`、在首 marker 前输出额外文字，或
+  任一响应块为空时，不再立即终止整个 Shadow。新增一次从 clean Section Package 重新
+  输出的 response-format repair；不回灌、猜测或宽松解析损坏响应。
+- 若第一次格式修订仍损坏，允许一次 final response-format repair。两次修订都必须重新
+  通过原有 H2、字数、段落、证据、ARTICLE/PRODUCT/CITE candidate 与 gate 校验；再次
+  失败继续 fail-closed。
+- Pipeline 新增 `section_response_format_retries` 审计指标。格式修订禁止 code fence、说明
+  文字和重复 marker，要求两个 marker 各出现一次，decisions 后不得再有文本。
+
 ## [Unreleased] — Repair unapproved sectional link candidates
 
 ### Fixed
