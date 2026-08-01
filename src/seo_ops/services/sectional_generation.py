@@ -1316,20 +1316,24 @@ def _validate_decisions(
             "reason_code",
         }:
             raise SectionGenerationError(f"{link_type} decision shape is invalid")
-        used_ids = decision["used_ids"]
+        reported_used_ids = decision["used_ids"]
         reason = _clean_text(
             decision["reason_code"],
             f"{link_type}.reason_code",
             allow_empty=True,
         )
         if (
-            not isinstance(used_ids, list)
-            or any(not isinstance(item, str) or not item for item in used_ids)
-            or len(used_ids) != len(set(used_ids))
+            not isinstance(reported_used_ids, list)
+            or any(not isinstance(item, str) or not item for item in reported_used_ids)
+            or len(reported_used_ids) != len(set(reported_used_ids))
         ):
             raise SectionGenerationError(f"{link_type}.used_ids must be unique strings")
-        if used_ids != inventory[link_type]:
-            raise SectionGenerationError(f"{link_type} decisions do not match section placeholders")
+        # Markdown placeholders are the user-visible source of truth. The model's
+        # used_ids list is redundant metadata and is normalized from the validated
+        # inventory so a copy error cannot block an otherwise valid section. All
+        # candidate, count and required/prohibited gates below still apply to the
+        # actual placeholder inventory.
+        used_ids = list(inventory[link_type])
         gate = package["link_gates"][link_type]
         allowed = gate["selected_ids"]
         if any(item not in allowed for item in used_ids):

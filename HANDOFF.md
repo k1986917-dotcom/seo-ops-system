@@ -2,6 +2,30 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十八次普通 resume：429 初稿停在 CITE decisions 抄写不一致
+
+- `1733d2e` 已推送并核验；随后只执行一次普通 resume，POST=1、无外层重试、未
+  refresh/promotion。901、049 恢复；429 本轮初稿已通过字数和段落布局，未触发任何
+  repair，但普通 parser 报 `external_citations decisions do not match section placeholders`。
+- `ai_runs 210→211`，DB SHA 变为
+  `1c227c0eb4d5106a0b3a770cfd4c8467f092f7e0650b70b17daaa9ac6a91da1e`；
+  active=17、archive=2、无终态文件和 promotion manifest。正式四个 SHA、Action、Git
+  均未变化。
+- 根因是上一修复只在 link-layout repair 路径规范化 decisions；普通初稿仍把模型返回的
+  冗余 `used_ids` 与正文 inventory 做逐字比较。因此模型正文 CITE 正确、JSON 漏抄时仍
+  被阻断。
+- 本次把规则统一到 `_validate_decisions` 核心：模型 decisions 仍必须是合法三类 JSON、
+  `used_ids` 仍必须是唯一字符串列表、未使用时仍需 reason；但实际 ARTICLE/PRODUCT/CITE
+  `used_ids` 一律从已验证 Markdown inventory 生成，再执行原有 allowed、max、required、
+  prohibited 门禁。JSON 不能伪造缺失 placeholder；正文少了 required CITE 时仍报
+  `external_citations does not meet min_required`。
+- 验证：decisions 专项 4/4 passed；sectional 非 Web 206/206 passed；Legacy/W1b 非 Web
+  237/237 passed；Ruff、format、compileall、`git diff --check` passed。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=211`，DB SHA=
+  `1c227c0eb4d5106a0b3a770cfd4c8467f092f7e0650b70b17daaa9ac6a91da1e`，active=17，
+  archive=2，无 promotion manifest，正式四个 SHA 未变。推送后只运行一次普通
+  `--resume-existing --ai-call-limit 36`，不得 refresh 或 promotion。
+
 ## 2026-08-01 — 第十七次普通 resume：字数已通过，429 停在 decisions 抄写不一致
 
 - `b537776` 已由本机推送并核验本地/远端一致；随后只执行一次普通

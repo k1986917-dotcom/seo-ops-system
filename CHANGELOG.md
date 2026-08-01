@@ -39,6 +39,13 @@
 
 ### Fixed
 
+- Section decisions now treat validated Markdown placeholders as the sole
+  authoritative `used_ids` inventory on every generation path, not only after a
+  formatting repair. Model-supplied decisions must still be valid JSON with the
+  required shape and an unused reason, but ARTICLE, PRODUCT, and CITE IDs are
+  normalized from the actual body before the existing allowed/min/max/required
+  gates run. A decisions copy error can no longer block valid content, while a
+  decisions claim cannot fabricate a missing required placeholder.
 - Formatting-only sectional link-layout recovery now treats Markdown
   placeholders as the authoritative inventory and decisions JSON as redundant
   metadata. A repaired response is accepted only when every exact ARTICLE,

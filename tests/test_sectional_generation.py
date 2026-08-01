@@ -687,6 +687,51 @@ def test_valid_section_response_passes_required_link_gates():
     assert output["content_language"] == "en"
 
 
+def test_parser_canonicalizes_decision_used_ids_from_markdown_inventory():
+    package = _package_for_stage("select")
+    response = _response(package)
+    wrong = {
+        link_type: {
+            "used_ids": [],
+            "reason_code": "not_needed_for_this_section",
+        }
+        for link_type in ("article_links", "product_links", "external_citations")
+    }
+
+    output = parse_section_generation_response(
+        _replace_response_decisions(response, wrong),
+        package,
+    )
+
+    for link_type in ("article_links", "product_links", "external_citations"):
+        assert output["decisions"][link_type]["used_ids"] == output["used_ids"][link_type]
+        assert output["decisions"][link_type]["reason_code"] == (
+            "used_approved_candidate"
+            if output["used_ids"][link_type]
+            else "not_needed_for_this_section"
+        )
+
+
+def test_decision_used_ids_cannot_fake_a_missing_required_placeholder():
+    package = _package_for_stage("select")
+    response = _response(package, omit_required={"external_citations"})
+    cite_id = package["link_gates"]["external_citations"]["selected_ids"][0]
+    decisions = json.loads(response.split(SECTION_DECISIONS_MARKER, 1)[1])
+    decisions["external_citations"] = {
+        "used_ids": [cite_id],
+        "reason_code": "used_approved_candidate",
+    }
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="external_citations does not meet min_required",
+    ):
+        parse_section_generation_response(
+            _replace_response_decisions(response, decisions),
+            package,
+        )
+
+
 def test_unknown_product_fit_level_is_rejected():
     sections, shadow = _setup()
     section = next(item for item in sections["sections"] if item["reader_stage"] == "select")

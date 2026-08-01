@@ -1,3 +1,14 @@
+## 2026-08-01 — Canonicalize decisions inventory on every parse path
+
+- 第十八次普通 resume 只调用一次 429 初稿；字数与布局均通过，但模型正文 CITE 与
+  `external_citations.used_ids` 抄写不一致，parser 在无 repair 的普通路径直接停止。
+- 将 Markdown placeholder inventory 提升为所有 parse 路径的唯一 `used_ids` 来源；模型
+  JSON 仍需合法 shape/reason，全部实际 gate 继续对正文 inventory 执行。
+- 新增反向测试：decisions 声称使用 required CITE 但正文缺少 placeholder 时，仍必须
+  以 `min_required` 失败，确保规范化不能伪造链接或证据。
+- Decisions 专项 4/4、sectional 非 Web 206/206、Legacy/W1b 非 Web 237/237 passed；
+  静态检查全部通过。当前 ai_runs=211、active=17、archive=2、正式四个 SHA 未变。
+
 ## 2026-08-01 — Canonicalize decisions after formatting-only link repair
 
 ### 第十七次真实普通 resume
