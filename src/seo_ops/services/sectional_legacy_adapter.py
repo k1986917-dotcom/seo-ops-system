@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from data_sources.modules.seo_config import TIER_MIN_WORDS
+from seo_ops.services.sectional_consistency import contains_unsafe_legacy_metadata_claim
 from seo_ops.services.sectional_pipeline import run_sectional_shadow_candidate
 from seo_ops.services.sectional_rollout import (
     build_rollout_policy,
@@ -199,6 +200,18 @@ def _bounded_metadata_list(
     return result
 
 
+def _safe_metadata_values(values: list[str]) -> list[str]:
+    return [value for value in values if value and not contains_unsafe_legacy_metadata_claim(value)]
+
+
+def _safe_metadata_fallback(topic: str) -> str:
+    return (
+        f"Evaluate options for {topic.lower()}. Review operating requirements, "
+        "product details, comparison steps, practical constraints, and key selection "
+        "factors before making a decision."
+    )
+
+
 def build_legacy_assembly_metadata(
     draft: str,
     *,
@@ -213,6 +226,7 @@ def build_legacy_assembly_metadata(
         minimum = max(minimum, 3000)
     title = meta.get("title") or topic
     description = meta.get("description", "")
+    safe_fallback = _safe_metadata_fallback(topic)
     topic_phrases = _topic_metadata_phrases(topic)
     tags = _bounded_metadata_list(
         _list_value(meta.get("tags", "")),
@@ -231,15 +245,20 @@ def build_legacy_assembly_metadata(
         "slug": meta.get("slug") or slug,
         "author": meta.get("author") or author,
         "summary": _fit_metadata_text(
-            [meta.get("summary", ""), description],
+            _safe_metadata_values([meta.get("summary", ""), description]) + [safe_fallback],
             minimum=80,
             maximum=300,
         ),
         "tags": tags,
         "page_type": meta.get("page type") or meta.get("tier") or tier,
-        "seo_title": _fit_seo_title([meta.get("seo title", ""), title, topic]),
+        "seo_title": _fit_seo_title(
+            _safe_metadata_values([meta.get("seo title", "")]) + [title, topic]
+        ),
         "seo_description": _fit_metadata_text(
-            [meta.get("seo description", ""), description, meta.get("summary", "")],
+            _safe_metadata_values(
+                [meta.get("seo description", ""), description, meta.get("summary", "")]
+            )
+            + [safe_fallback],
             minimum=150,
             maximum=160,
             removable_phrases=(

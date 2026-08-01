@@ -1,3 +1,37 @@
+## 2026-08-01 — Reject technically inconsistent completed candidate
+
+### 第十五次真实 resume 与独立验收
+
+- `be710d3` 推送后只运行一次普通 resume，POST=1、无外层重试、未 refresh/promotion。
+- Runner 成功生成 22 个 active 文件；旧 assembly/comparison 报告 blockers 为空并建议
+  single-action promotion。正式 pair、Action、Git 和 archive 不变；`ai_runs 190→206`，
+  DB SHA=`4a8246e8...`。
+- MCP 独立阅读候选后拒绝 promotion：frontmatter 继承 `best`、`OSHA compliant options`；
+  7bb 正文写出 `520nm blue / 450nm green`，且该句不在 claim ledger 中。
+
+### 根因与三层修复
+
+- 实际产品报告已污染：B020 的 Wavelength 字段内部把 520nm/450nm 的颜色写反，LP40
+  把 1064nm infrared 简写成 red；B303 仍有 title 532nm 与 attribute 650nm 冲突。
+- 新共享 consistency 模块将确定性 wavelength/color mismatch 记入 product attribute
+  conflicts，使产品不能进入自动写作和链接上下文。
+- Section parser、checkpoint/output validator 与最终 assembly 全部重新检查技术一致性；
+  section 只允许一次 bounded technical-consistency repair。Pipeline 输出新增兼容字段
+  `section_technical_consistency_retries`。
+- Legacy metadata adapter 跳过未经支持的 authority/compliance/superlative 文案并生成中性
+  fallback；assembly metadata validator 对 Summary/SEO Title/SEO Description 再次硬校验。
+
+### 真实预检与验证
+
+- Action #3 当前完整候选在新 validator 下无效，不能 promotion。
+- B020、LP40、B303 均被排除；两个 required product section 仍各有 B017USB/B016 两个
+  `related_catalog` 候选，产品最低数不会耗尽。下一轮需严格验收候选措辞。
+- Sectional 非 Web 201/201 passed；Legacy/W1b 非 Web 237/237 passed；Ruff lint、针对
+  新增/直接改动文件的 format check、compileall、`git diff --check` passed。
+- 当前基线：ai_runs=206、active=22、archive=1、promotion manifest=false、正式四个 SHA
+  未变。下一次必须使用一次 reviewed `--resume-existing --refresh-complete`；普通 resume
+  会因完整终态文件存在而拒绝。
+
 ## 2026-08-01 — Add bounded internal-link layout recovery
 
 ### 第十四次真实 resume

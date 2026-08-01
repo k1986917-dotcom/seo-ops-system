@@ -146,10 +146,10 @@ def test_build_metadata_decodes_quoted_legacy_frontmatter():
     draft = """---
 title: "Professional Ceiling Marking Tools"
 author: 'Example Tools'
-summary: "Choose a pointer for Bob's commercial crew."
+summary: "Choose a pointer for Bob's commercial crew by reviewing working distance, visibility, handling, and site procedures."
 tags: 'ceiling marking, worksite tools, product selection'
 seo title: "Professional Ceiling Marking Tools"
-seo description: 'Bob''s practical ceiling marking guide.'
+seo description: 'Bob''s practical ceiling marking guide helps crews compare visibility, handling, working distance, product details, and site procedures before choosing.'
 seo keywords: "ceiling marking, laser pointer"
 ---
 
@@ -166,8 +166,14 @@ Legacy body.
 
     assert metadata["title"] == "Professional Ceiling Marking Tools"
     assert metadata["author"] == "Example Tools"
-    assert metadata["summary"] == "Choose a pointer for Bob's commercial crew."
-    assert metadata["seo_description"] == "Bob's practical ceiling marking guide."
+    assert metadata["summary"] == (
+        "Choose a pointer for Bob's commercial crew by reviewing working distance, "
+        "visibility, handling, and site procedures."
+    )
+    assert metadata["seo_description"] == (
+        "Bob's practical ceiling marking guide helps crews compare visibility, "
+        "handling, working distance, product details, and site procedures before choosing."
+    )
     assert metadata["tags"] == [
         "ceiling marking",
         "worksite tools",
@@ -233,7 +239,10 @@ Legacy body.
 
     assert validated["title"] == topic
     assert validated["author"] == "LaserPointerHub"
-    assert validated["summary"].startswith("Find the best laser pointer")
+    assert validated["summary"].startswith("Evaluate options for laser pointer")
+    assert "best" not in validated["summary"].casefold()
+    assert "osha" not in validated["summary"].casefold()
+    assert "compliant" not in validated["summary"].casefold()
     assert validated["tags"] == [
         "laser pointer",
         "pointing above ceilings",
@@ -243,7 +252,9 @@ Legacy body.
     assert 50 <= len(validated["seo_title"]) <= 60
     assert validated["seo_title"] == ("Laser Pointer for Commercial Construction: Above Ceilings")
     assert 150 <= len(validated["seo_description"]) <= 160
-    assert validated["seo_description"].endswith("what to look for.")
+    assert "best" not in validated["seo_description"].casefold()
+    assert "osha" not in validated["seo_description"].casefold()
+    assert "compliant" not in validated["seo_description"].casefold()
 
 
 def test_metadata_rejects_missing_frontmatter():

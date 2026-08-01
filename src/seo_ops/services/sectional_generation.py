@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from seo_ops.services.sectional_consistency import wavelength_color_conflicts
 from seo_ops.services.sectional_context import validate_candidate_registry
 from seo_ops.services.sectional_writing import (
     CONTRACT_VERSION,
@@ -96,6 +97,7 @@ _TECHNICAL_CHOICE_TERM = re.compile(
 _EVIDENCE_OVERSTATEMENT_ERROR = "section contains authority or recommendation language unsupported by source-verified quote evidence"
 _FRAME_OVERSTATEMENT_ERROR = "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
 _INTERNAL_LINK_LAYOUT_ERROR = "a paragraph may contain at most one internal link placeholder"
+_TECHNICAL_CONSISTENCY_ERROR = "section contains contradictory wavelength and color pairing"
 
 
 class SectionGenerationError(ContractValidationError):
@@ -651,6 +653,19 @@ def _verified_quote_ids(package: dict[str, Any]) -> list[str]:
     ]
 
 
+def _validate_section_technical_consistency(markdown: str) -> None:
+    visible = _visible_markdown(markdown)
+    conflicts = wavelength_color_conflicts(visible)
+    if not conflicts:
+        return
+    detail = ", ".join(
+        f"{item['wavelength_nm']}nm stated as {item['stated_color']} "
+        f"instead of {item['expected_color']}"
+        for item in conflicts[:4]
+    )
+    raise SectionGenerationError(f"{_TECHNICAL_CONSISTENCY_ERROR}: {detail}")
+
+
 def _validate_section_evidence_strength(
     markdown: str,
     package: dict[str, Any],
@@ -776,6 +791,38 @@ def _build_internal_link_layout_repair_prompt(
     return {"system": system, "user": user}
 
 
+def _build_technical_consistency_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    """Build one bounded repair for an explicit wavelength/color contradiction."""
+    error_text = str(error)
+    if not error_text.startswith(_TECHNICAL_CONSISTENCY_ERROR):
+        return None
+    base = build_section_generation_prompt(package)
+    detail = error_text.removeprefix(_TECHNICAL_CONSISTENCY_ERROR).lstrip(": ")
+    system = (
+        base["system"] + "\nTECHNICAL CONSISTENCY REPAIR. Correct only explicit wavelength/color "
+        "contradictions. Use only the clean product attributes and evidence supplied "
+        "in the section package. Do not guess a wavelength, color, output, product "
+        "feature, law, safety conclusion, URL, or evidence ID. Preserve the exact H2, "
+        "supported factual meaning, placeholder IDs and order, paragraph contract, "
+        "word-count contract, and decisions JSON. If a contradictory product detail "
+        "is not supported by the clean package, remove that detail rather than "
+        "inventing a replacement."
+    )
+    user = (
+        base["user"]
+        + "\n\nTECHNICAL CONSISTENCY REPAIR\n"
+        + "The server detected this deterministic contradiction: "
+        + detail
+        + ". Make the minimum correction needed and return the complete two-block "
+        "response. Do not rewrite unrelated prose.\n\nPREVIOUS RESPONSE\n" + response_text
+    )
+    return {"system": system, "user": user}
+
+
 def _build_section_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -795,6 +842,13 @@ def _build_section_repair_prompt(
     )
     if link_layout_prompt is not None:
         return link_layout_prompt, "link_layout"
+    technical_prompt = _build_technical_consistency_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if technical_prompt is not None:
+        return technical_prompt, "technical_consistency"
     error_text = str(error)
     if not error_text.startswith(_EVIDENCE_OVERSTATEMENT_ERROR):
         return None
@@ -886,6 +940,14 @@ def _build_final_section_repair_prompt(
     prior_kind: str,
 ) -> tuple[dict[str, str], str] | None:
     """Choose one final bounded repair from the newly exposed failure kind."""
+    if prior_kind != "technical_consistency":
+        technical = _build_technical_consistency_repair_prompt(
+            package,
+            response_text,
+            error,
+        )
+        if technical is not None:
+            return technical, "technical_consistency"
     if prior_kind != "link_layout":
         link_layout = _build_internal_link_layout_repair_prompt(
             package,
@@ -1209,6 +1271,7 @@ def parse_section_generation_response(
         raise SectionGenerationError(
             f"section must contain 2-5 coherent paragraphs (got {paragraph_count})"
         )
+    _validate_section_technical_consistency(markdown)
     _validate_section_evidence_strength(markdown, validated_package)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
@@ -1287,6 +1350,7 @@ def validate_section_generation_output(
     paragraph_count = _paragraph_count(markdown)
     if output.get("paragraph_count") != paragraph_count or not 2 <= paragraph_count <= 5:
         raise SectionGenerationError("section output paragraph count is invalid")
+    _validate_section_technical_consistency(markdown)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
     target = validated_package["target_words"]
@@ -1448,6 +1512,7 @@ def run_section_generation_sequence(
     word_count_retry_count = 0
     evidence_strength_retry_count = 0
     link_layout_retry_count = 0
+    technical_consistency_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
             sections,
@@ -1481,6 +1546,8 @@ def run_section_generation_sequence(
                     word_count_retry_count += 1
                 elif repair_kind == "link_layout":
                     link_layout_retry_count += 1
+                elif repair_kind == "technical_consistency":
+                    technical_consistency_retry_count += 1
                 else:
                     evidence_strength_retry_count += 1
                 try:
@@ -1504,6 +1571,8 @@ def run_section_generation_sequence(
                     )
                     if final_kind == "link_layout":
                         link_layout_retry_count += 1
+                    elif final_kind == "technical_consistency":
+                        technical_consistency_retry_count += 1
                     else:
                         evidence_strength_retry_count += 1
                     try:
@@ -1530,6 +1599,7 @@ def run_section_generation_sequence(
         "word_count_retry_count": word_count_retry_count,
         "evidence_strength_retry_count": evidence_strength_retry_count,
         "link_layout_retry_count": link_layout_retry_count,
+        "technical_consistency_retry_count": technical_consistency_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
 

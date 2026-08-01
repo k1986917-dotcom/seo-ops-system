@@ -39,6 +39,16 @@
 
 ### Fixed
 
+- Sectional promotion eligibility now fails closed on deterministic wavelength/
+  color contradictions and unsupported compliance metadata. Product registry
+  parsing marks combinations such as `520nm blue`, `450nm green`, and
+  `1064nm red` as catalog attribute conflicts, so those products cannot enter
+  automatic link or writing context. Section responses and the final assembly
+  independently reject the same contradictions, with one bounded technical-
+  consistency repair available before stopping. Inherited Legacy summary and
+  SEO-description values containing unsupported authority/compliance or
+  superlative claims are replaced with neutral topic-derived metadata rather
+  than copied into the sectional candidate.
 - Sectional body generation now recovers from internal-link layout collisions
   without relaxing the one-internal-link-per-paragraph validator. Existing
   sentence boundaries are still normalized deterministically first; only

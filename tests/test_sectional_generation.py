@@ -1337,6 +1337,59 @@ def test_evidence_repair_can_expose_one_final_link_layout_repair(tmp_path):
     assert "PREVIOUS RESPONSE" in select_calls[2][2]
 
 
+def test_section_rejects_contradictory_wavelength_color_pairing():
+    package = _package_for_stage("select")
+    response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "A 520nm blue laser and a 450nm green laser are available. "
+        "Professionals should match the tool to the working distance,",
+    )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="contradictory wavelength and color pairing",
+    ):
+        parse_section_generation_response(response, package)
+
+
+def test_sequence_repairs_technical_consistency_once(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        safe = _response(package)
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            if target_attempts == 1:
+                return safe.replace(
+                    "Professionals should match the tool to the working distance,",
+                    "A 520nm blue laser and a 450nm green laser are available. "
+                    "Professionals should match the tool to the working distance,",
+                )
+        return safe
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["technical_consistency_retry_count"] == 1
+    assert result["evidence_strength_retry_count"] == 0
+    assert len(select_calls) == 2
+    assert "TECHNICAL CONSISTENCY REPAIR" in select_calls[1][1]
+    assert "520nm stated as blue instead of green" in select_calls[1][2]
+
+
 def test_section_authority_recommendation_requires_verified_quote_citation():
     sections, shadow = _setup()
     verify = next(item for item in sections["sections"] if item["reader_stage"] == "verify")

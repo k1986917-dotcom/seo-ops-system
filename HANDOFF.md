@@ -2,6 +2,54 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十五次普通 resume 完成，但独立质量验收拒绝 promotion
+
+- `be710d3` 已由本机推送并核验本地/远端一致；随后只执行一次普通
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing --ai-call-limit 36`，POST=1、
+  无外层重试、未 refresh、未 promotion。Runner 返回 success，生成 22 个 active 文件，
+  其中新增 resolved delivery、assembled draft/ledger、assembly report 和 comparison；
+  `ai_runs 190→206`，DB SHA 变为
+  `4a8246e8cd2d5ca7c4e70a657404a2c5a3d057431514cc03bad05da9c83047e9`。
+  正式 draft、claim ledger、w2-state、`.env`、Action 和 Git 均未变化；archive=1，
+  promotion manifest 不存在。
+- 旧 assembly/comparison 门禁报告 `blockers=[]`，并给出
+  `eligible_for_single_action_promotion`；MCP 独立阅读实际终态后拒绝 promotion：
+  1. assembled frontmatter 继承正式旧 metadata，Summary/SEO Description 含
+     `best` 与 `OSHA compliant options`，属于无 verified evidence 的推广/合规结论；
+  2. `section-7bb01ba089` 正文 S095 写成 `520nm blue laser / 450nm green laser`，颜色与
+     波长明确颠倒；该句未进入仅覆盖约 19.5% 句子的 claim ledger，因此 ledger 通过不能
+     代表全文事实正确；
+  3. 根因来自真实产品报告：B020 表格与 detail 的 Wavelength 都写成
+     `520nm blue / 450nm green`，但其 Features 又正确写成 `450nm blue / 520nm green`；
+     LP40 写成 `1064nm red laser`，而产品实际是 infrared beam + red positioning beam；
+     B303 原有 title 532nm 与 attribute 650nm 冲突继续存在。
+- 本次修复不编辑任何候选或正式文件，而是在三层 fail-closed：
+  1. 新增共享技术一致性模块，识别常见激光波长与颜色的确定性矛盾；产品 registry 将
+     这类内部矛盾记为 `wavelength_color_mismatch`，沿用现有
+     `product_attribute_conflict` 路径阻止自动链接与写作；
+  2. Section parser、checkpoint loader 和 output validator 都重新检查正文；冲突时只允许
+     一次 `TECHNICAL CONSISTENCY REPAIR`，只能基于干净 package 最小修正或删除无支持
+     细节。Pipeline 新增兼容可选计数 `section_technical_consistency_retries`；
+  3. Assembly metadata validator 拒绝 Summary/SEO Title/SEO Description 中未经支持的
+     authority/compliance 文案；Legacy metadata adapter 不再继承 `best`、`OSHA compliant`
+     等值，而使用中性 topic-derived fallback。Assembly audit 也对全文再次执行波长/颜色
+     矛盾硬门禁，防止绕过 section checkpoint。
+- 对 Action #3 做真实只读预检：B020、LP40、B303 均被判为 conflicted；目录仍有 15 个
+  product candidates，两个 required product section 各保留 2 个无冲突候选，最低产品链接
+  总数 2 仍可满足。当前候选为 B017USB/B016，fit_level=`related_catalog`；下轮必须核验
+  模型只把它们写成相关目录选项，不能声称适合、合规、安全或专为该场景设计。
+- 当前完整候选在新 validator 下已明确无效，首先被
+  `metadata.summary contains unsupported authority or compliance language` 拒绝；不能 promotion。
+- 验证：sectional 非 Web 201/201 passed；Legacy/W1b 非 Web 237/237 passed；Ruff lint、
+  新增/直接改动文件 format check、compileall、`git diff --check` passed。完整旧文件的
+  `ruff format --check` 会重排大量历史代码，未为本次修复制造无关格式 diff；已知 Web
+  `/etc/mime.types` Landlock 用例继续排除。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=206`，active=22，archive=1，
+  promotion manifest 不存在，正式四个 SHA 不变。由于 active root 已有完整终态，普通
+  `--resume-existing` 会被 runner 拒绝；提交并推送后，下一步必须只运行一次经审查的
+  `--resume-existing --refresh-complete --ai-call-limit 36`，归档这份不合格完整候选后重建。
+  不得第二次 runner、不得 promotion、不得手工编辑或删除 checkpoint。
+
 ## 2026-08-01 — 第十四次普通 resume：429 推进到内链占位符排版门禁
 
 - `a15d69b` 已由本机成功推送并核验本地/远端一致；随后只执行一次普通

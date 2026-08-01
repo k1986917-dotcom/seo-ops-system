@@ -267,6 +267,37 @@ def test_title_spec_conflict_is_detected_without_industry_specific_logic():
     ]
 
 
+def test_internal_wavelength_color_mismatch_is_a_product_conflict():
+    report = """# Products
+
+| SKU | Title | URL | Wavelength |
+|---|---|---|---|
+| B020 | Blue and Green Laser Series | https://example.com/b020 | 520nm blue laser/450nm green laser |
+
+### B020 — Blue and Green Laser Series
+- **Wavelength**: 520nm blue laser/450nm green laser
+- **Features**: 450nm blue laser and 520nm green laser variants
+"""
+    product = parse_product_registry(report)["candidates"][0]
+
+    assert product["attribute_conflicts"] == [
+        {
+            "field": "wavelength",
+            "reason_code": "wavelength_color_mismatch",
+            "wavelength_nm": 520,
+            "stated_color": "blue",
+            "expected_color": "green",
+        },
+        {
+            "field": "wavelength",
+            "reason_code": "wavelength_color_mismatch",
+            "wavelength_nm": 450,
+            "stated_color": "green",
+            "expected_color": "blue",
+        },
+    ]
+
+
 def test_inkjet_catalog_needs_no_laser_specific_columns():
     registry = parse_product_registry(INKJET_PRODUCTS)
 

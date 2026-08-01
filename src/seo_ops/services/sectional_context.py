@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from seo_ops.services.sectional_consistency import wavelength_color_conflicts
 from seo_ops.services.sectional_writing import (
     CONTRACT_VERSION,
     ContractValidationError,
@@ -393,6 +394,14 @@ def parse_product_registry(product_report: str) -> dict[str, Any]:
         }
         title_specs = _specs_by_unit(title)
         for key, value in merged.items():
+            conflicts.extend(
+                {
+                    "field": key,
+                    "reason_code": "wavelength_color_mismatch",
+                    **conflict,
+                }
+                for conflict in wavelength_color_conflicts(value)
+            )
             attribute_specs = _specs_by_unit(value)
             for unit in sorted(title_specs.keys() & attribute_specs.keys()):
                 if title_specs[unit].isdisjoint(attribute_specs[unit]):

@@ -13,6 +13,7 @@ from seo_ops.services.sectional_assembly import (
     audit_sectional_delivery,
     load_sectional_assembly,
     persist_sectional_assembly,
+    validate_assembly_metadata,
 )
 
 
@@ -289,6 +290,56 @@ def test_advisory_link_ratios_never_force_missing_links():
         or item["code"] == "main_h2_count_outside_recommended_range"
         for item in audit["warnings"]
     )
+
+
+def test_metadata_rejects_unsupported_compliance_language():
+    metadata = _metadata()
+    metadata["seo_description"] = (
+        "Compare professional ceiling marking tools for worksite teams, including "
+        "OSHA compliant options, practical requirements, product details, and selection."
+    )
+    assert 150 <= len(metadata["seo_description"]) <= 160
+
+    with pytest.raises(
+        SectionAssemblyError,
+        match="unsupported authority or compliance language",
+    ):
+        validate_assembly_metadata(metadata)
+
+
+def test_wavelength_color_mismatch_is_an_assembly_blocker():
+    delivery = _build_delivery()
+    body_section = next(
+        item for item in delivery["sections"] if item["unit_kind"] == "body_section"
+    )
+    body_section["markdown"] += (
+        "\n\nA 520nm blue laser and a 450nm green laser are contradictory labels."
+    )
+    body_section["markdown_sha256"] = _sha(body_section["markdown"])
+    delivery["draft_markdown"] = (
+        "\n\n".join(item["markdown"].strip() for item in delivery["sections"]).strip() + "\n"
+    )
+    delivery["draft_sha256"] = _sha(delivery["draft_markdown"])
+    authoritative = seo_common.extract_draft_sentences(delivery["draft_markdown"])
+    records = []
+    cursor = 0
+    for section in delivery["sections"]:
+        local = seo_common.extract_draft_sentences(section["markdown"])
+        section["sentence_ids"] = []
+        for item in local:
+            expected = authoritative[cursor]
+            assert item["text"] == expected["text"]
+            section["sentence_ids"].append(expected["sentence_id"])
+            records.append({**expected, "section_id": section["section_id"]})
+            cursor += 1
+    delivery["sentences"] = records
+    delivery["delivery_sha256"] = _digest(
+        {key: value for key, value in delivery.items() if key != "delivery_sha256"}
+    )
+
+    audit = audit_sectional_delivery(delivery, _metadata())
+
+    assert "wavelength_color_mismatch" in {item["code"] for item in audit["blockers"]}
 
 
 def test_duplicate_product_target_is_a_hard_blocker():

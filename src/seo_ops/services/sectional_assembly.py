@@ -23,6 +23,10 @@ from data_sources.modules.seo_config import (
     LINK_RATIO_EXTERNAL,
     LINK_RATIO_PRODUCT,
 )
+from seo_ops.services.sectional_consistency import (
+    contains_unsafe_metadata_compliance_claim,
+    wavelength_color_conflicts,
+)
 from seo_ops.services.sectional_delivery import (
     sectional_link_hard_caps,
     validate_resolved_delivery,
@@ -172,6 +176,15 @@ def validate_assembly_metadata(
     )
     if not 150 <= len(seo_description) <= 160:
         raise SectionAssemblyError("metadata.seo_description must be 150-160 characters")
+    for field, value in (
+        ("summary", summary),
+        ("seo_title", seo_title),
+        ("seo_description", seo_description),
+    ):
+        if contains_unsafe_metadata_compliance_claim(value):
+            raise SectionAssemblyError(
+                f"metadata.{field} contains unsupported authority or compliance language"
+            )
     seo_keywords = _validate_string_list(
         metadata.get("seo_keywords"),
         "metadata.seo_keywords",
@@ -358,6 +371,15 @@ def audit_sectional_delivery(
     blockers: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
     body = resolved["draft_markdown"]
+    technical_conflicts = wavelength_color_conflicts(_visible_text(body))
+    blockers.extend(
+        _issue(
+            "wavelength_color_mismatch",
+            f"{item['wavelength_nm']}nm stated as {item['stated_color']} "
+            f"instead of {item['expected_color']}",
+        )
+        for item in technical_conflicts
+    )
     words = _word_count(body)
     target = meta["target_words"]
     if words < target["min"]:
