@@ -84,8 +84,10 @@ _AUTHORITY_ATTRIBUTION_TERM = re.compile(
 _SAFETY_ABSOLUTE_TERM = re.compile(
     r"\b(?:eye[- ]safe|safe\s+for\s+accidental\s+eye\s+exposure|"
     r"prevents?\s+retinal\s+damage|cannot\s+cause\s+eye\s+injury|"
-    r"no\s+risk\s+of\s+eye\s+injury)\b",
-    re.IGNORECASE,
+    r"no\s+risk\s+of\s+eye\s+injury|generally\s+(?:considered\s+)?safe|"
+    r"safe(?:r|st)?\s+(?:option|choice|class|laser)|"
+    r"blink\s+(?:reflex|response).{0,80}(?:protect|protection|prevent))\b",
+    re.IGNORECASE | re.DOTALL,
 )
 _TECHNICAL_CHOICE_TERM = re.compile(
     r"\b(?:class\s*(?:1|2|2m|3r|3a|3b|4)|\d{3,4}\s*nm|laser\s+class)\b",
@@ -240,7 +242,9 @@ def _unverified_support_is_unsafe_for_writing(candidate: dict[str, Any]) -> bool
     return bool(
         _TECHNICAL_CHOICE_TERM.search(support)
         and re.search(
-            r"\b(?:safe|safer|safest|recommended|compliant|acceptable|approved)\b",
+            r"\b(?:safe|safer|safest|recommended|compliant|acceptable|approved|"
+            r"preferred|suitable|practical\s+choice|balanced\s+choice|"
+            r"most\s+balanced|works?\s+better)\b",
             support,
             re.IGNORECASE,
         )
@@ -288,8 +292,8 @@ def _writing_safe_evidence_context(
     return filtered_gate, safe
 
 
-def _authority_neutral_contract_text(value: str) -> str:
-    """Remove named-authority direction from model-facing contract prose."""
+def _evidence_neutral_contract_text(value: str) -> str:
+    """Remove unsupported authority and winner-selection direction from model prose."""
     text = str(value or "")
     text = re.sub(
         r"\bHow\s+to\s+Verify\s+"
@@ -308,6 +312,28 @@ def _authority_neutral_contract_text(value: str) -> str:
     text = re.sub(
         r"\bWhat\s+(?:OSHA|FDA|EPA|FTC|CDC|NIOSH)\s+Says\s+About\b",
         "How to Verify Applicable Requirements for",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?P<left>Class\s*[1-4](?:R|M|A|B)?)\s+vs\.?\s+"
+        r"(?P<right>Class\s*[1-4](?:R|M|A|B)?)\s*[—–:-]\s*"
+        r"Which\s+Laser\s+Class\s+Works\s+for\s+(?P<context>[^?]+)\?",
+        r"How to Compare \g<left> and \g<right> for \g<context>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bWhy\s+(?P<subject>.+?)\s+Is\s+(?:A|An|The)\s+"
+        r"(?:Practical|Best|Safest|Only|Go-to)\s+Choice\s+for\s+"
+        r"(?P<context>.+?)(?=\s+after\s+validating|\s*$|[?.])",
+        r"How to Evaluate \g<subject> for \g<context>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bAnswer\s+How\s+to\s+(Compare|Evaluate)\b",
+        r"Explain how to \1",
         text,
         flags=re.IGNORECASE,
     )
@@ -403,7 +429,7 @@ def build_section_generation_package(
     has_verified_quote = any(
         item.get("support_basis") == "verified_quote" for item in evidence_candidates
     )
-    model_text = (lambda value: value) if has_verified_quote else _authority_neutral_contract_text
+    model_text = (lambda value: value) if has_verified_quote else _evidence_neutral_contract_text
 
     package = {
         "version": CONTRACT_VERSION,
@@ -511,7 +537,12 @@ def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
         "Administration, any regulator, or any named authority. Do not claim that an "
         "authority publishes, issues, sets, governs, defines, requires, permits, "
         "prohibits, recommends, warns, approves, or enforces anything. The exact H2 "
-        "may contain an authority name; do not repeat that name below the H2. Explain "
+        "may contain an authority name; do not repeat that name below the H2. Do not "
+        "claim that one laser class, wavelength, output level, or product is safe, "
+        "safer, safest, generally safe, compliant, acceptable, preferred, best, more "
+        "suitable, a practical or balanced choice, or protected by a blink reflex or "
+        "blink response. If the section compares options, explain only how to compare "
+        "and verify them from the supplied support; do not choose a winner. Explain "
         "only neutral verification steps, employer/site procedures, labels, hazard "
         "assessment, training, and operational controls supported by the package."
         if not verified_ids
@@ -588,7 +619,9 @@ def _contains_strong_evidence_claim(text: str) -> bool:
     if _SAFETY_ABSOLUTE_TERM.search(clean):
         return True
     if _TECHNICAL_CHOICE_TERM.search(clean) and re.search(
-        r"\b(?:recommended|compliant|acceptable|approved|should\s+stick)\b",
+        r"\b(?:recommended|compliant|acceptable|approved|should\s+stick|preferred|"
+        r"suitable|practical\s+choice|balanced\s+choice|most\s+balanced|"
+        r"works?\s+better)\b",
         clean,
         re.IGNORECASE,
     ):
@@ -734,8 +767,12 @@ def _build_section_repair_prompt(
         "warns, requires, permits, prohibits, allows, recommends, approves, enforces, "
         "or regulates anything. Do not name OSHA, FDA, EPA, FTC, CDC, NIOSH, the "
         "Occupational Safety and Health Administration, a regulator, or an agency in "
-        "body paragraphs. The exact H2 may retain an authority name. Replace all body "
-        "attribution with neutral verification steps and site-specific safety controls."
+        "body paragraphs. Do not say that a class, wavelength, output level, or product "
+        "is safe, safer, generally safe, compliant, acceptable, preferred, best, more "
+        "suitable, a practical or balanced choice, or protected by a blink response. "
+        "The exact H2 may retain an authority name. Replace all body attribution and "
+        "winner-selection language with neutral verification steps and site-specific "
+        "safety controls."
         if not verified_ids
         else "Only the listed source-verified evidence IDs may support a direct authority attribution: "
         + ", ".join(verified_ids)
@@ -770,7 +807,7 @@ def _build_section_repair_prompt(
 
 def _build_authority_free_repair_prompt(
     package: dict[str, Any],
-    response_text: str,
+    _response_text: str,
     error: SectionGenerationError,
 ) -> dict[str, str] | None:
     """Build one final bounded repair when zero verified quotes remain."""
@@ -778,27 +815,26 @@ def _build_authority_free_repair_prompt(
     if not error_text.startswith(_EVIDENCE_OVERSTATEMENT_ERROR) or _verified_quote_ids(package):
         return None
     base = build_section_generation_prompt(package)
-    offending = error_text.removeprefix(_EVIDENCE_OVERSTATEMENT_ERROR).lstrip(": ")
     system = (
         base["system"] + "\nFINAL AUTHORITY-FREE REPAIR. Keep the exact H2, but after that H2 the "
         "body must contain none of these names or labels: OSHA, Occupational Safety "
         "and Health Administration, FDA, EPA, FTC, CDC, NIOSH, regulator, agency. "
         "Do not discuss what any authority publishes, governs, requires, permits, "
-        "prohibits, recommends, warns, approves, or enforces. Write the body as a "
-        "practical checklist for checking current federal, state, employer, and site "
-        "requirements, reading the product label, documenting a hazard assessment, "
-        "training workers, and applying operational controls. Use no new facts."
+        "prohibits, recommends, warns, approves, or enforces. Do not say that a laser "
+        "class, wavelength, output level, or product is safe, safer, safest, generally "
+        "safe, compliant, acceptable, preferred, best, more suitable, a practical or "
+        "balanced choice, or protected by a blink reflex or blink response. For a "
+        "comparison section, describe only a non-conclusive evaluation process using "
+        "the supplied support; do not select a winner. Use no new facts."
     )
     user = (
         base["user"]
         + "\n\nFINAL AUTHORITY-FREE REPAIR\n"
-        + "The previous evidence-strength repair still contained prohibited authority "
-        "language. Rewrite the complete response from scratch. Preserve only supported "
-        "facts and approved placeholders. Do not copy or paraphrase the offending "
-        "authority statement.\n\nSERVER-DETECTED OFFENDING PASSAGE\n"
-        + offending
-        + "\n\nPREVIOUS REPAIRED RESPONSE\n"
-        + response_text
+        + "The previous attempts contained unsupported authority, safety, compliance, "
+        "or winner-selection language. Rewrite the complete response from scratch "
+        "using only the clean section package above. Preserve only supported facts and "
+        "approved placeholders. Do not reuse any prose from either previous response. "
+        "Return the complete two-block response again."
     )
     return {"system": system, "user": user}
 

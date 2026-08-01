@@ -222,6 +222,7 @@ def test_generation_prompt_contains_protocol_but_not_full_registry():
     assert "set reason_code to used_approved_candidate" in prompt["system"]
     assert "This package has zero source-verified quotes" in prompt["system"]
     assert "do not name OSHA" in prompt["system"]
+    assert "do not choose a winner" in prompt["system"]
     assert package["section_id"] in prompt["user"]
     assert "catalog_data_issues" not in prompt["user"]
 
@@ -285,6 +286,51 @@ def test_zero_verified_quotes_remove_named_authority_from_model_contract():
     assert "This package has zero source-verified quotes" not in verified_prompt["system"]
 
 
+def test_zero_verified_quotes_neutralize_technical_winner_contracts():
+    bundle = build_contract_bundle(
+        topic="Ceiling Pointing Guide",
+        tier="Cluster Content",
+        intent="Compare laser options without unsupported safety conclusions.",
+        outline=[
+            "Class 2 vs Class 3R — Which Laser Class Works for Above-Ceiling Pointing?",
+            "Why Green (532nm) Is A Practical Choice for Ceiling Pointing",
+        ],
+    )
+    registry = build_candidate_registry(
+        internal_links_map=ARTICLES,
+        product_report=PRODUCTS,
+        evidence_cards=EVIDENCE,
+    )
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        registry,
+    )
+    packages = [
+        build_section_generation_package(
+            bundle["section_contracts"],
+            shadow["section_link_contracts"],
+            shadow["context_manifest"],
+            section_id,
+        )
+        for section_id in bundle["section_contracts"]["section_order"]
+    ]
+
+    assert packages[0]["heading"] == (
+        "How to Compare Class 2 and Class 3R for Above-Ceiling Pointing"
+    )
+    assert packages[1]["heading"] == "How to Evaluate Green (532nm) for Ceiling Pointing"
+    model_contract = json.dumps(packages, ensure_ascii=False)
+    assert "Which Laser Class Works" not in model_contract
+    assert "A Practical Choice" not in model_contract
+    assert "How to Compare Class 2 and Class 3R" in packages[0]["section_goal"]
+    assert "How to Evaluate Green (532nm)" in packages[1]["section_goal"]
+    assert all(
+        "do not choose a winner" in build_section_generation_prompt(package)["system"]
+        for package in packages
+    )
+
+
 def test_writing_context_filters_unverified_strong_support_without_relaxing_gate():
     gate = {
         "candidate_count": 2,
@@ -328,6 +374,45 @@ def test_writing_context_filters_unverified_strong_support_without_relaxing_gate
         }
     ]
     assert gate["selected_ids"] == ["ev_unsafe", "ev_safe"]
+
+
+def test_writing_context_filters_blink_response_safety_claim():
+    gate = {
+        "candidate_count": 2,
+        "max_allowed": 2,
+        "min_required": 1,
+        "opportunity_state": "required",
+        "reason_code": "required_or_verification_evidence",
+        "rejected": [],
+        "selected_ids": ["ev_blink", "ev_process"],
+    }
+    candidates = [
+        {
+            "candidate_id": "ev_blink",
+            "evidence_id": "ev_blink",
+            "support": (
+                "Class 2 lasers are generally considered safe because the natural "
+                "blink response offers protection."
+            ),
+            "support_basis": "key_finding",
+        },
+        {
+            "candidate_id": "ev_process",
+            "evidence_id": "ev_process",
+            "support": "Compare the product label with the documented site procedure.",
+            "support_basis": "key_finding",
+        },
+    ]
+
+    filtered_gate, safe = _writing_safe_evidence_context(
+        gate,
+        candidates,
+        section_id="section-compare",
+    )
+
+    assert [item["evidence_id"] for item in safe] == ["ev_process"]
+    assert filtered_gate["selected_ids"] == ["ev_process"]
+    assert filtered_gate["min_required"] == 1
 
 
 def test_writing_context_keeps_source_verified_strong_support():
@@ -1049,6 +1134,9 @@ def test_sequence_reports_section_identity_when_evidence_repair_still_fails(tmp_
     assert "EVIDENCE STRENGTH REPAIR" in calls[1][1]
     assert "FINAL AUTHORITY-FREE REPAIR" in calls[2][1]
     assert "body must contain none of these names" in calls[2][0]
+    assert "do not select a winner" in calls[2][0]
+    assert "PREVIOUS REPAIRED RESPONSE" not in calls[2][1]
+    assert "OSHA recommends Class 3R" not in calls[2][1]
 
 
 def test_sequence_uses_final_authority_free_repair_before_stopping(tmp_path):
@@ -1102,6 +1190,36 @@ def test_section_authority_recommendation_requires_verified_quote_citation():
         match="source-verified quote evidence",
     ):
         parse_section_generation_response(response, package)
+
+    blink_response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "Class 2 lasers are generally considered safe because the natural blink "
+        "response offers protection. Professionals should match the tool to the "
+        "working distance,",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="source-verified quote evidence",
+    ):
+        parse_section_generation_response(blink_response, package)
+
+    practical_choice_response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "Class 3R is a practical choice for this task. Professionals should match "
+        "the tool to the working distance,",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="source-verified quote evidence",
+    ):
+        parse_section_generation_response(practical_choice_response, package)
+
+    neutral_process_response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "The practical choice depends on visibility, handling, and the surrounding "
+        "work area. Professionals should match the tool to the working distance,",
+    )
+    assert parse_section_generation_response(neutral_process_response, package)
 
     unverified_manifest = copy.deepcopy(shadow["context_manifest"])
     for candidate in unverified_manifest["registry"]["evidence"]["candidates"]:

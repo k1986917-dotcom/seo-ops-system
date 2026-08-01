@@ -1,3 +1,32 @@
+## 2026-08-01 — Neutralize unsupported technical winner selection
+
+### 第十三次真实 resume
+
+- `97f6f6e` 推送后只运行一次普通 resume，POST=1、无外层重试、未 refresh/promotion。
+- 901 与 049 成功持久化；流程推进到 429。该节的初稿与两次受控修订仍写出 Class 2
+  “generally considered safe / blink response offers protection”，因此 fail-closed。
+- 正式 pair 与 Action 不变；`ai_runs 183→188`，active 仍为 17 个中间文件，archive=1。
+
+### 根因与修复
+
+- 零 verified quote 的输入虽已去除 named authority，429 合同仍要求模型回答
+  `Which Laser Class Works...`，2d96 仍预设 532nm 是 `A Practical Choice`；这会强迫模型
+  给出安全、合规或技术赢家结论。
+- 模型合同现改成非结论式 `How to Compare...` / `How to Evaluate...`，稳定 section ID
+  不变；初稿和修订禁止为 class、波长、输出或产品下安全/合规/优选结论。
+- Evidence-strength validator 新增 blink-response safety 与技术选择识别；中性表达
+  `the practical choice depends on...` 不阻断，避免通用比较说明误报。
+- 最终 authority-free 修订不再携带失败正文，只从干净 package 重新生成，阻断污染复制。
+
+### 验证
+
+- Action #3 六个 package 只读重建：429=`How to Compare Class 2 and Class 3R...`，
+  2d96=`How to Evaluate Green (532nm)...`；forbidden payload/support 均为空，required
+  citation minima 保持。
+- Sectional 非 Web 组合 193 passed；Legacy/W1b 非 Web 237 passed；Ruff、format、
+  compileall、`git diff --check` passed。
+- 唯一排除项为已知 MCP Landlock Web 导入限制：`openpyxl` 无法读取 `/etc/mime.types`。
+
 ## 2026-08-01 — Preflight the full authority-free generation chain
 
 ### 第十二次真实 resume

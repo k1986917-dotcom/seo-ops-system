@@ -2,6 +2,41 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十三次普通 resume：从机构归因推进到技术等级结论
+
+- `97f6f6e` 已由本机成功推送并核验本地/远端一致；随后只执行一次普通
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing --ai-call-limit 36`，POST=1、
+  无外层重试、未 refresh、未 promotion。正式 draft、claim ledger、w2-state、`.env` 和
+  Action 全部不变；`ai_runs 183→188`，DB SHA 变为
+  `51fb5e32d286a642bccea06142d6106354e1a895e05beb6d4982c8e1586dcbb0`。
+- 901 与 049 已在新 authority-free 合同下成功生成并持久化；049 的模型 H2 正确变为
+  `How to Verify Applicable Laser Requirements...`。真实停止点推进到
+  `section-42931f5db4`：旧合同仍问 `Which Laser Class Works...`，模型在初稿、普通修订和
+  authority-free 修订中继续写出 Class 2 “generally considered safe / blink response offers
+  protection”等无 verified quote 支撑的安全与技术选择结论。429 失败输出未持久化，后 3
+  节未到达；active root、archive 和 promotion 状态均保持安全。
+- MCP 独立确认根因不是机构名残留，而是零 verified quote 时仍给模型“选出更适合的技术
+  等级/波长”的任务，并在最终修订中重新附带失败正文，持续诱导复制错误结论。本次在
+  合同层统一修复：
+  1. `Class 2 vs Class 3R — Which Laser Class Works...` 改为
+     `How to Compare Class 2 and Class 3R...`；
+  2. `Why Green (532nm) Is A Practical Choice...` 改为
+     `How to Evaluate Green (532nm)...`；稳定 section ID 均不变；
+  3. 零 verified quote 的初稿与两级修订明确禁止为 class、波长、输出或产品下安全、合规、
+     preferred/best/practical/balanced 等结论，也禁止用 blink reflex/response 证明安全；
+  4. 最终 authority-free 修订只接收干净 package，不再回灌前两次失败正文；
+  5. validator 新增对 `generally considered safe`、blink-protection 和技术对象选择结论的
+     严格识别，同时保留中性句式 `the practical choice depends on...`，避免误报。
+- 对真实 Action #3 的 6 个模型 package 做只读预检：429 H2 为
+  `How to Compare Class 2 and Class 3R for Above-Ceiling Pointing`，2d96 H2 为
+  `How to Evaluate Green (532nm) for Ceiling Pointing`；全部 forbidden payload hits=[]、
+  unsafe support IDs=[]，authority-free rule 生效，required citation minima 未降低。
+- 回归：sectional 非 Web 组合 193 项通过；Legacy/W1b 非 Web 237 项通过；Ruff、format、
+  compileall、`git diff --check` 通过。唯一未执行的 Web 测试仍是 MCP Landlock 阻止
+  `openpyxl -> /etc/mime.types` 的已知环境限制，不是业务回归。
+- 下一步：推送本次新提交；核验真实基线后只运行一次普通 `--resume-existing`。继续禁止
+  `--refresh-complete`、第二次 runner、promotion、rollback 和手工修改 checkpoint。
+
 ## 2026-08-01 — 第十二次普通 resume 后改为整链路预检与双层受控修订
 
 - `f993868` 推送并由 MCP 独立核验后，本机只执行一次普通

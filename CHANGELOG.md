@@ -39,6 +39,14 @@
 
 ### Fixed
 
+- Zero-verified-quote sectional contracts now neutralize unsupported technical
+  winner selection as well as named-authority attribution. Prompts such as
+  `Which Laser Class Works...` and `...Is A Practical Choice...` become
+  non-conclusive compare/evaluate tasks while preserving stable section IDs.
+  The validator now catches unsupported blink-response safety claims and
+  class/wavelength preference conclusions, but still permits neutral language
+  such as “the practical choice depends on...”. The final bounded repair uses
+  only the clean package and no longer feeds failed prose back to the model.
 - Sectional generation now performs an authority-free preflight whenever a
   section has no source-verified quote. Named authorities are removed from the
   model-facing contract and prior-summary context, the initial prompt prohibits
