@@ -223,6 +223,10 @@ def build_shadow_comparison(
         kind: sum(1 for item in assembly["delivery"]["bindings"] if item["kind"] == kind)
         for kind in ("article", "product", "external_citation")
     }
+    product_provenance = assembly["audit"]["metrics"].get("product_provenance", [])
+    new_metrics["product_provenance_count"] = (
+        len(product_provenance) if isinstance(product_provenance, list) else 0
+    )
     blockers: list[str] = []
     if assembly["audit"]["blockers"]:
         blockers.append("new_assembly_has_gate_blockers")
@@ -230,6 +234,8 @@ def build_shadow_comparison(
         blockers.append("duplicate_sentence_regression")
     if new_metrics["claim_coverage_ratio"] < old_metrics["claim_coverage_ratio"]:
         blockers.append("claim_coverage_regression")
+    if new_metrics["product_provenance_count"] != new_metrics["binding_counts"]["product"]:
+        blockers.append("product_copy_provenance_missing")
     if metrics["empty_response_count"]:
         blockers.append("empty_ai_response_observed")
     if metrics["retry_count"] > 2:
@@ -250,8 +256,7 @@ def build_shadow_comparison(
                 6,
             ),
             "duplicate_sentence_count": (
-                new_metrics["duplicate_sentence_count"]
-                - old_metrics["duplicate_sentence_count"]
+                new_metrics["duplicate_sentence_count"] - old_metrics["duplicate_sentence_count"]
             ),
         },
         "run_metrics": metrics,
@@ -363,14 +368,7 @@ def _ensure_workspace_path(workspace: Path, path: Path) -> Path:
 
 
 def _next_promotion_root(workspace: Path, slug: str, action_id: int) -> Path:
-    base = (
-        Path(workspace)
-        / "drafts"
-        / "sectional"
-        / slug
-        / "promotions"
-        / f"action-{action_id}"
-    )
+    base = Path(workspace) / "drafts" / "sectional" / slug / "promotions" / f"action-{action_id}"
     base.mkdir(parents=True, exist_ok=True)
     existing = [
         int(item.name.split("-")[-1])
@@ -523,10 +521,9 @@ def promote_sectional_assembly(
         try:
             _atomic_write(
                 manifest_path,
-                (
-                    json.dumps(promoted, ensure_ascii=False, indent=2, sort_keys=True)
-                    + "\n"
-                ).encode("utf-8"),
+                (json.dumps(promoted, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+                    "utf-8"
+                ),
             )
         except Exception:
             _replace_pair_transactionally(draft_path, old_draft, claim_path, old_claim)
@@ -551,9 +548,7 @@ def validate_promotion_manifest(manifest: Any) -> dict[str, Any]:
     slug = manifest.get("slug")
     if not isinstance(slug, str) or not _SLUG.fullmatch(slug):
         raise SectionalRolloutError("promotion manifest slug is invalid")
-    workspace_root = Path(
-        _clean_text(manifest.get("workspace_root"), "workspace_root")
-    ).resolve()
+    workspace_root = Path(_clean_text(manifest.get("workspace_root"), "workspace_root")).resolve()
     if not workspace_root.is_absolute():
         raise SectionalRolloutError("promotion manifest workspace_root must be absolute")
     for field in (
@@ -600,9 +595,7 @@ def rollback_sectional_promotion(manifest_path: Path) -> dict[str, Any]:
     try:
         path.resolve().relative_to(workspace_root)
     except ValueError as exc:
-        raise SectionalRolloutError(
-            "promotion manifest path is outside the workspace"
-        ) from exc
+        raise SectionalRolloutError("promotion manifest path is outside the workspace") from exc
     if manifest["status"] != "promoted":
         raise SectionalRolloutError("promotion has already been rolled back")
     draft_path = Path(manifest["formal_draft_path"])

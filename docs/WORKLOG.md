@@ -1,3 +1,35 @@
+## 2026-08-02 — Natural laser product copy and deterministic catalog provenance
+
+- 首次完整 Shadow 的结构门禁已通过，但人工内容审查发现三个自动门禁缺口：B025 产品句
+  展示 `1.5W` 并称为 `ceiling-focused`；未核验 quote 被直接引用或包装成“某人指出”；
+  产品链接句没有机器可验证的目录 provenance。根据商业要求，本轮不把高功率与 Class
+  讨论判定为商品冲突，而是让产品文案自然省略这些字段。
+- `laserpointerhub` 站点配置新增：
+  - `product_copy_instruction`：产品句不写 wattage/output、laser class、安全、合规、认证、
+    hazard，也不解释这些字段为什么被省略；
+  - `product_copy_suppressed_patterns`：模型写作上下文中的商品 title/attributes/variant 先
+    脱敏，但完整 registry 保持不变，用于排序和机器审计；
+  - 高功率政策仍为 `neutral_for_ranking_and_never_an_exclusion`。
+- Section generation 新增两类确定性内容 gate：
+  1. `quote`/`key_finding` evidence 不能以直接引号或 `said/noted/wrote` 归因式转述发布，
+     只有 `verified_quote` 可逐字引用；
+  2. 产品句不能包含站点抑制字段，也不能杜撰 `ceiling-focused`、`designed for construction`
+     等目录未声明的精确用途。
+  两类错误均有一次最小 `content_provenance` repair 与一次 clean final repair，调用上限和
+  全部既有 gate 不变；新增 `section_content_provenance_retries`。
+- Phase 4 PRODUCT binding 增加服务器生成的 `catalog_provenance`（catalog title、facts、
+  可重算 SHA）。Phase 5 audit 将产品 URL 映射到唯一 canonical sentence，并记录
+  candidate/product/section/sentence/catalog SHA/fact keys。目录 facts 被篡改但未同步内层
+  SHA 时，resolved delivery 即使重算外层 SHA 也会失败。
+- Comparison 增加 `product_provenance_count`；若与 product binding 数不一致，加入
+  `product_copy_provenance_missing` blocker。
+- Action #3 只读 checkpoint 复核：901/049 可恢复；429/7bb/b92 自动失效，无手工删除或
+  修改。active root 当前仍有完整终态候选，因此下次真实运行必须使用一次
+  `--resume-existing --refresh-complete --ai-call-limit 36` 原子归档后继续，禁止普通 resume
+  直接覆盖、二次 POST 或 promotion。
+- 验证：Sectional 非 Web `240 passed`（排除 1 个已知 MCP Landlock Web 路由用例）；
+  Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、`git diff --check` 通过。
+
 ## 2026-08-02 — Route post-format word-count misses to a bounded final repair
 
 - 推送 `49d4c51` 后执行一次普通 resume：901/049/429/2d/7bb resumed；b92 因新 7bb summary

@@ -191,6 +191,32 @@ def _markdown_digest(markdown: str) -> str:
     return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
 
+def _product_catalog_provenance(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Return compact server-owned catalog provenance for one bound product."""
+
+    merged = candidate.get("attributes", {}).get("merged", {})
+    facts: dict[str, str] = {}
+    if isinstance(merged, dict):
+        for key in sorted(merged):
+            value = merged[key]
+            if not isinstance(key, str) or not isinstance(value, str) or not value.strip():
+                continue
+            facts[key] = " ".join(value.split())[:240]
+            if len(facts) >= 12:
+                break
+    source = {
+        "candidate_id": str(candidate.get("candidate_id") or ""),
+        "product_id": str(candidate.get("product_id") or ""),
+        "title": str(candidate.get("title") or ""),
+        "catalog_facts": facts,
+    }
+    return {
+        "catalog_sha256": _json_digest(source),
+        "catalog_title": source["title"],
+        "catalog_facts": facts,
+    }
+
+
 def _registry_indexes(registry: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
     validated = validate_candidate_registry(registry)
     return {
@@ -472,6 +498,7 @@ def resolve_section_placeholders(
                         "product_id": candidate.get("product_id", ""),
                         "anchor": record["anchor"],
                         "url": candidate["url"],
+                        "catalog_provenance": _product_catalog_provenance(candidate),
                     }
                 )
 
@@ -668,6 +695,41 @@ def validate_resolved_delivery(delivery: Any) -> dict[str, Any]:
                 raise SectionDeliveryError("resolved binding is not represented in Markdown")
             if url not in markdown:
                 raise SectionDeliveryError("resolved binding URL is missing from Markdown")
+            if binding.get("kind") == "product":
+                _clean_text(binding.get("product_id"), "resolved product binding product_id")
+                provenance = binding.get("catalog_provenance")
+                if not isinstance(provenance, dict) or set(provenance) != {
+                    "catalog_sha256",
+                    "catalog_title",
+                    "catalog_facts",
+                }:
+                    raise SectionDeliveryError(
+                        "resolved product binding catalog provenance is invalid"
+                    )
+                if not _SHA256.fullmatch(str(provenance.get("catalog_sha256") or "")):
+                    raise SectionDeliveryError("resolved product binding catalog SHA is invalid")
+                facts = provenance.get("catalog_facts")
+                if not isinstance(facts, dict) or any(
+                    not isinstance(key, str) or not key or not isinstance(value, str) or not value
+                    for key, value in facts.items()
+                ):
+                    raise SectionDeliveryError("resolved product binding catalog facts are invalid")
+                catalog_title = _clean_text(
+                    provenance.get("catalog_title"),
+                    "resolved product binding catalog title",
+                )
+                expected_catalog_sha = _json_digest(
+                    {
+                        "candidate_id": candidate_id,
+                        "product_id": binding["product_id"],
+                        "title": catalog_title,
+                        "catalog_facts": facts,
+                    }
+                )
+                if provenance["catalog_sha256"] != expected_catalog_sha:
+                    raise SectionDeliveryError(
+                        "resolved product binding catalog provenance SHA mismatch"
+                    )
             flattened_bindings.append(
                 {
                     "section_id": section["section_id"],

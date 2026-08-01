@@ -118,6 +118,8 @@ def test_shadow_comparison_is_deterministic_and_persists(tmp_path):
 
     assert report["recommendation"] == "eligible_for_single_action_promotion"
     assert report["blockers"] == []
+    assert report["new"]["binding_counts"]["product"] == 1
+    assert report["new"]["product_provenance_count"] == 1
     assert report["run_metrics"]["completion_tokens"] is None
     assert report["run_metrics"]["completion_tokens_known"] is False
     assert report == build_shadow_comparison(
@@ -129,12 +131,15 @@ def test_shadow_comparison_is_deterministic_and_persists(tmp_path):
         run_metrics={"ai_calls": 8, "prompt_chars": 24000},
     )
     path = persist_shadow_comparison(tmp_path, "ceiling-marking", report)
-    assert load_shadow_comparison(
-        tmp_path,
-        "ceiling-marking",
-        3,
-        expected_report_sha256=report["report_sha256"],
-    ) == report
+    assert (
+        load_shadow_comparison(
+            tmp_path,
+            "ceiling-marking",
+            3,
+            expected_report_sha256=report["report_sha256"],
+        )
+        == report
+    )
     Path(path).write_text("{}", encoding="utf-8")
     assert load_shadow_comparison(tmp_path, "ceiling-marking", 3) is None
 
@@ -172,12 +177,14 @@ def test_comparison_rejects_old_ledger_mismatch_and_detects_regression():
 
     old_with_claim = copy.deepcopy(old_ledger)
     sentence = assembly["delivery"]["sentences"][0]
-    old_with_claim["claims"] = [{
-        "sentence_id": sentence["sentence_id"],
-        "claim_text": sentence["text"],
-        "claim_type": "general",
-        "evidence_ids": ["ev-old"],
-    }]
+    old_with_claim["claims"] = [
+        {
+            "sentence_id": sentence["sentence_id"],
+            "claim_text": sentence["text"],
+            "claim_type": "general",
+            "evidence_ids": ["ev-old"],
+        }
+    ]
     report = build_shadow_comparison(
         action_id=3,
         topic=assembly["topic"],
@@ -396,12 +403,7 @@ def test_promotion_restores_pair_when_final_manifest_write_fails(tmp_path, monke
     assert draft_path.read_bytes() == old_draft_bytes
     assert claim_path.read_bytes() == old_claim_bytes
     promotion_base = (
-        tmp_path
-        / "drafts"
-        / "sectional"
-        / "ceiling-marking"
-        / "promotions"
-        / "action-3"
+        tmp_path / "drafts" / "sectional" / "ceiling-marking" / "promotions" / "action-3"
     )
     assert list(promotion_base.glob("promotion-*")) == []
 

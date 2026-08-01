@@ -26,6 +26,7 @@ from seo_ops.services.sectional_delivery import (
     run_section_claim_ledger_sequence,
     section_ledger_checkpoint_path,
     sectional_link_hard_caps,
+    validate_resolved_delivery,
 )
 from seo_ops.services.sectional_generation import (
     FRAME_CONCLUSION_MARKER,
@@ -308,7 +309,37 @@ def test_resolve_placeholders_binds_registry_urls_and_assigns_global_sentences()
     assert all(item["sentence_ids"] for item in delivery["sections"])
     assert any(item["kind"] == "product" for item in delivery["bindings"])
     assert any(item["kind"] == "external_citation" for item in delivery["bindings"])
+    product_binding = next(item for item in delivery["bindings"] if item["kind"] == "product")
+    assert len(product_binding["catalog_provenance"]["catalog_sha256"]) == 64
+    assert product_binding["catalog_provenance"]["catalog_facts"]
     assert delivery["topic"] == shadow["context_manifest"]["topic"]
+
+
+def test_resolved_delivery_rejects_tampered_product_catalog_provenance():
+    _, _, _, delivery = _setup()
+    tampered = copy.deepcopy(delivery)
+    product_binding = next(item for item in tampered["bindings"] if item["kind"] == "product")
+    product_binding["catalog_provenance"]["catalog_facts"]["Reach"] = "invented range"
+    section_binding = next(
+        binding
+        for section in tampered["sections"]
+        for binding in section["bindings"]
+        if binding["kind"] == "product"
+    )
+    section_binding["catalog_provenance"]["catalog_facts"]["Reach"] = "invented range"
+    unsigned = dict(tampered)
+    unsigned.pop("delivery_sha256")
+    tampered["delivery_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(SectionDeliveryError, match="catalog provenance SHA mismatch"):
+        validate_resolved_delivery(tampered)
 
 
 def test_global_link_allocation_prefers_required_sections_and_unique_targets():

@@ -362,6 +362,55 @@ def _duplicate_content_issues(delivery: dict[str, Any]) -> list[dict[str, str]]:
     return issues
 
 
+def _product_provenance_audit(
+    delivery: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Bind every product URL to exactly one canonical sentence and catalog digest."""
+
+    records: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    for binding in delivery["bindings"]:
+        if binding.get("kind") != "product":
+            continue
+        section_id = str(binding.get("section_id") or "")
+        url = str(binding.get("url") or "")
+        matches = [
+            item
+            for item in delivery["sentences"]
+            if item.get("section_id") == section_id and url in str(item.get("text") or "")
+        ]
+        if len(matches) != 1:
+            issues.append(
+                _issue(
+                    "product_binding_missing_sentence_provenance",
+                    f"{binding.get('candidate_id')}: sentence matches={len(matches)}",
+                    section_id=section_id,
+                )
+            )
+            continue
+        provenance = binding.get("catalog_provenance")
+        if not isinstance(provenance, dict) or not provenance.get("catalog_facts"):
+            issues.append(
+                _issue(
+                    "product_binding_missing_catalog_provenance",
+                    str(binding.get("candidate_id") or ""),
+                    section_id=section_id,
+                )
+            )
+            continue
+        records.append(
+            {
+                "candidate_id": binding["candidate_id"],
+                "product_id": binding["product_id"],
+                "section_id": section_id,
+                "sentence_id": matches[0]["sentence_id"],
+                "catalog_sha256": provenance["catalog_sha256"],
+                "catalog_fact_keys": sorted(provenance["catalog_facts"]),
+            }
+        )
+    return records, issues
+
+
 def audit_sectional_delivery(
     delivery: dict[str, Any],
     metadata: dict[str, Any],
@@ -420,6 +469,8 @@ def audit_sectional_delivery(
     faq_count = len(_faq_pairs(resolved))
 
     blockers.extend(_duplicate_content_issues(resolved))
+    product_provenance, provenance_issues = _product_provenance_audit(resolved)
+    blockers.extend(provenance_issues)
 
     counts = {"article": 0, "product": 0, "external_citation": 0}
     urls_by_kind: dict[str, set[str]] = {key: set() for key in counts}
@@ -565,6 +616,7 @@ def audit_sectional_delivery(
             "link_counts": counts,
             "link_hard_caps": hard_caps,
             "link_advisory_targets": advisory_targets,
+            "product_provenance": product_provenance,
         },
     }
 

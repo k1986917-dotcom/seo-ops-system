@@ -49,6 +49,8 @@ class SectionalSiteProfile:
     prohibited_product_section_patterns: tuple[str, ...]
     use_case_rules: tuple[ProductUseCaseRule, ...]
     high_power_policy: str
+    product_copy_instruction: str
+    product_copy_suppressed_patterns: tuple[str, ...]
     variant_label_pattern: str
     source: str
 
@@ -66,6 +68,8 @@ GENERIC_PROFILE = SectionalSiteProfile(
     prohibited_product_section_patterns=(),
     use_case_rules=(),
     high_power_policy="not_applicable",
+    product_copy_instruction="",
+    product_copy_suppressed_patterns=(),
     variant_label_pattern="",
     source="builtin:default",
 )
@@ -149,6 +153,18 @@ def _profile_from_payload(payload: Any, *, source: str) -> SectionalSiteProfile:
             raise SectionalSiteProfileError(
                 f"prohibited_product_section_patterns contains invalid regex: {pattern}"
             ) from exc
+    product_copy_patterns = _string_tuple(
+        payload.get("product_copy_suppressed_patterns"),
+        "product_copy_suppressed_patterns",
+        allow_empty=True,
+    )
+    for pattern in product_copy_patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise SectionalSiteProfileError(
+                f"product_copy_suppressed_patterns contains invalid regex: {pattern}"
+            ) from exc
     variant_label_pattern = str(payload.get("variant_label_pattern") or "")
     if variant_label_pattern:
         try:
@@ -229,6 +245,8 @@ def _profile_from_payload(payload: Any, *, source: str) -> SectionalSiteProfile:
             payload.get("high_power_policy"),
             "high_power_policy",
         ),
+        product_copy_instruction=str(payload.get("product_copy_instruction") or "").strip(),
+        product_copy_suppressed_patterns=product_copy_patterns,
         variant_label_pattern=variant_label_pattern,
         source=source,
     )
@@ -372,6 +390,8 @@ def site_profile_manifest(profile: SectionalSiteProfile) -> dict[str, Any]:
         "unique_product_per_article": profile.unique_product_per_article,
         "required_fit_levels": sorted(profile.required_fit_levels),
         "high_power_policy": profile.high_power_policy,
+        "product_copy_instruction": profile.product_copy_instruction,
+        "product_copy_suppressed_patterns": list(profile.product_copy_suppressed_patterns),
         "variant_label_pattern": profile.variant_label_pattern,
         "use_case_rules": [rule.name for rule in profile.use_case_rules],
         "source": profile.source,

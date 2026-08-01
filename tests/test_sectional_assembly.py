@@ -32,6 +32,24 @@ def _digest(value) -> str:
     ).hexdigest()
 
 
+def _product_provenance():
+    facts = {
+        "Application": "ceiling marking",
+        "Reach": "long range",
+    }
+    source = {
+        "candidate_id": "product-t100",
+        "product_id": "T100",
+        "title": "Professional Ceiling Marking Tool",
+        "catalog_facts": facts,
+    }
+    return {
+        "catalog_sha256": _digest(source),
+        "catalog_title": source["title"],
+        "catalog_facts": facts,
+    }
+
+
 def _section(section_id, unit_kind, heading, markdown, bindings=None):
     return {
         "section_id": section_id,
@@ -90,6 +108,7 @@ def _build_delivery(
                 "product_id": "T100",
                 "anchor": "related professional marking tool",
                 "url": "https://example.com/p-T100.html",
+                "catalog_provenance": _product_provenance(),
             }
         ]
     if duplicate_product:
@@ -97,13 +116,16 @@ def _build_delivery(
             " A [current marking product](https://example.com/p-T100.html) may also "
             "be considered when its documented limitations are explained."
         )
-        first_bindings.append({
-            "kind": "product",
-            "candidate_id": "product-t100",
-            "product_id": "T100",
-            "anchor": "current marking product",
-            "url": "https://example.com/p-T100.html",
-        })
+        first_bindings.append(
+            {
+                "kind": "product",
+                "candidate_id": "product-t100",
+                "product_id": "T100",
+                "anchor": "current marking product",
+                "url": "https://example.com/p-T100.html",
+                "catalog_provenance": _product_provenance(),
+            }
+        )
     if untracked_link:
         first_links += (
             " An [untracked resource](https://unknown.example/resource) must not "
@@ -147,8 +169,7 @@ def _build_delivery(
         "## Comparing Related Catalog Options\n\n"
         "Related catalog products can be introduced when their actual specifications and "
         "limitations remain clear. The recommendation should explain why an option is relevant "
-        "without inventing certification, compatibility, or a dedicated use case."
-        + second_links,
+        "without inventing certification, compatibility, or a dedicated use case." + second_links,
         second_bindings,
     )
     conclusion = _section(
@@ -259,6 +280,37 @@ def test_assembly_adds_frontmatter_schema_and_preserves_sentence_ids():
         }
         for item in delivery["sentences"]
     ]
+    provenance = assembly["audit"]["metrics"]["product_provenance"]
+    assert len(provenance) == 1
+    assert provenance[0]["candidate_id"] == "product-t100"
+    assert provenance[0]["product_id"] == "T100"
+    assert provenance[0]["sentence_id"].startswith("S")
+    assert provenance[0]["catalog_fact_keys"] == ["Application", "Reach"]
+
+
+def test_assembly_blocks_product_link_without_catalog_provenance_facts():
+    delivery = _build_delivery()
+    product_binding = next(item for item in delivery["bindings"] if item["kind"] == "product")
+    provenance = product_binding["catalog_provenance"]
+    provenance["catalog_facts"] = {}
+    provenance["catalog_sha256"] = _digest(
+        {
+            "candidate_id": product_binding["candidate_id"],
+            "product_id": product_binding["product_id"],
+            "title": provenance["catalog_title"],
+            "catalog_facts": {},
+        }
+    )
+    unsigned = dict(delivery)
+    unsigned.pop("delivery_sha256")
+    delivery["delivery_sha256"] = _digest(unsigned)
+
+    audit = audit_sectional_delivery(delivery, _metadata())
+
+    assert audit["passed"] is False
+    assert any(
+        item["code"] == "product_binding_missing_catalog_provenance" for item in audit["blockers"]
+    )
 
 
 def test_faq_schema_matches_visible_questions_and_answers():
@@ -267,9 +319,7 @@ def test_faq_schema_matches_visible_questions_and_answers():
     entities = assembly["faq_schema"]["mainEntity"]
 
     assert len(entities) == 3
-    assert entities[0]["name"] == (
-        "What should teams evaluate before choosing a marking tool?"
-    )
+    assert entities[0]["name"] == ("What should teams evaluate before choosing a marking tool?")
     assert "working distance" in entities[0]["acceptedAnswer"]["text"]
 
 
@@ -347,9 +397,7 @@ def test_duplicate_product_target_is_a_hard_blocker():
     audit = audit_sectional_delivery(delivery, _metadata())
 
     assert audit["passed"] is False
-    assert "duplicate_internal_link_target" in {
-        item["code"] for item in audit["blockers"]
-    }
+    assert "duplicate_internal_link_target" in {item["code"] for item in audit["blockers"]}
     with pytest.raises(SectionAssemblyError, match="global assembly gates failed"):
         assemble_sectional_article(delivery, _metadata(), _ledger(delivery))
 
@@ -358,9 +406,7 @@ def test_generic_anchor_is_a_hard_blocker():
     delivery = _build_delivery(generic_anchor=True)
     audit = audit_sectional_delivery(delivery, _metadata())
 
-    assert "generic_or_too_short_anchor" in {
-        item["code"] for item in audit["blockers"]
-    }
+    assert "generic_or_too_short_anchor" in {item["code"] for item in audit["blockers"]}
 
 
 def test_untracked_markdown_link_is_a_hard_blocker():
@@ -376,9 +422,7 @@ def test_word_floor_is_a_hard_blocker():
     delivery = _build_delivery()
     audit = audit_sectional_delivery(delivery, _metadata(minimum=1000))
 
-    assert "article_below_target_word_minimum" in {
-        item["code"] for item in audit["blockers"]
-    }
+    assert "article_below_target_word_minimum" in {item["code"] for item in audit["blockers"]}
 
 
 def test_input_ledger_must_match_phase4_draft():
@@ -397,11 +441,14 @@ def test_persist_and_load_three_file_bundle(tmp_path):
 
     assert set(paths) == {"draft", "ledger", "report"}
     assert all(os.path.exists(path) for path in paths.values())
-    assert load_sectional_assembly(
-        tmp_path,
-        assembly["metadata"]["slug"],
-        expected_assembly_sha256=assembly["assembly_sha256"],
-    ) == assembly
+    assert (
+        load_sectional_assembly(
+            tmp_path,
+            assembly["metadata"]["slug"],
+            expected_assembly_sha256=assembly["assembly_sha256"],
+        )
+        == assembly
+    )
 
 
 def test_corrupted_bundle_is_not_loaded(tmp_path):
@@ -411,10 +458,13 @@ def test_corrupted_bundle_is_not_loaded(tmp_path):
     with open(paths["draft"], "a", encoding="utf-8") as handle:
         handle.write("tampered")
 
-    assert load_sectional_assembly(
-        tmp_path,
-        assembly["metadata"]["slug"],
-    ) is None
+    assert (
+        load_sectional_assembly(
+            tmp_path,
+            assembly["metadata"]["slug"],
+        )
+        is None
+    )
 
 
 def test_partial_replace_failure_restores_previous_bundle(tmp_path, monkeypatch):
@@ -438,10 +488,9 @@ def test_partial_replace_failure_restores_previous_bundle(tmp_path, monkeypatch)
 
     with pytest.raises(OSError, match="simulated second replace failure"):
         persist_sectional_assembly(tmp_path, assembly)
-    assert {
-        key: path.read_text(encoding="utf-8")
-        for key, path in paths.items()
-    } == {key: f"old-{key}" for key in paths}
+    assert {key: path.read_text(encoding="utf-8") for key, path in paths.items()} == {
+        key: f"old-{key}" for key in paths
+    }
 
 
 def test_assembly_validation_detects_nested_tampering():

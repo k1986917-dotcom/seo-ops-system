@@ -240,6 +240,7 @@ def run_sectional_shadow_candidate(
         "section_candidate_selection_retries": section_run["candidate_selection_retry_count"],
         "section_response_format_retries": section_run["response_format_retry_count"],
         "section_technical_consistency_retries": section_run["technical_consistency_retry_count"],
+        "section_content_provenance_retries": section_run["content_provenance_retry_count"],
         "frame_generated": bool(frame_run["generated"]),
         "frame_resumed": bool(frame_run["resumed"]),
         "section_evidence_strength_retries": section_run["evidence_strength_retry_count"],
@@ -327,6 +328,15 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
     ):
         raise SectionalPipelineError(
             "pipeline result section_technical_consistency_retries is invalid"
+        )
+    provenance_retry_count = result.get("section_content_provenance_retries")
+    if provenance_retry_count is not None and (
+        not isinstance(provenance_retry_count, int)
+        or isinstance(provenance_retry_count, bool)
+        or provenance_retry_count < 0
+    ):
+        raise SectionalPipelineError(
+            "pipeline result section_content_provenance_retries is invalid"
         )
     if result["generated_sections"] + result["resumed_sections"] != result["section_count"]:
         raise SectionalPipelineError("pipeline section counts do not reconcile")

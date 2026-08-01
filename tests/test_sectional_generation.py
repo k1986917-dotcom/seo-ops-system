@@ -2197,6 +2197,209 @@ def test_section_authority_recommendation_requires_verified_quote_citation():
     assert parse_section_generation_response(verified_response, verified_package)
 
 
+def test_unverified_quote_must_be_paraphrased_but_verified_quote_is_allowed():
+    sections, shadow = _setup()
+    verify = next(item for item in sections["sections"] if item["reader_stage"] == "verify")
+    package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        verify["section_id"],
+    )
+    support = package["candidates"]["evidence"][0]["support"]
+    quoted_response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        f'As one source noted, "{support}" Professionals should match the tool to '
+        "the working distance,",
+    )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="unverified evidence as a direct quote",
+    ):
+        parse_section_generation_response(quoted_response, package)
+
+    attributed_response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "As one worksite professional noted, worksite safety procedures should be "
+        "followed before equipment use. Professionals should match the tool to the "
+        "working distance,",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="unverified evidence as a direct quote",
+    ):
+        parse_section_generation_response(attributed_response, package)
+
+    verified_manifest = copy.deepcopy(shadow["context_manifest"])
+    for candidate in verified_manifest["registry"]["evidence"]["candidates"]:
+        candidate["support_basis"] = "verified_quote"
+    verified_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        verified_manifest,
+        verify["section_id"],
+    )
+    verified_support = verified_package["candidates"]["evidence"][0]["support"]
+    verified_response = _response(verified_package).replace(
+        "Professionals should match the tool to the working distance,",
+        f'As one source noted, "{verified_support}" Professionals should match the '
+        "tool to the working distance,",
+    )
+    assert parse_section_generation_response(verified_response, verified_package)
+
+
+def test_laser_site_product_copy_omits_power_class_and_unsupported_use_case_fit():
+    package = _package_for_stage("select", site_slug="laserpointerhub")
+    prompt = build_section_generation_prompt(package)
+    product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+    neutral_token = f"[[PRODUCT:{product_id}|professional ceiling marking tool]]"
+
+    assert "omit wattage, output level, laser class" in prompt["system"]
+
+    power_response = _response(package).replace(
+        neutral_token,
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="active site copy policy",
+    ):
+        parse_section_generation_response(power_response, package)
+
+    use_case_response = _response(package).replace(
+        neutral_token,
+        neutral_token + " is designed for ceiling construction.",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="catalog provenance",
+    ):
+        parse_section_generation_response(use_case_response, package)
+
+    assert parse_section_generation_response(_response(package), package)
+
+
+def test_laser_site_hides_power_from_model_product_context_but_keeps_candidate():
+    bundle = build_contract_bundle(
+        topic="Professional Ceiling Marking Tools",
+        tier="Cluster Content",
+        intent="Help professionals select and use a suitable marking tool.",
+        outline=[
+            "Why Clear Ceiling Marking Matters",
+            "Choosing the Right Ceiling Marking Tool",
+            "Worksite Safety and Compliance",
+        ],
+    )
+    for section in bundle["section_contracts"]["sections"]:
+        section["target_words"] = {"min": 45, "max": 130}
+    powered_products = PRODUCTS.replace(
+        "Professional Ceiling Marking Tool",
+        "Professional Ceiling Marking Tool 1.5W",
+    )
+    registry = build_candidate_registry(
+        internal_links_map=ARTICLES,
+        product_report=powered_products,
+        evidence_cards=EVIDENCE,
+    )
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        registry,
+        site_slug="laserpointerhub",
+    )
+    select = next(
+        item for item in bundle["section_contracts"]["sections"] if item["reader_stage"] == "select"
+    )
+    package = build_section_generation_package(
+        bundle["section_contracts"],
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        select["section_id"],
+    )
+
+    candidate = package["candidates"]["products"][0]
+    assert candidate["candidate_id"]
+    assert "1.5W" not in candidate["title"]
+    assert "Professional Ceiling Marking Tool" in candidate["title"]
+
+
+def test_sequence_repairs_laser_product_copy_without_explaining_power_conflict(tmp_path):
+    sections, shadow = _setup(site_slug="laserpointerhub")
+    calls = []
+    select_attempts = 0
+
+    def generate(system, user):
+        nonlocal select_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] == "select":
+            select_attempts += 1
+            if select_attempts == 1:
+                product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+                return response.replace(
+                    f"[[PRODUCT:{product_id}|professional ceiling marking tool]]",
+                    f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+                )
+        return response
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["content_provenance_retry_count"] == 1
+    assert len(select_calls) == 2
+    assert "CONTENT PROVENANCE REPAIR" in select_calls[1][1]
+    assert "Do not explain or reconcile the omitted fields" in select_calls[1][1]
+
+
+def test_sequence_repairs_unverified_quote_as_plain_paraphrase(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    verify_attempts = 0
+
+    def generate(system, user):
+        nonlocal verify_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] == "verify":
+            verify_attempts += 1
+            if verify_attempts == 1:
+                support = package["candidates"]["evidence"][0]["support"]
+                return response.replace(
+                    "Professionals should match the tool to the working distance,",
+                    f'As one source noted, "{support}" Professionals should match '
+                    "the tool to the working distance,",
+                )
+        return response
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    verify_calls = [item for item in calls if item[0] == "verify"]
+    assert result["complete"] is True
+    assert result["content_provenance_retry_count"] == 1
+    assert result["evidence_strength_retry_count"] == 0
+    assert len(verify_calls) == 2
+    assert "CONTENT PROVENANCE REPAIR" in verify_calls[1][1]
+    assert "Remove direct quotation marks" in verify_calls[1][1]
+
+
 @pytest.mark.parametrize(
     "unsupported_sentence",
     [

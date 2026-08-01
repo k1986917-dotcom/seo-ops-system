@@ -24,6 +24,13 @@
     "\\bclass\\s*(?:3r|3b|4)\\b"
   ],
   "high_power_policy": "neutral_for_ranking_and_never_an_exclusion",
+  "product_copy_instruction": "In a sentence that links a product, omit wattage, output level, laser class, safety status, compliance status, certification, and hazard language. Do not connect the product to the article's Class 2/Class 3R discussion. Describe only catalog-supported commercial attributes such as wavelength/color, form factor, single-beam design, focus, charging, and visibility. Present the item as a catalog option to compare, not as designed, approved, safe, or specifically suitable for construction or ceiling work unless the catalog itself states that exact use case.",
+  "product_copy_suppressed_patterns": [
+    "\\b\\d+(?:\\.\\d+)?\\s*(?:mw|w|watts?)\\b",
+    "\\b(?:high[- ]?power(?:ed)?|high[- ]?output|output\\s+(?:power|level))\\b",
+    "\\bclass\\s*(?:1|2|2m|3r|3a|3b|4)\\b",
+    "\\b(?:safe|safer|safest|safety|compliant|compliance|approved|certified|certification|hazard|danger)\\b"
+  ],
   "variant_label_pattern": "\\b(?:B|G)\\d{3}(?:\\.\\d+)?[A-Z]\\b",
   "use_case_rules": [
     {

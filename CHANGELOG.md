@@ -1,3 +1,28 @@
+## [Unreleased] — Keep laser product copy natural and catalog-auditable
+
+### Fixed
+
+- `laserpointerhub` 继续把高功率视为排序中性条件，不因功率扣分或淘汰商品；但产品链接
+  所在句现在自然省略 wattage/output、laser class、安全、合规、认证与 hazard 字段，也不
+  把商品与文章中的 Class 2/Class 3R 讨论强行绑定或解释冲突。
+- 站点配置新增 `product_copy_instruction` 与 `product_copy_suppressed_patterns`。写作模型
+  看到的商品标题、属性和 variant 文本会先按站点规则脱敏；完整目录仍保留给候选排序和
+  服务器审计。产品句只能使用目录支持的波长/颜色、形态、单光束、调焦、充电和可见度等
+  商业属性，除非目录原文明确声明，否则禁止写成专为施工、吊顶或特定场景设计。
+- `support_basis=quote` 不再允许作为直接引语或“某人说/指出/写道”的归因式转述发布；
+  仅 `verified_quote` 可保留逐字引语。新增 bounded content-provenance repair，把未核验
+  引语改成自然概括，把越界商品句改成不解释功率/Class 冲突的正常商业文案。
+- PRODUCT binding 新增服务器生成的目录 provenance：目录标题、目录事实与内层 SHA；
+  assembly 将每个产品 URL 绑定到唯一 canonical sentence，并记录 candidate/product、
+  sentence ID、catalog SHA 和事实字段。内层 provenance 被改写时，即使外层 delivery SHA
+  被重算也会 fail-closed。
+- Comparison 新增 `product_provenance_count`，产品链接数与 provenance 数不一致时加入
+  `product_copy_provenance_missing` blocker；Pipeline 新增
+  `section_content_provenance_retries` 审计指标。
+- 验证：Sectional 非 Web `240 passed`（排除 1 个已知 `/etc/mime.types` Landlock Web
+  用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
+  `git diff --check` 全部通过。
+
 ## [Unreleased] — Route post-format word-count misses to a bounded final repair
 
 ### Fixed

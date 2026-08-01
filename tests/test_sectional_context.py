@@ -181,9 +181,7 @@ def test_evidence_registry_accepts_markdown_wrapped_source_url():
         },
     )
 
-    assert registry["evidence"]["candidates"][0]["url"] == (
-        "https://source.example/markdown"
-    )
+    assert registry["evidence"]["candidates"][0]["url"] == ("https://source.example/markdown")
 
 
 def test_evidence_registry_preserves_quote_vs_key_finding_basis():
@@ -223,10 +221,7 @@ def test_evidence_registry_preserves_quote_vs_key_finding_basis():
         evidence_cards=cards,
     )
 
-    by_id = {
-        item["evidence_id"]: item
-        for item in registry["evidence"]["candidates"]
-    }
+    by_id = {item["evidence_id"]: item for item in registry["evidence"]["candidates"]}
     assert by_id["ev_verified"]["support_basis"] == "verified_quote"
     assert by_id["ev_quote"]["support_basis"] == "quote"
     assert by_id["ev_note"]["support_basis"] == "key_finding"
@@ -262,9 +257,7 @@ def test_common_site_topic_words_cannot_create_false_article_opportunity():
     manifest = shadow["context_manifest"]["sections"][0]
     gate = shadow["section_link_contracts"]["sections"][0]["article_links"]
 
-    assert {"laser", "pointer"} <= set(
-        registry["article_profile"]["common_article_tokens"]
-    )
+    assert {"laser", "pointer"} <= set(registry["article_profile"]["common_article_tokens"])
     assert manifest["article_candidates"] == []
     assert gate["opportunity_state"] == "none"
     assert gate["candidate_count"] == 0
@@ -374,9 +367,7 @@ def test_live_catalog_drives_product_candidates():
         _registry(),
     )
     select_section = next(
-        item
-        for item in shadow["context_manifest"]["sections"]
-        if item["reader_stage"] == "select"
+        item for item in shadow["context_manifest"]["sections"] if item["reader_stage"] == "select"
     )
     product_ids = [item["product_id"] for item in select_section["product_candidates"]]
 
@@ -422,13 +413,8 @@ H2: Top Recommendations (500 words)
     assert gate["reason_code"] == "catalog_truth_overrides_brief"
     assert gate["min_required"] == 1
     assert gate["candidate_count"] >= 1
-    assert all(
-        item["fit_level"] == "related_catalog"
-        for item in manifest["product_candidates"]
-    )
-    assert {
-        item["product_id"] for item in manifest["product_rejections"]
-    } == {"L300"}
+    assert all(item["fit_level"] == "related_catalog" for item in manifest["product_candidates"])
+    assert {item["product_id"] for item in manifest["product_rejections"]} == {"L300"}
 
 
 def test_non_english_brief_point_is_audited_but_not_used_for_scoring():
@@ -460,9 +446,7 @@ H2: Top Recommendations (500 words)
             "reason_code": "non_english_brief_point",
         }
     ]
-    assert shadow["context_manifest"]["sections"][0][
-        "brief_catalog_conflicts"
-    ] == []
+    assert shadow["context_manifest"]["sections"][0]["brief_catalog_conflicts"] == []
 
 
 def test_laser_site_profile_prioritizes_green_visibility_products_without_power_penalty():
@@ -496,31 +480,20 @@ H2: What to Look For in a Ceiling Construction Laser Pointer (400 words)
         registry,
         site_slug="laserpointerhub",
     )
-    manifest = {
-        item["heading"]: item for item in shadow["context_manifest"]["sections"]
-    }
-    resolved = {
-        item["section_id"]: item for item in shadow["section_link_contracts"]["sections"]
-    }
+    manifest = {item["heading"]: item for item in shadow["context_manifest"]["sections"]}
+    resolved = {item["section_id"]: item for item in shadow["section_link_contracts"]["sections"]}
 
     selection = manifest["What to Look For in a Ceiling Construction Laser Pointer"]
     assert [item["product_id"] for item in selection["product_candidates"][:2]] == [
         "B025",
         "B023",
     ]
-    assert all(
-        item["fit_level"] == "strong" for item in selection["product_candidates"][:2]
-    )
-    assert all(
-        item["site_preference_score"] > 0
-        for item in selection["product_candidates"][:2]
-    )
+    assert all(item["fit_level"] == "strong" for item in selection["product_candidates"][:2])
+    assert all(item["site_preference_score"] > 0 for item in selection["product_candidates"][:2])
     ranked_ids = [item["product_id"] for item in selection["product_candidates"]]
     assert {"B025", "B023", "G019", "B030"} <= set(ranked_ids)
     assert set(ranked_ids[:4]) == {"B025", "B023", "G019", "B030"}
-    ranked_by_id = {
-        item["product_id"]: item for item in selection["product_candidates"]
-    }
+    ranked_by_id = {item["product_id"]: item for item in selection["product_candidates"]}
     assert ranked_by_id["B023"]["matched_variant"]["label"] == "B023B"
     assert ranked_by_id["G019"]["matched_variant"]["label"] == "B019B"
     assert "520nm" in ranked_by_id["B023"]["matched_variant"]["text"]
@@ -528,9 +501,7 @@ H2: What to Look For in a Ceiling Construction Laser Pointer (400 words)
     selection_gate = resolved[selection["section_id"]]["product_links"]
     assert selection_gate["opportunity_state"] == "required"
     assert selection_gate["max_allowed"] == 1
-    assert selection_gate["selected_ids"] == [
-        selection["product_candidates"][0]["candidate_id"]
-    ]
+    assert selection_gate["selected_ids"] == [selection["product_candidates"][0]["candidate_id"]]
 
     class_section = manifest["Class 2 vs Class 3R for Above-Ceiling Pointing"]
     class_gate = resolved[class_section["section_id"]]["product_links"]
@@ -546,9 +517,7 @@ H2: What to Look For in a Ceiling Construction Laser Pointer (400 words)
     assert class_section["product_candidates"] == []
     assert shadow["context_manifest"]["site_profile"]["site_slug"] == "laserpointerhub"
     assert shadow["context_manifest"]["site_profile"]["product_candidate_limit"] == 5
-    assert shadow["context_manifest"]["site_profile"][
-        "product_link_limit_per_section"
-    ] == 1
+    assert shadow["context_manifest"]["site_profile"]["product_link_limit_per_section"] == 1
     assert shadow["context_manifest"]["site_profile"]["unique_product_per_article"] is True
 
 
@@ -576,10 +545,16 @@ def test_site_profile_entry_loads_packaged_config_and_unknown_site_falls_back():
 
     assert laser.site_slug == "laserpointerhub"
     assert laser.source == "package:site_profiles/laserpointerhub.json"
-    assert site_profile_manifest(laser)["source"] == laser.source
+    manifest = site_profile_manifest(laser)
+    assert manifest["source"] == laser.source
+    assert "omit wattage" in laser.product_copy_instruction
+    assert manifest["product_copy_instruction"] == laser.product_copy_instruction
+    assert manifest["product_copy_suppressed_patterns"]
     assert generic.site_slug == "default"
     assert generic.source == "builtin:default"
     assert generic.use_case_rules == ()
+    assert generic.product_copy_instruction == ""
+    assert generic.product_copy_suppressed_patterns == ()
 
 
 def test_laser_related_catalog_fallback_is_recommended_not_required():
@@ -623,9 +598,7 @@ def test_laser_site_allocates_one_unique_product_per_commercial_section():
         _registry(LASER_MERCH_PRODUCTS),
         site_slug="laserpointerhub",
     )
-    gates = [
-        item["product_links"] for item in shadow["section_link_contracts"]["sections"]
-    ]
+    gates = [item["product_links"] for item in shadow["section_link_contracts"]["sections"]]
 
     assert all(gate["opportunity_state"] == "required" for gate in gates)
     assert all(gate["max_allowed"] == 1 for gate in gates)
@@ -694,9 +667,7 @@ def test_verify_section_prohibits_products_and_requires_matching_evidence():
         _registry(),
     )
     verify = next(
-        item
-        for item in bundle["section_contracts"]["sections"]
-        if item["reader_stage"] == "verify"
+        item for item in bundle["section_contracts"]["sections"] if item["reader_stage"] == "verify"
     )
     resolved = next(
         item
@@ -717,10 +688,13 @@ def test_resolved_contract_passes_strict_gate_validation():
         _registry(),
     )
 
-    assert validate_section_link_contracts(
-        shadow["section_link_contracts"],
-        bundle["section_contracts"],
-    ) == shadow["section_link_contracts"]
+    assert (
+        validate_section_link_contracts(
+            shadow["section_link_contracts"],
+            bundle["section_contracts"],
+        )
+        == shadow["section_link_contracts"]
+    )
 
 
 def test_shadow_report_never_claims_formal_changes():
@@ -764,9 +738,7 @@ def test_shadow_report_never_claims_formal_changes():
     assert report["ai_called"] is False
 
 
-def test_shadow_persist_rolls_back_all_files_on_partial_replace_failure(
-    tmp_path, monkeypatch
-):
+def test_shadow_persist_rolls_back_all_files_on_partial_replace_failure(tmp_path, monkeypatch):
     from seo_ops.services import sectional_context as sc
 
     contracts = _laser_bundle()

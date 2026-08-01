@@ -103,7 +103,24 @@ _TECHNICAL_CHOICE_TERM = re.compile(
     r"\b(?:class\s*(?:1|2|2m|3r|3a|3b|4)|\d{3,4}\s*nm|laser\s+class)\b",
     re.IGNORECASE,
 )
+_DIRECT_QUOTE = re.compile(r'(?P<quote>"[^"\n]{18,}"|“[^”\n]{18,}”)')
+_UNVERIFIED_ATTRIBUTION = re.compile(
+    r"\b(?:as|according\s+to)\b[^,.]{0,100}\b"
+    r"(?:said|noted|wrote|reported|stated|observed)\b\s*[,：:]?\s*"
+    r"(?P<claim>[^,.!?\n]{18,})",
+    re.IGNORECASE,
+)
+_PRODUCT_USE_CASE_CLAIM = re.compile(
+    r"\b(?:ceiling[- ]focused|construction[- ]focused|"
+    r"(?:designed|built|made|engineered|intended|proven|ideal|perfect|best)\s+for\s+"
+    r"[^.!?]{0,100}(?:ceiling|construction|job\s*site|worksite|"
+    r"long[- ]distance\s+pointing|professional\s+pointing))\b",
+    re.IGNORECASE,
+)
 _EVIDENCE_OVERSTATEMENT_ERROR = "section contains authority or recommendation language unsupported by source-verified quote evidence"
+_UNVERIFIED_QUOTE_ERROR = "section publishes unverified evidence as a direct quote"
+_PRODUCT_PROVENANCE_ERROR = "product-linked sentence exceeds approved catalog provenance"
+_PRODUCT_COPY_POLICY_ERROR = "product-linked sentence violates the active site copy policy"
 _FRAME_OVERSTATEMENT_ERROR = "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
 _INTERNAL_LINK_LAYOUT_ERROR = "a paragraph may contain at most one internal link placeholder"
 _TECHNICAL_CONSISTENCY_ERROR = "section contains contradictory wavelength and color pairing"
@@ -152,6 +169,48 @@ def _compact_product_attributes(candidate: dict[str, Any]) -> dict[str, str]:
         if len(compact) >= 8:
             break
     return compact
+
+
+def _suppress_product_copy_text(value: str, patterns: list[str]) -> str:
+    text = str(value or "")
+    for pattern in patterns:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip(" -–—,;:/")
+
+
+def _sanitize_product_candidate_for_copy(
+    candidate: dict[str, Any],
+    patterns: list[str],
+) -> dict[str, Any]:
+    if not patterns:
+        return candidate
+    sanitized = dict(candidate)
+    sanitized["title"] = _suppress_product_copy_text(
+        str(candidate.get("title") or ""),
+        patterns,
+    )
+    attributes = candidate.get("attributes")
+    if isinstance(attributes, dict):
+        sanitized_attributes: dict[str, str] = {}
+        for key, value in attributes.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                continue
+            clean_value = _suppress_product_copy_text(value, patterns)
+            if clean_value:
+                sanitized_attributes[key] = clean_value
+        sanitized["attributes"] = sanitized_attributes
+    matched_variant = candidate.get("matched_variant")
+    if isinstance(matched_variant, dict):
+        sanitized_variant = dict(matched_variant)
+        if isinstance(matched_variant.get("text"), str):
+            sanitized_variant["text"] = _suppress_product_copy_text(
+                matched_variant["text"],
+                patterns,
+            )
+        sanitized["matched_variant"] = sanitized_variant
+    return sanitized
 
 
 def _registry_indexes(registry: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
@@ -434,6 +493,34 @@ def build_section_generation_package(
             if isinstance(item, dict) and isinstance(item.get("candidate_id"), str)
         },
     )
+    site_profile_payload: dict[str, Any] | None = None
+    if link["product_links"]["opportunity_state"] != "none":
+        site_profile_payload = dict(
+            context_manifest.get("site_profile")
+            or {
+                "site_slug": "default",
+                "version": 1,
+                "product_candidate_limit": 2,
+                "product_link_limit_per_section": 2,
+                "unique_product_per_article": False,
+                "required_fit_levels": [
+                    "approved_constraint",
+                    "contextual",
+                    "related_catalog",
+                    "strong",
+                ],
+                "high_power_policy": "not_applicable",
+                "product_copy_instruction": "",
+                "product_copy_suppressed_patterns": [],
+                "use_case_rules": [],
+            }
+        )
+        copy_patterns = site_profile_payload.get("product_copy_suppressed_patterns", [])
+        if isinstance(copy_patterns, list) and all(isinstance(item, str) for item in copy_patterns):
+            product_candidates = [
+                _sanitize_product_candidate_for_copy(item, copy_patterns)
+                for item in product_candidates
+            ]
     evidence_candidates = _selected_candidates(
         link["external_citations"],
         indexes["evidence"],
@@ -478,25 +565,8 @@ def build_section_generation_package(
             "evidence": evidence_candidates,
         },
     }
-    if link["product_links"]["opportunity_state"] != "none":
-        package["site_profile"] = dict(
-            context_manifest.get("site_profile")
-            or {
-                "site_slug": "default",
-                "version": 1,
-                "product_candidate_limit": 2,
-                "product_link_limit_per_section": 2,
-                "unique_product_per_article": False,
-                "required_fit_levels": [
-                    "approved_constraint",
-                    "contextual",
-                    "related_catalog",
-                    "strong",
-                ],
-                "high_power_policy": "not_applicable",
-                "use_case_rules": [],
-            }
-        )
+    if site_profile_payload is not None:
+        package["site_profile"] = site_profile_payload
     package["context_char_counts"] = {
         key: len(json.dumps(value, ensure_ascii=False, sort_keys=True))
         for key, value in package["candidates"].items()
@@ -527,8 +597,22 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
         or not site_profile["site_slug"]
         or not isinstance(site_profile.get("version"), int)
         or not isinstance(site_profile.get("high_power_policy"), str)
+        or not isinstance(site_profile.get("product_copy_instruction", ""), str)
+        or not isinstance(site_profile.get("product_copy_suppressed_patterns", []), list)
+        or any(
+            not isinstance(item, str)
+            for item in site_profile.get("product_copy_suppressed_patterns", [])
+        )
     ):
         raise SectionGenerationError("section generation package site_profile is invalid")
+    if site_profile is not None:
+        for pattern in site_profile.get("product_copy_suppressed_patterns", []):
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise SectionGenerationError(
+                    "section generation package product copy pattern is invalid"
+                ) from exc
     if _CJK.search(package["heading"]):
         raise SectionGenerationError("section heading must be English")
     for field in ("must_answer", "brief_points", "must_not_repeat"):
@@ -590,6 +674,9 @@ def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
         if site_profile.get("high_power_policy") == "neutral_for_ranking_and_never_an_exclusion"
         else ""
     )
+    product_copy_instruction = str(site_profile.get("product_copy_instruction") or "").strip()
+    if product_copy_instruction:
+        site_policy_rule += "\nPRODUCT COPY POLICY. " + product_copy_instruction
     authority_free_rule = (
         "\nThis package has zero source-verified quotes. In body paragraphs, do not "
         "name OSHA, FDA, EPA, FTC, CDC, NIOSH, the Occupational Safety and Health "
@@ -612,7 +699,7 @@ def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
 Use only the supplied section contract, evidence, article candidates, and product candidates.
 Do not invent URLs, product IDs, article IDs, evidence IDs, specifications, statistics, laws, or claims.
 Do not output raw URLs, Markdown links, HTML links, an H1, or a second H2.
-For evidence candidates, support is the only factual source text. claim_types and all other fields are metadata, not facts. support_basis=verified_quote means the quote was explicitly verified against its source. support_basis=quote means quotation text exists but has not been source-verified. support_basis=key_finding means the support is a synthesized research note. Only verified_quote may support an authority attribution, regulatory recommendation or requirement, compliance/approval/acceptable-use conclusion, absolute safety claim, or superlative such as only/best/go-to/safest.
+For evidence candidates, support is the only factual source text. claim_types and all other fields are metadata, not facts. support_basis=verified_quote means the quote was explicitly verified against its source. support_basis=quote means quotation text exists but has not been source-verified: paraphrase it without quotation marks and never present it as words someone said, wrote, or noted. support_basis=key_finding means the support is a synthesized research note. Only verified_quote may support an authority attribution, regulatory recommendation or requirement, compliance/approval/acceptable-use conclusion, absolute safety claim, or superlative such as only/best/go-to/safest.
 Product candidates include a fit_level. A strong or approved_constraint candidate may be described only with the supplied attributes. A contextual candidate has limited section overlap. A related_catalog candidate is related to the article topic but is not an exact use-case match: it may be recommended as a related catalog option, but never claim it was designed for, proven for, compliant with, or specifically suitable for the exact section use case.
 Use approved placeholders only:
 [[ARTICLE:candidate_id|natural English anchor text]]
@@ -708,6 +795,111 @@ def _verified_quote_ids(package: dict[str, Any]) -> list[str]:
         for evidence_id, basis in _evidence_support_basis(package).items()
         if basis == "verified_quote"
     ]
+
+
+def _normalized_match_text(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+
+def _validate_unverified_direct_quotes(
+    markdown: str,
+    package: dict[str, Any],
+) -> None:
+    evidence = package.get("candidates", {}).get("evidence", [])
+    if not isinstance(evidence, list):
+        return
+    unverified: list[tuple[str, str]] = []
+    for item in evidence:
+        if not isinstance(item, dict) or item.get("support_basis") == "verified_quote":
+            continue
+        evidence_id = str(item.get("evidence_id") or item.get("candidate_id") or "")
+        support = _normalized_match_text(str(item.get("support") or ""))
+        if evidence_id and len(support) >= 18:
+            unverified.append((evidence_id, support))
+    if not unverified:
+        return
+    for match in _DIRECT_QUOTE.finditer(markdown):
+        quoted = match.group("quote").strip('"“”')
+        quoted_norm = _normalized_match_text(quoted)
+        if len(quoted_norm) < 18:
+            continue
+        for evidence_id, support_norm in unverified:
+            if quoted_norm in support_norm or support_norm in quoted_norm:
+                raise SectionGenerationError(f"{_UNVERIFIED_QUOTE_ERROR}: {evidence_id}")
+    for match in _UNVERIFIED_ATTRIBUTION.finditer(markdown):
+        claim_tokens = set(_normalized_match_text(match.group("claim")).split())
+        if len(claim_tokens) < 4:
+            continue
+        for evidence_id, support_norm in unverified:
+            support_tokens = set(support_norm.split())
+            overlap = claim_tokens & support_tokens
+            if (
+                len(overlap) >= 4
+                and len(overlap)
+                / min(
+                    len(claim_tokens),
+                    len(support_tokens),
+                )
+                >= 0.45
+            ):
+                raise SectionGenerationError(f"{_UNVERIFIED_QUOTE_ERROR}: {evidence_id}")
+
+
+def _validate_product_catalog_provenance(
+    markdown: str,
+    package: dict[str, Any],
+) -> None:
+    candidates = package.get("candidates", {}).get("products", [])
+    if not isinstance(candidates, list):
+        return
+    by_id = {
+        str(item.get("candidate_id") or ""): item for item in candidates if isinstance(item, dict)
+    }
+    suppressed_patterns = [
+        re.compile(pattern, re.IGNORECASE)
+        for pattern in (package.get("site_profile") or {}).get(
+            "product_copy_suppressed_patterns",
+            [],
+        )
+    ]
+    body = "\n".join(markdown.splitlines()[1:])
+    for block in re.split(r"\n\s*\n", body):
+        for sentence in _POTENTIAL_SENTENCE_BREAK.split(block):
+            product_ids = [item[0] for item in _PRODUCT_PLACEHOLDER.findall(sentence)]
+            for candidate_id in product_ids:
+                candidate = by_id.get(candidate_id)
+                if candidate is None:
+                    continue
+                visible_sentence = _PRODUCT_PLACEHOLDER.sub(
+                    lambda match: match.group(2),
+                    sentence,
+                )
+                for pattern in suppressed_patterns:
+                    if pattern.search(visible_sentence):
+                        raise SectionGenerationError(
+                            f"{_PRODUCT_COPY_POLICY_ERROR}: {candidate_id}"
+                        )
+                source_text = _normalized_match_text(
+                    " ".join(
+                        [
+                            str(candidate.get("title") or ""),
+                            json.dumps(
+                                candidate.get("attributes") or {},
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                            json.dumps(
+                                candidate.get("matched_variant") or {},
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                        ]
+                    )
+                )
+                for claim_match in _PRODUCT_USE_CASE_CLAIM.finditer(visible_sentence):
+                    claim_text = _normalized_match_text(claim_match.group(0))
+                    if claim_text and claim_text not in source_text:
+                        raise SectionGenerationError(f"{_PRODUCT_PROVENANCE_ERROR}: {candidate_id}")
 
 
 def _validate_section_technical_consistency(markdown: str) -> None:
@@ -1180,6 +1372,60 @@ def _build_technical_consistency_repair_prompt(
     return {"system": system, "user": user}
 
 
+def _build_content_provenance_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+    *,
+    final: bool = False,
+) -> dict[str, str] | None:
+    """Repair unverified quotes or product copy that exceeds catalog policy."""
+
+    error_text = str(error)
+    quote_error = error_text.startswith(_UNVERIFIED_QUOTE_ERROR)
+    product_error = error_text.startswith((_PRODUCT_PROVENANCE_ERROR, _PRODUCT_COPY_POLICY_ERROR))
+    if not quote_error and not product_error:
+        return None
+    validated = validate_section_generation_package(package)
+    base = build_section_generation_prompt(validated)
+    label = "FINAL CONTENT PROVENANCE REPAIR" if final else "CONTENT PROVENANCE REPAIR"
+    if quote_error:
+        specific = (
+            "Remove direct quotation marks and any wording that presents the unverified "
+            "text as words someone said, wrote, or noted. Paraphrase only the supported "
+            "meaning. Keep the approved citation placeholder if it remains relevant."
+        )
+    else:
+        specific = (
+            "Rewrite each PRODUCT-linked sentence as natural commercial copy using only "
+            "the approved catalog candidate. Omit wattage, output level, laser class, "
+            "safety, compliance, certification, and hazard wording when the site copy "
+            "policy suppresses it. Do not explain or reconcile the omitted fields. Do "
+            "not call the product ceiling-focused, construction-focused, designed for, "
+            "approved for, safe for, or specifically suitable for the article use case "
+            "unless that exact claim appears in the supplied catalog attributes. Keep "
+            "the approved PRODUCT ID and describe only neutral catalog attributes such "
+            "as wavelength/color, form factor, beam mode, focus, charging, or visibility."
+        )
+    preservation = (
+        "Rebuild the complete response from the clean SECTION PACKAGE and all active "
+        "link gates. Do not reuse prose from the rejected response."
+        if final
+        else "Make the minimum change and preserve every approved placeholder ID and order."
+    )
+    system = (
+        base["system"]
+        + f"\n{label}. {specific} {preservation} Preserve the exact H2, factual meaning "
+        "that remains supported, word-count contract, paragraph contract, and decisions "
+        "JSON. Never invent a new fact, product, candidate ID, specification, URL, or "
+        "evidence ID."
+    )
+    user = base["user"] + f"\n\n{label}\n" + specific + " Return the complete two-block response."
+    if not final:
+        user += "\n\nPREVIOUS RESPONSE\n" + response_text
+    return {"system": system, "user": user}
+
+
 def _build_section_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -1226,6 +1472,13 @@ def _build_section_repair_prompt(
     )
     if technical_prompt is not None:
         return technical_prompt, "technical_consistency"
+    provenance_prompt = _build_content_provenance_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if provenance_prompt is not None:
+        return provenance_prompt, "content_provenance"
     error_text = str(error)
     if not error_text.startswith(_EVIDENCE_OVERSTATEMENT_ERROR):
         return None
@@ -1373,6 +1626,14 @@ def _build_final_section_repair_prompt(
     )
     if candidate_selection is not None:
         return candidate_selection, "candidate_selection"
+    provenance = _build_content_provenance_repair_prompt(
+        package,
+        response_text,
+        error,
+        final=True,
+    )
+    if provenance is not None:
+        return provenance, "content_provenance"
     authority_free = _build_authority_free_repair_prompt(
         package,
         response_text,
@@ -1811,6 +2072,8 @@ def parse_section_generation_response(
             f"section must contain 2-5 coherent paragraphs (got {paragraph_count})"
         )
     _validate_section_technical_consistency(markdown)
+    _validate_unverified_direct_quotes(markdown, validated_package)
+    _validate_product_catalog_provenance(markdown, validated_package)
     _validate_section_evidence_strength(markdown, validated_package)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
@@ -1890,6 +2153,9 @@ def validate_section_generation_output(
     if output.get("paragraph_count") != paragraph_count or not 2 <= paragraph_count <= 5:
         raise SectionGenerationError("section output paragraph count is invalid")
     _validate_section_technical_consistency(markdown)
+    _validate_unverified_direct_quotes(markdown, validated_package)
+    _validate_product_catalog_provenance(markdown, validated_package)
+    _validate_section_evidence_strength(markdown, validated_package)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
     target = validated_package["target_words"]
@@ -2055,6 +2321,7 @@ def run_section_generation_sequence(
     candidate_selection_retry_count = 0
     response_format_retry_count = 0
     technical_consistency_retry_count = 0
+    content_provenance_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
             sections,
@@ -2096,6 +2363,8 @@ def run_section_generation_sequence(
                     response_format_retry_count += 1
                 elif repair_kind == "technical_consistency":
                     technical_consistency_retry_count += 1
+                elif repair_kind == "content_provenance":
+                    content_provenance_retry_count += 1
                 else:
                     evidence_strength_retry_count += 1
                 try:
@@ -2139,6 +2408,8 @@ def run_section_generation_sequence(
                         response_format_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
+                    elif final_kind == "content_provenance":
+                        content_provenance_retry_count += 1
                     elif final_kind in ("word_count", "word_count_strict_trim"):
                         word_count_retry_count += 1
                     else:
@@ -2184,6 +2455,7 @@ def run_section_generation_sequence(
         "candidate_selection_retry_count": candidate_selection_retry_count,
         "response_format_retry_count": response_format_retry_count,
         "technical_consistency_retry_count": technical_consistency_retry_count,
+        "content_provenance_retry_count": content_provenance_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
 
