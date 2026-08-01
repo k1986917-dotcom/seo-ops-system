@@ -312,6 +312,15 @@ def test_laser_site_prompt_keeps_high_power_neutral_and_variants_separate():
     assert '"site_slug": "laserpointerhub"' in prompt["user"]
 
 
+def test_product_free_section_omits_site_profile_to_preserve_checkpoint_compatibility():
+    package = _package_for_stage("verify", site_slug="laserpointerhub")
+    prompt = build_section_generation_prompt(package)
+
+    assert package["link_gates"]["product_links"]["opportunity_state"] == "none"
+    assert "site_profile" not in package
+    assert "high output as neutral" not in prompt["system"]
+
+
 def test_zero_verified_quotes_remove_named_authority_from_model_contract():
     bundle = build_contract_bundle(
         topic="Worksite Marking Guide",

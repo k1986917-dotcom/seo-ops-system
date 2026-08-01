@@ -4,8 +4,10 @@
   代表内容可发布：B017USB/B016 被写成远距离天花板施工方案，同一商品跨 section 重复，
   delivery 去重后产生病句，且部分产品性能/用途结论未进入 claim ledger。因此候选保留、
   正式产物不变、禁止 promotion。
-- 新增 `sectional_site_profiles.py`：共享排序算法不写死行业，站点只配置候选数量、链接
-  上限、禁放产品的章节模式、用途触发词与商品属性权重。未知站点使用 generic profile。
+- 新增通用 loader `sectional_site_profiles.py` 与
+  `src/seo_ops/site_profiles/laserpointerhub.json`：共享排序算法不写死行业，站点只在独立
+  JSON 中配置候选数量、链接上限、禁放产品的章节模式、用途触发词与商品属性权重。
+  profile schema 会严格校验；未知站点使用 generic profile，新增站点无需改排序引擎。
 - 站点入口已贯通 `Action.site_id → sites.slug → Web route → Legacy stage/adapter →
   Sectional Pipeline → resolve_shadow_opportunities`；profile 元数据写入 context manifest、
   shadow report、Section Package 和 pipeline result。
@@ -14,12 +16,17 @@
   520/532nm、可见度、single beam、focus、distance；另有精确指向、便携、燃烧用途规则。
 - 候选池最多 5 个，每个商业 section 最多 1 个产品，同一商品整篇最多分配一次；
   `related_catalog` 仅可选、不再强制。多变体商品 prompt 禁止混合不同变体规格。
-- 回归 fixture 验证 B025、B023、G019/B019B、B030 进入绿光优先候选；B020 因
+- product gate 为 `none` 的 section 不携带 site profile，避免无关 profile 字段直接改变
+  package SHA。Action #3 真实 checkpoint 边界为 901/049 可恢复、429 因 Class 3R 商品
+  gate 改为 `none` 而失效；429 重写后，后续 section 仍须按 `previous_summary` 顺序判定，
+  可能连锁重算。
+- 回归 fixture 与 Action #3 真实数据共同验证绿光优先：实际候选为
+  `B025 → B023/B023B → G019/B019B → B030 → B01.6`；B020 因
   `520nm blue / 450nm green` 属性冲突被拒绝，与功率无关。
-- 验证：入口/排序/生成/Pipeline/Adapter 125 passed、1 deselected；Sectional 非 Web
-  222 passed、1 deselected；Legacy/W1b 非 Web 237 passed、2 deselected；Ruff lint、
+- 验证：入口/排序/生成/Pipeline/Adapter 150 passed、1 deselected；Sectional 非 Web
+  224 passed、1 deselected；Legacy/W1b 非 Web 237 passed、2 deselected；Ruff lint、
   compileall、`git diff --check` 通过。仓库仍有 28 个既有 Ruff format 差异，本次新增
-  profile 文件单独 format check 通过，未全仓重排。
+  loader/config 与直接修改的业务文件通过 lint，未全仓重排。
 - 未 push、未运行真实 Shadow、未改正式 draft/claim-ledger/w2-state/`.env`/数据库，
   未手工修改或删除 checkpoint/终态文件。下一次真实运行必须先原子归档已审查失败的完整
   候选，再恰好运行一次 `--resume-existing --refresh-complete --ai-call-limit 36`。

@@ -31,7 +31,12 @@ seo-ops = "seo_ops.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-seo_ops = ["web/templates/*.html", "web/static/*.css", "web/static/*.js"]
+seo_ops = [
+  "web/templates/*.html",
+  "web/static/*.css",
+  "web/static/*.js",
+  "site_profiles/*.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

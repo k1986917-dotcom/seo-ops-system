@@ -13,6 +13,7 @@ from seo_ops.services.sectional_context import (
 from seo_ops.services.sectional_site_profiles import (
     get_sectional_site_profile,
     score_site_product_preferences,
+    site_profile_manifest,
 )
 from seo_ops.services.sectional_writing import (
     build_contract_bundle,
@@ -567,6 +568,18 @@ def test_laser_high_power_is_neutral_outside_energy_use_cases():
 
     assert lower_power == higher_power
     assert profile.high_power_policy == "neutral_for_ranking_and_never_an_exclusion"
+
+
+def test_site_profile_entry_loads_packaged_config_and_unknown_site_falls_back():
+    laser = get_sectional_site_profile("laserpointerhub")
+    generic = get_sectional_site_profile("future-site-without-a-profile")
+
+    assert laser.site_slug == "laserpointerhub"
+    assert laser.source == "package:site_profiles/laserpointerhub.json"
+    assert site_profile_manifest(laser)["source"] == laser.source
+    assert generic.site_slug == "default"
+    assert generic.source == "builtin:default"
+    assert generic.use_case_rules == ()
 
 
 def test_laser_related_catalog_fallback_is_recommended_not_required():

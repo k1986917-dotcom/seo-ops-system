@@ -1,0 +1,153 @@
+{
+  "site_slug": "laserpointerhub",
+  "version": 1,
+  "product_candidate_limit": 5,
+  "product_link_limit_per_section": 1,
+  "unique_product_per_article": true,
+  "required_fit_levels": [
+    "strong",
+    "approved_constraint",
+    "contextual"
+  ],
+  "generic_product_terms": [
+    "laser",
+    "lasers",
+    "pointer",
+    "pointers",
+    "product",
+    "products",
+    "tool",
+    "tools"
+  ],
+  "prohibited_product_section_patterns": [
+    "\\b(?:safety|compliance|legal|regulation|regulatory|hazard|danger|injury|warning)\\b",
+    "\\bclass\\s*(?:3r|3b|4)\\b"
+  ],
+  "high_power_policy": "neutral_for_ranking_and_never_an_exclusion",
+  "variant_label_pattern": "\\b(?:B|G)\\d{3}(?:\\.\\d+)?[A-Z]\\b",
+  "use_case_rules": [
+    {
+      "name": "long_distance_visible_pointing",
+      "triggers": [
+        "above",
+        "bright",
+        "ceiling",
+        "distance",
+        "long range",
+        "overhead",
+        "pointing",
+        "visibility"
+      ],
+      "minimum_trigger_matches": 2,
+      "preferences": [
+        {
+          "reason": "green_wavelength",
+          "terms": ["520nm", "532nm"],
+          "weight": 36
+        },
+        {
+          "reason": "green_color",
+          "terms": ["green", "emerald"],
+          "weight": 24
+        },
+        {
+          "reason": "visible_beam",
+          "terms": [
+            "highly visible",
+            "maximum visibility",
+            "perceived visibility",
+            "visible beam",
+            "visibility"
+          ],
+          "weight": 16
+        },
+        {
+          "reason": "single_beam",
+          "terms": ["single beam", "single-beam", "pure focus", "no scatter"],
+          "weight": 18
+        },
+        {
+          "reason": "focus_control",
+          "terms": [
+            "adjustable focus",
+            "adjustable focal",
+            "focusing",
+            "focus mechanism"
+          ],
+          "weight": 12
+        },
+        {
+          "reason": "distance_feature",
+          "terms": ["long range", "long-range", "effective range", "at distance"],
+          "weight": 14
+        }
+      ]
+    },
+    {
+      "name": "portable_field_use",
+      "triggers": ["carry", "compact", "handheld", "pocket", "portable"],
+      "minimum_trigger_matches": 1,
+      "preferences": [
+        {
+          "reason": "compact_body",
+          "terms": ["compact", "pocket", "pocket-sized"],
+          "weight": 12
+        },
+        {
+          "reason": "rechargeable_power",
+          "terms": [
+            "rechargeable",
+            "usb charging",
+            "usb-c charging",
+            "built-in battery"
+          ],
+          "weight": 8
+        }
+      ]
+    },
+    {
+      "name": "precision_pointing",
+      "triggers": ["alignment", "focus", "precision", "targeting"],
+      "minimum_trigger_matches": 1,
+      "preferences": [
+        {
+          "reason": "focus_control",
+          "terms": [
+            "adjustable focus",
+            "adjustable focal",
+            "focusing",
+            "focus mechanism"
+          ],
+          "weight": 18
+        },
+        {
+          "reason": "single_beam",
+          "terms": ["single beam", "single-beam", "pure focus", "no scatter"],
+          "weight": 14
+        }
+      ]
+    },
+    {
+      "name": "burning_or_energy_density",
+      "triggers": ["burn", "burning", "engrave", "ignite", "lighting matches"],
+      "minimum_trigger_matches": 1,
+      "preferences": [
+        {
+          "reason": "high_output_for_energy_use",
+          "terms": ["high power", "high-power", "energy density", "concentrated output"],
+          "weight": 22
+        },
+        {
+          "reason": "focus_control",
+          "terms": [
+            "adjustable focus",
+            "adjustable focal",
+            "focusing",
+            "focus mechanism"
+          ],
+          "weight": 16
+        }
+      ]
+    }
+  ]
+}

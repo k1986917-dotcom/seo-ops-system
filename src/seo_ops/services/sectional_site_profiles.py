@@ -8,8 +8,11 @@ Unknown sites intentionally fall back to the conservative generic profile.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 
@@ -47,6 +50,7 @@ class SectionalSiteProfile:
     use_case_rules: tuple[ProductUseCaseRule, ...]
     high_power_policy: str
     variant_label_pattern: str
+    source: str
 
 
 GENERIC_PROFILE = SectionalSiteProfile(
@@ -63,138 +67,200 @@ GENERIC_PROFILE = SectionalSiteProfile(
     use_case_rules=(),
     high_power_policy="not_applicable",
     variant_label_pattern="",
+    source="builtin:default",
 )
 
+_PROFILE_DIR = Path(__file__).resolve().parents[1] / "site_profiles"
+_SITE_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_FIT_LEVELS = frozenset({"strong", "approved_constraint", "contextual", "related_catalog"})
 
-LASERPOINTERHUB_PROFILE = SectionalSiteProfile(
-    site_slug="laserpointerhub",
-    version=1,
-    product_candidate_limit=5,
-    product_link_limit_per_section=1,
-    unique_product_per_article=True,
-    required_fit_levels=frozenset({"strong", "approved_constraint", "contextual"}),
-    generic_product_terms=frozenset(
-        {
-            "laser",
-            "lasers",
-            "pointer",
-            "pointers",
-            "product",
-            "products",
-            "tool",
-            "tools",
-        }
-    ),
-    prohibited_product_section_patterns=(
-        r"\b(?:safety|compliance|legal|regulation|regulatory|hazard|danger|injury|warning)\b",
-        r"\bclass\s*(?:3r|3b|4)\b",
-    ),
-    use_case_rules=(
-        ProductUseCaseRule(
-            name="long_distance_visible_pointing",
-            triggers=(
-                "above",
-                "bright",
-                "ceiling",
-                "distance",
-                "long range",
-                "overhead",
-                "pointing",
-                "visibility",
-            ),
-            minimum_trigger_matches=2,
-            preferences=(
-                ProductPreference("green_wavelength", ("520nm", "532nm"), 36),
-                ProductPreference("green_color", ("green", "emerald"), 24),
-                ProductPreference(
-                    "visible_beam",
-                    (
-                        "highly visible",
-                        "maximum visibility",
-                        "perceived visibility",
-                        "visible beam",
-                        "visibility",
-                    ),
-                    16,
-                ),
-                ProductPreference(
-                    "single_beam",
-                    ("single beam", "single-beam", "pure focus", "no scatter"),
-                    18,
-                ),
-                ProductPreference(
-                    "focus_control",
-                    ("adjustable focus", "adjustable focal", "focusing", "focus mechanism"),
-                    12,
-                ),
-                ProductPreference(
-                    "distance_feature",
-                    ("long range", "long-range", "effective range", "at distance"),
-                    14,
-                ),
-            ),
+
+class SectionalSiteProfileError(ValueError):
+    """Raised when an installed site profile is malformed."""
+
+
+def _required_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SectionalSiteProfileError(f"{field} must be a non-empty string")
+    return " ".join(value.split())
+
+
+def _string_tuple(value: Any, field: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        raise SectionalSiteProfileError(f"{field} must be a non-empty string list")
+    result = tuple(_required_text(item, f"{field}[]") for item in value)
+    if len(result) != len(set(result)):
+        raise SectionalSiteProfileError(f"{field} must not contain duplicates")
+    return result
+
+
+def _positive_int(value: Any, field: str, *, maximum: int = 100) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+        raise SectionalSiteProfileError(f"{field} must be an integer from 1 to {maximum}")
+    return value
+
+
+def _profile_from_payload(payload: Any, *, source: str) -> SectionalSiteProfile:
+    if not isinstance(payload, dict):
+        raise SectionalSiteProfileError("site profile must be a JSON object")
+    site_slug = _required_text(payload.get("site_slug"), "site_slug").casefold()
+    if not _SITE_SLUG.fullmatch(site_slug):
+        raise SectionalSiteProfileError("site_slug contains unsupported characters")
+    version = _positive_int(payload.get("version"), "version", maximum=999)
+    product_candidate_limit = _positive_int(
+        payload.get("product_candidate_limit"),
+        "product_candidate_limit",
+        maximum=20,
+    )
+    product_link_limit = _positive_int(
+        payload.get("product_link_limit_per_section"),
+        "product_link_limit_per_section",
+        maximum=10,
+    )
+    if product_link_limit > product_candidate_limit:
+        raise SectionalSiteProfileError(
+            "product_link_limit_per_section cannot exceed product_candidate_limit"
+        )
+    unique_product_per_article = payload.get("unique_product_per_article")
+    if not isinstance(unique_product_per_article, bool):
+        raise SectionalSiteProfileError("unique_product_per_article must be bool")
+    required_fit_levels = frozenset(
+        _string_tuple(payload.get("required_fit_levels"), "required_fit_levels")
+    )
+    if not required_fit_levels <= _FIT_LEVELS:
+        raise SectionalSiteProfileError("required_fit_levels contains an unknown fit level")
+    generic_product_terms = frozenset(
+        term.casefold()
+        for term in _string_tuple(
+            payload.get("generic_product_terms"),
+            "generic_product_terms",
+            allow_empty=True,
+        )
+    )
+    prohibited_patterns = _string_tuple(
+        payload.get("prohibited_product_section_patterns"),
+        "prohibited_product_section_patterns",
+        allow_empty=True,
+    )
+    for pattern in prohibited_patterns:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise SectionalSiteProfileError(
+                f"prohibited_product_section_patterns contains invalid regex: {pattern}"
+            ) from exc
+    variant_label_pattern = str(payload.get("variant_label_pattern") or "")
+    if variant_label_pattern:
+        try:
+            re.compile(variant_label_pattern)
+        except re.error as exc:
+            raise SectionalSiteProfileError("variant_label_pattern is invalid") from exc
+
+    raw_rules = payload.get("use_case_rules")
+    if not isinstance(raw_rules, list):
+        raise SectionalSiteProfileError("use_case_rules must be a list")
+    rules: list[ProductUseCaseRule] = []
+    rule_names: set[str] = set()
+    for index, raw_rule in enumerate(raw_rules):
+        if not isinstance(raw_rule, dict):
+            raise SectionalSiteProfileError(f"use_case_rules[{index}] must be an object")
+        name = _required_text(raw_rule.get("name"), f"use_case_rules[{index}].name")
+        if name in rule_names:
+            raise SectionalSiteProfileError(f"duplicate use-case rule: {name}")
+        rule_names.add(name)
+        triggers = _string_tuple(
+            raw_rule.get("triggers"),
+            f"use_case_rules[{index}].triggers",
+        )
+        minimum_trigger_matches = _positive_int(
+            raw_rule.get("minimum_trigger_matches"),
+            f"use_case_rules[{index}].minimum_trigger_matches",
+            maximum=len(triggers),
+        )
+        raw_preferences = raw_rule.get("preferences")
+        if not isinstance(raw_preferences, list) or not raw_preferences:
+            raise SectionalSiteProfileError(
+                f"use_case_rules[{index}].preferences must be a non-empty list"
+            )
+        preferences: list[ProductPreference] = []
+        preference_reasons: set[str] = set()
+        for preference_index, raw_preference in enumerate(raw_preferences):
+            if not isinstance(raw_preference, dict):
+                raise SectionalSiteProfileError(
+                    f"use_case_rules[{index}].preferences[{preference_index}] must be an object"
+                )
+            reason = _required_text(
+                raw_preference.get("reason"),
+                f"use_case_rules[{index}].preferences[{preference_index}].reason",
+            )
+            if reason in preference_reasons:
+                raise SectionalSiteProfileError(f"duplicate preference reason in {name}: {reason}")
+            preference_reasons.add(reason)
+            terms = _string_tuple(
+                raw_preference.get("terms"),
+                f"use_case_rules[{index}].preferences[{preference_index}].terms",
+            )
+            weight = _positive_int(
+                raw_preference.get("weight"),
+                f"use_case_rules[{index}].preferences[{preference_index}].weight",
+                maximum=1000,
+            )
+            preferences.append(ProductPreference(reason, terms, weight))
+        rules.append(
+            ProductUseCaseRule(
+                name=name,
+                triggers=triggers,
+                minimum_trigger_matches=minimum_trigger_matches,
+                preferences=tuple(preferences),
+            )
+        )
+
+    return SectionalSiteProfile(
+        site_slug=site_slug,
+        version=version,
+        product_candidate_limit=product_candidate_limit,
+        product_link_limit_per_section=product_link_limit,
+        unique_product_per_article=unique_product_per_article,
+        required_fit_levels=required_fit_levels,
+        generic_product_terms=generic_product_terms,
+        prohibited_product_section_patterns=prohibited_patterns,
+        use_case_rules=tuple(rules),
+        high_power_policy=_required_text(
+            payload.get("high_power_policy"),
+            "high_power_policy",
         ),
-        ProductUseCaseRule(
-            name="portable_field_use",
-            triggers=("carry", "compact", "handheld", "pocket", "portable"),
-            minimum_trigger_matches=1,
-            preferences=(
-                ProductPreference("compact_body", ("compact", "pocket", "pocket-sized"), 12),
-                ProductPreference(
-                    "rechargeable_power",
-                    ("rechargeable", "usb charging", "usb-c charging", "built-in battery"),
-                    8,
-                ),
-            ),
-        ),
-        ProductUseCaseRule(
-            name="precision_pointing",
-            triggers=("alignment", "focus", "precision", "targeting"),
-            minimum_trigger_matches=1,
-            preferences=(
-                ProductPreference(
-                    "focus_control",
-                    ("adjustable focus", "adjustable focal", "focusing", "focus mechanism"),
-                    18,
-                ),
-                ProductPreference(
-                    "single_beam",
-                    ("single beam", "single-beam", "pure focus", "no scatter"),
-                    14,
-                ),
-            ),
-        ),
-        ProductUseCaseRule(
-            name="burning_or_energy_density",
-            triggers=("burn", "burning", "engrave", "ignite", "lighting matches"),
-            minimum_trigger_matches=1,
-            preferences=(
-                ProductPreference(
-                    "high_output_for_energy_use",
-                    ("high power", "high-power", "energy density", "concentrated output"),
-                    22,
-                ),
-                ProductPreference(
-                    "focus_control",
-                    ("adjustable focus", "adjustable focal", "focusing", "focus mechanism"),
-                    16,
-                ),
-            ),
-        ),
-    ),
-    high_power_policy="neutral_for_ranking_and_never_an_exclusion",
-    variant_label_pattern=r"\b(?:B|G)\d{3}(?:\.\d+)?[A-Z]\b",
-)
+        variant_label_pattern=variant_label_pattern,
+        source=source,
+    )
 
 
-_PROFILES = {LASERPOINTERHUB_PROFILE.site_slug: LASERPOINTERHUB_PROFILE}
-
-
+@lru_cache(maxsize=32)
 def get_sectional_site_profile(site_slug: str | None) -> SectionalSiteProfile:
-    """Return a versioned site profile or the generic fallback."""
+    """Load one packaged site profile or return the generic fallback."""
 
     normalized = str(site_slug or "").strip().casefold()
-    return _PROFILES.get(normalized, GENERIC_PROFILE)
+    if not normalized:
+        return GENERIC_PROFILE
+    if not _SITE_SLUG.fullmatch(normalized):
+        raise SectionalSiteProfileError("site slug contains unsupported characters")
+    path = _PROFILE_DIR / f"{normalized}.json"
+    if not path.is_file():
+        return GENERIC_PROFILE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SectionalSiteProfileError(
+            f"cannot load sectional site profile: {normalized}"
+        ) from exc
+    profile = _profile_from_payload(
+        payload,
+        source=f"package:site_profiles/{path.name}",
+    )
+    if profile.site_slug != normalized:
+        raise SectionalSiteProfileError(
+            f"profile site_slug mismatch: expected {normalized}, got {profile.site_slug}"
+        )
+    return profile
 
 
 def _normalize(value: str) -> str:
@@ -308,4 +374,5 @@ def site_profile_manifest(profile: SectionalSiteProfile) -> dict[str, Any]:
         "high_power_policy": profile.high_power_policy,
         "variant_label_pattern": profile.variant_label_pattern,
         "use_case_rules": [rule.name for rule in profile.use_case_rules],
+        "source": profile.source,
     }

@@ -212,12 +212,8 @@ def _selected_candidates(
                     "attributes": _compact_product_attributes(candidate),
                     "fit_level": fit_level,
                     "fit_reason": metadata.get("fit_reason", "approved_candidate"),
-                    "site_preference_score": int(
-                        metadata.get("site_preference_score", 0) or 0
-                    ),
-                    "active_site_rules": list(
-                        metadata.get("active_site_rules", []) or []
-                    ),
+                    "site_preference_score": int(metadata.get("site_preference_score", 0) or 0),
+                    "active_site_rules": list(metadata.get("active_site_rules", []) or []),
                     "matched_site_preferences": list(
                         metadata.get("matched_site_preferences", []) or []
                     ),
@@ -448,24 +444,6 @@ def build_section_generation_package(
         "version": CONTRACT_VERSION,
         "topic": sections["topic"],
         "content_language": sections["content_language"],
-        "site_profile": dict(
-            context_manifest.get("site_profile")
-            or {
-                "site_slug": "default",
-                "version": 1,
-                "product_candidate_limit": 2,
-                "product_link_limit_per_section": 2,
-                "unique_product_per_article": False,
-                "required_fit_levels": [
-                    "approved_constraint",
-                    "contextual",
-                    "related_catalog",
-                    "strong",
-                ],
-                "high_power_policy": "not_applicable",
-                "use_case_rules": [],
-            }
-        ),
         "section_id": clean_section_id,
         "position": section["position"],
         "heading": model_text(section["heading"]),
@@ -491,6 +469,25 @@ def build_section_generation_package(
             "evidence": evidence_candidates,
         },
     }
+    if link["product_links"]["opportunity_state"] != "none":
+        package["site_profile"] = dict(
+            context_manifest.get("site_profile")
+            or {
+                "site_slug": "default",
+                "version": 1,
+                "product_candidate_limit": 2,
+                "product_link_limit_per_section": 2,
+                "unique_product_per_article": False,
+                "required_fit_levels": [
+                    "approved_constraint",
+                    "contextual",
+                    "related_catalog",
+                    "strong",
+                ],
+                "high_power_policy": "not_applicable",
+                "use_case_rules": [],
+            }
+        )
     package["context_char_counts"] = {
         key: len(json.dumps(value, ensure_ascii=False, sort_keys=True))
         for key, value in package["candidates"].items()
@@ -515,7 +512,7 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
     if package.get("content_language") != DEFAULT_CONTENT_LANGUAGE:
         raise SectionGenerationError("section generation package language must be en")
     site_profile = package.get("site_profile")
-    if (
+    if site_profile is not None and (
         not isinstance(site_profile, dict)
         or not isinstance(site_profile.get("site_slug"), str)
         or not site_profile["site_slug"]
@@ -571,7 +568,7 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
 def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
     validated = validate_section_generation_package(package)
     verified_ids = _verified_quote_ids(validated)
-    site_profile = validated["site_profile"]
+    site_profile = validated.get("site_profile") or {}
     site_policy_rule = (
         "\nThe active site profile treats high output as neutral for product ranking: "
         "do not reject, apologize for, or replace an approved product merely because "
@@ -581,8 +578,7 @@ def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
         "there. When one catalog page contains multiple color or power variants, discuss "
         "only the exact variant supported by the supplied attributes and matched site "
         "preferences. Never merge specifications from different variants."
-        if site_profile.get("high_power_policy")
-        == "neutral_for_ranking_and_never_an_exclusion"
+        if site_profile.get("high_power_policy") == "neutral_for_ranking_and_never_an_exclusion"
         else ""
     )
     authority_free_rule = (
@@ -625,28 +621,27 @@ Return exactly two blocks and no other text:
         + authority_free_rule
         + site_policy_rule
     )
-    user_payload = {
-        key: validated[key]
-        for key in (
-            "topic",
-            "content_language",
-            "site_profile",
-            "section_id",
-            "heading",
-            "reader_stage",
-            "reader_question",
-            "section_goal",
-            "must_answer",
-            "brief_points",
-            "must_not_repeat",
-            "target_words",
-            "previous_heading",
-            "previous_summary",
-            "next_heading",
-            "link_gates",
-            "candidates",
-        )
-    }
+    user_keys = [
+        "topic",
+        "content_language",
+        "section_id",
+        "heading",
+        "reader_stage",
+        "reader_question",
+        "section_goal",
+        "must_answer",
+        "brief_points",
+        "must_not_repeat",
+        "target_words",
+        "previous_heading",
+        "previous_summary",
+        "next_heading",
+        "link_gates",
+        "candidates",
+    ]
+    if "site_profile" in validated:
+        user_keys.insert(2, "site_profile")
+    user_payload = {key: validated[key] for key in user_keys}
     user = "SECTION PACKAGE\n" + json.dumps(
         user_payload,
         ensure_ascii=False,

@@ -35,6 +35,7 @@ from seo_ops.services.sectional_generation import (
     run_section_generation_sequence,
     validate_claim_evidence_strength,
 )
+from seo_ops.services.sectional_site_profiles import SectionalSiteProfileError
 from seo_ops.services.sectional_writing import (
     ContractValidationError,
     build_contract_bundle_from_brief,
@@ -130,7 +131,11 @@ def run_sectional_shadow_candidate(
             shadow,
             bundle["section_contracts"],
         )
-    except (ContractValidationError, SectionAssemblyError) as exc:
+    except (
+        ContractValidationError,
+        SectionAssemblyError,
+        SectionalSiteProfileError,
+    ) as exc:
         raise SectionalPipelineError(f"sectional contract/context setup failed: {exc}") from exc
 
     counters = {

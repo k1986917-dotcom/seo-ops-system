@@ -3,8 +3,9 @@
 ### Changed
 
 - 新增版本化 Sectional 站点配置入口。Web 路由从 Action 的 `site_id` 解析 `sites.slug`，
-  再经 Legacy Adapter 与 Sectional Pipeline 传入共享推荐引擎；未知站点继续使用原通用
-  配置，站点选择与配置版本写入 shadow/context/pipeline 产物供审计。
+  再经 Legacy Adapter 与 Sectional Pipeline 传入共享推荐引擎；站点规则从打包的
+  `site_profiles/<slug>.json` 加载并严格校验，未知站点继续使用原通用配置，站点选择、
+  配置版本与来源写入 shadow/context/pipeline 产物供审计。
 - `laserpointerhub` 不再因商品功率高而扣分或淘汰商品；产品排序改为按用途属性加权：
   远距离/天花板指示优先 520/532nm 绿光、可见度、single-beam、focus 与 distance，
   精确指向、便携和燃烧用途分别使用自己的属性偏好。
@@ -13,6 +14,8 @@
   整篇最多分配一次；仅 `related_catalog` 匹配时不再强制商品链接。
 - Section Package 向写作模型明确传递站点政策：不得只因高功率拒绝已批准商品，但也不得
   生成安全、合规、批准或普遍适用结论；多变体商品只能描述当前匹配变体，禁止混合规格。
+- product gate 为 `none` 的 section 不写入站点商品 profile，保持既有非产品 checkpoint
+  的 package SHA 兼容；只有实际受商品策略影响的 section 自动失效并重算。
 
 ### Fixed
 

@@ -12,24 +12,31 @@
   审查不通过，绝对不能 promotion：429/7bb 把 B017USB/B016 蓝光商品写成远距离施工
   适用方案；同一商品跨 section 重复分配后去链接产生病句；高风险产品性能句未进入
   claim ledger。终态文件保留为审查证据，没有手工编辑或删除。
-- 本次新增 `sectional_site_profiles.py`，将产品推荐拆为通用引擎与版本化站点配置：未知
-  网站继续使用原通用规则；`laserpointerhub` 从 Action 的 `site_id→sites.slug` 经 Web/
-  Legacy Adapter/Pipeline 进入推荐引擎，配置版本同时写入 context manifest、shadow report、
-  Section Package 和 pipeline result，便于审计。
+- 本次新增通用 profile loader `sectional_site_profiles.py` 与独立配置文件
+  `src/seo_ops/site_profiles/laserpointerhub.json`，将产品推荐拆为通用引擎与版本化站点
+  配置。未知网站继续使用原通用规则；`laserpointerhub` 从 Action 的
+  `site_id→sites.slug` 经 Web/Legacy Adapter/Pipeline 进入推荐引擎，配置版本和来源同时
+  写入 context manifest、shadow report、受产品策略影响的 Section Package 与 pipeline
+  result，便于审计。以后新增网站只需增加并测试对应 JSON，不改排序引擎。
 - `laserpointerhub` 规则：高功率不扣分、不淘汰；Class 3R/3B/4 以及 safety/compliance/
   legal/hazard 等章节禁止产品链接；远距离/天花板指示优先 520/532nm 绿光、可见度、
   single-beam、focus 和 distance 属性；精确指向、便携、燃烧用途分别加载自己的属性权重。
 - 商品候选池与实际链接数量分离：激光笔站每个 section 保留最多 5 个候选供审计，但每个
   商业 section 最多 1 个产品，且同一商品整篇最多分配一次；仅 `related_catalog` 匹配时
   不再强制链接。
-- 当前预期：B025、B023 绿光变体、G019/B019B、B030 优先进入远距离绿光候选；B020
+- Action #3 真实输入只读验证：远距离/天花板商品候选实际排序为
+  `B025 → B023/B023B → G019/B019B → B030 → B01.6`；Class 3R 章节候选为空。B020
   继续因 `520nm blue / 450nm green` 数据冲突 fail-closed，不是因高功率被排除。
 - 写作 prompt 明确：不得仅因高功率拒绝已批准商品；不得由此生成安全、合规、批准或
   普遍适用结论；一个页面包含多变体时只能描述当前匹配变体，禁止混合不同变体规格。
-- 验证：站点入口/排序/生成/Pipeline/Adapter 125 passed、1 deselected；Sectional 非 Web
-  222 passed、1 deselected；Legacy/W1b 非 Web 237 passed、2 deselected；Ruff lint、
+- product gate 为 `none` 的 section 不携带 site profile，避免无关 profile 字段直接改变
+  package SHA。真实 checkpoint 边界验证为：901、049 可恢复；429 因 Class 3R 商品 gate
+  改为 `none` 而失效。429 重写后，2d 及后续 section 会按新的 `previous_summary` 顺序重新
+  判定，可能连锁重算，不能提前承诺全部恢复。
+- 验证：站点入口/排序/生成/Pipeline/Adapter 150 passed、1 deselected；Sectional 非 Web
+  224 passed、1 deselected；Legacy/W1b 非 Web 237 passed、2 deselected；Ruff lint、
   compileall、`git diff --check` 通过。全仓 Ruff format check 仍报告 28 个既有未格式化
-  文件，本次新增配置文件单独 format check 通过，未制造全仓格式化噪音。
+  文件，本次新增 loader/config 与直接修改的业务文件通过 lint，未制造全仓格式化噪音。
 - 当前代码尚未 push、未再次运行 Shadow、未 promotion。完成审查提交后，下一步是只推送
   一次，再用 `--resume-existing --refresh-complete --ai-call-limit 36` 恰好运行一次：
   `--refresh-complete` 只把已审查失败的完整候选原子归档并保留 checkpoints，由新配置的
