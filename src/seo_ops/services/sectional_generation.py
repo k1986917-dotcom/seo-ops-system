@@ -212,6 +212,16 @@ def _selected_candidates(
                     "attributes": _compact_product_attributes(candidate),
                     "fit_level": fit_level,
                     "fit_reason": metadata.get("fit_reason", "approved_candidate"),
+                    "site_preference_score": int(
+                        metadata.get("site_preference_score", 0) or 0
+                    ),
+                    "active_site_rules": list(
+                        metadata.get("active_site_rules", []) or []
+                    ),
+                    "matched_site_preferences": list(
+                        metadata.get("matched_site_preferences", []) or []
+                    ),
+                    "matched_variant": metadata.get("matched_variant"),
                 }
             )
         else:
@@ -438,6 +448,24 @@ def build_section_generation_package(
         "version": CONTRACT_VERSION,
         "topic": sections["topic"],
         "content_language": sections["content_language"],
+        "site_profile": dict(
+            context_manifest.get("site_profile")
+            or {
+                "site_slug": "default",
+                "version": 1,
+                "product_candidate_limit": 2,
+                "product_link_limit_per_section": 2,
+                "unique_product_per_article": False,
+                "required_fit_levels": [
+                    "approved_constraint",
+                    "contextual",
+                    "related_catalog",
+                    "strong",
+                ],
+                "high_power_policy": "not_applicable",
+                "use_case_rules": [],
+            }
+        ),
         "section_id": clean_section_id,
         "position": section["position"],
         "heading": model_text(section["heading"]),
@@ -486,6 +514,15 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
         _clean_text(package.get(field), f"package.{field}")
     if package.get("content_language") != DEFAULT_CONTENT_LANGUAGE:
         raise SectionGenerationError("section generation package language must be en")
+    site_profile = package.get("site_profile")
+    if (
+        not isinstance(site_profile, dict)
+        or not isinstance(site_profile.get("site_slug"), str)
+        or not site_profile["site_slug"]
+        or not isinstance(site_profile.get("version"), int)
+        or not isinstance(site_profile.get("high_power_policy"), str)
+    ):
+        raise SectionGenerationError("section generation package site_profile is invalid")
     if _CJK.search(package["heading"]):
         raise SectionGenerationError("section heading must be English")
     for field in ("must_answer", "brief_points", "must_not_repeat"):
@@ -534,6 +571,20 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
 def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
     validated = validate_section_generation_package(package)
     verified_ids = _verified_quote_ids(validated)
+    site_profile = validated["site_profile"]
+    site_policy_rule = (
+        "\nThe active site profile treats high output as neutral for product ranking: "
+        "do not reject, apologize for, or replace an approved product merely because "
+        "its supplied power is high. This does not permit safety, compliance, approval, "
+        "or universal-use claims. Product-free classification, hazard, safety, and "
+        "compliance sections are enforced by a none product gate; never add a product "
+        "there. When one catalog page contains multiple color or power variants, discuss "
+        "only the exact variant supported by the supplied attributes and matched site "
+        "preferences. Never merge specifications from different variants."
+        if site_profile.get("high_power_policy")
+        == "neutral_for_ranking_and_never_an_exclusion"
+        else ""
+    )
     authority_free_rule = (
         "\nThis package has zero source-verified quotes. In body paragraphs, do not "
         "name OSHA, FDA, EPA, FTC, CDC, NIOSH, the Occupational Safety and Health "
@@ -572,12 +623,14 @@ Return exactly two blocks and no other text:
 ===SECTION_DECISIONS===
 {"article_links":{"used_ids":[],"reason_code":"..."},"product_links":{"used_ids":[],"reason_code":"..."},"external_citations":{"used_ids":[],"reason_code":"..."}}"""
         + authority_free_rule
+        + site_policy_rule
     )
     user_payload = {
         key: validated[key]
         for key in (
             "topic",
             "content_language",
+            "site_profile",
             "section_id",
             "heading",
             "reader_stage",

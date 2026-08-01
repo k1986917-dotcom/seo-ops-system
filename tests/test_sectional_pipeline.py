@@ -208,6 +208,23 @@ def test_shadow_pipeline_builds_complete_candidate_without_formal_artifacts(tmp_
     ).exists()
 
 
+def test_shadow_pipeline_persists_selected_site_profile(tmp_path):
+    result = run_sectional_shadow_candidate(
+        workspace=tmp_path,
+        generate_text=_generator([]),
+        resume=True,
+        site_slug="laserpointerhub",
+        **_inputs(),
+    )
+    manifest = json.loads(
+        Path(result["shadow_paths"]["context_manifest"]).read_text(encoding="utf-8")
+    )
+
+    assert manifest["site_profile"]["site_slug"] == "laserpointerhub"
+    assert manifest["site_profile"]["version"] == 1
+    assert manifest["site_profile"]["product_candidate_limit"] == 5
+
+
 def test_shadow_pipeline_resumes_all_valid_checkpoints_without_ai(tmp_path):
     first = run_sectional_shadow_candidate(
         workspace=tmp_path,

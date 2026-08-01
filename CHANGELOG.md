@@ -1,3 +1,27 @@
+## [Unreleased] — Site-aware sectional product recommendations
+
+### Changed
+
+- 新增版本化 Sectional 站点配置入口。Web 路由从 Action 的 `site_id` 解析 `sites.slug`，
+  再经 Legacy Adapter 与 Sectional Pipeline 传入共享推荐引擎；未知站点继续使用原通用
+  配置，站点选择与配置版本写入 shadow/context/pipeline 产物供审计。
+- `laserpointerhub` 不再因商品功率高而扣分或淘汰商品；产品排序改为按用途属性加权：
+  远距离/天花板指示优先 520/532nm 绿光、可见度、single-beam、focus 与 distance，
+  精确指向、便携和燃烧用途分别使用自己的属性偏好。
+- 激光笔的 Class 3R/3B/4 比较章节以及 safety/compliance/legal/hazard 等章节禁止产品
+  内链。候选池保留最多 5 个供审计，但每个商业 section 最多链接 1 个产品，同一商品
+  整篇最多分配一次；仅 `related_catalog` 匹配时不再强制商品链接。
+- Section Package 向写作模型明确传递站点政策：不得只因高功率拒绝已批准商品，但也不得
+  生成安全、合规、批准或普遍适用结论；多变体商品只能描述当前匹配变体，禁止混合规格。
+
+### Fixed
+
+- 修复通用 `laser/pointer` 词命中压过真实商品用途属性的问题；被中文历史 brief 拒绝进入
+  英文正文的条目，其可验证 ASCII 技术词（如 `532nm`、`single beam`、`focus`）仍可作为
+  只读排序信号，不会进入写作事实上下文。
+- 修复同一产品被多个 section 重复分配、delivery 去重后留下病句的问题。B020 等颜色/
+  波长数据自相矛盾的商品继续 fail-closed，且明确不是因为高功率被排除。
+
 ## [Unreleased] — Sectional frame authority-free repair (frame-only)
 
 ### Changed

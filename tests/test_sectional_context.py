@@ -10,6 +10,10 @@ from seo_ops.services.sectional_context import (
     persist_shadow_context,
     resolve_shadow_opportunities,
 )
+from seo_ops.services.sectional_site_profiles import (
+    get_sectional_site_profile,
+    score_site_product_preferences,
+)
 from seo_ops.services.sectional_writing import (
     build_contract_bundle,
     build_contract_bundle_from_brief,
@@ -58,6 +62,41 @@ GARDEN_PRODUCTS = """# Products
 |---|---|---|---|---|
 | GT-40 | 40V Cordless Lawn Mower | https://garden.example/gt-40 | 40V | 46cm |
 | HT-40 | 40V Cordless Hedge Trimmer | https://garden.example/ht-40 | 40V | 60cm |
+"""
+
+LASER_MERCH_PRODUCTS = """# Products
+
+| SKU | Title | URL | Price | Power | Wavelength |
+|---|---|---|---|---|---|
+| B025 | Compact Green Laser Pointer Maximum Visibility | https://example.com/p-B025 | 249 | 1500mW | 520nm green laser |
+| B023 | Single Beam Green Laser Pointer for Distance | https://example.com/p-B023 | 299 | 2400mW | 520nm green laser |
+| G019 | Professional Focusing Green Laser Pointer | https://example.com/p-G019 | 329 | 2000mW | 520nm green laser |
+| B030 | Elite 520nm Green Laser Flashlight | https://example.com/p-B030 | 159 | 1800mW | 520nm green laser |
+| B017USB | USB Rechargeable Blue Laser Pointer | https://example.com/p-B017USB | 89 | 1600mW | 450nm blue laser |
+| B016 | Professional Pocket Blue Laser Pointer | https://example.com/p-B016 | 219 | 6000mW | 450nm blue laser |
+| B020 | Blue and Green Laser Series | https://example.com/p-B020 | 329 | 8000mW | 520nm blue laser/450nm green laser |
+
+### B025 — Compact Green Laser Pointer Maximum Visibility
+- **Features**: Pure single-beam optical design, maximum perceived visibility, pocket-sized body and USB charging
+
+### B023 — Single Beam Green Laser Pointer for Distance
+- **Features**: B023A: 7W blue 450nm for energy density; B023B: 2.4W green 520nm with pure single-beam optics, no scatter and focused output at distance
+
+### G019 — Professional Focusing Green Laser Pointer
+- **Features**: B019A: 4W blue 450nm for energy density; B019B: 2W green 520nm with adjustable focus mechanism, single beam mode and compact field-carry design
+
+### B030 — Elite 520nm Green Laser Flashlight
+- **Features**: Highly visible green beam with long-range visibility in optimal conditions
+
+### B017USB — USB Rechargeable Blue Laser Pointer
+- **Features**: Built-in battery and USB direct charging
+
+### B016 — Professional Pocket Blue Laser Pointer
+- **Features**: Compact stainless steel body
+
+### B020 — Blue and Green Laser Series
+- **Wavelength**: 520nm blue laser/450nm green laser
+- **Features**: 450nm blue laser and 520nm green laser variants
 """
 
 EVIDENCE = {
@@ -423,6 +462,162 @@ H2: Top Recommendations (500 words)
     assert shadow["context_manifest"]["sections"][0][
         "brief_catalog_conflicts"
     ] == []
+
+
+def test_laser_site_profile_prioritizes_green_visibility_products_without_power_penalty():
+    brief = """## 3. Recommended Outline (H2)
+
+```
+H2: Why Green (532nm) Improves Ceiling Pointing Visibility (400 words)
+- 结合远距离可见度与 single beam 选择产品
+
+H2: Class 2 vs Class 3R for Above-Ceiling Pointing (400 words)
+- Compare classifications without recommending products
+
+H2: What to Look For in a Ceiling Construction Laser Pointer (400 words)
+- Compare the best catalog fit for long-distance pointing
+```
+"""
+    bundle = build_contract_bundle_from_brief(
+        topic="Laser Pointer for Pointing Above Ceilings in Commercial Construction",
+        tier="Cluster Content",
+        intent="Help buyers compare products for visible long-distance pointing.",
+        brief_text=brief,
+    )
+    registry = build_candidate_registry(
+        internal_links_map=INTERNAL_LINKS,
+        product_report=LASER_MERCH_PRODUCTS,
+        evidence_cards=EVIDENCE,
+    )
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        registry,
+        site_slug="laserpointerhub",
+    )
+    manifest = {
+        item["heading"]: item for item in shadow["context_manifest"]["sections"]
+    }
+    resolved = {
+        item["section_id"]: item for item in shadow["section_link_contracts"]["sections"]
+    }
+
+    selection = manifest["What to Look For in a Ceiling Construction Laser Pointer"]
+    assert [item["product_id"] for item in selection["product_candidates"][:2]] == [
+        "B025",
+        "B023",
+    ]
+    assert all(
+        item["fit_level"] == "strong" for item in selection["product_candidates"][:2]
+    )
+    assert all(
+        item["site_preference_score"] > 0
+        for item in selection["product_candidates"][:2]
+    )
+    ranked_ids = [item["product_id"] for item in selection["product_candidates"]]
+    assert {"B025", "B023", "G019", "B030"} <= set(ranked_ids)
+    assert set(ranked_ids[:4]) == {"B025", "B023", "G019", "B030"}
+    ranked_by_id = {
+        item["product_id"]: item for item in selection["product_candidates"]
+    }
+    assert ranked_by_id["B023"]["matched_variant"]["label"] == "B023B"
+    assert ranked_by_id["G019"]["matched_variant"]["label"] == "B019B"
+    assert "520nm" in ranked_by_id["B023"]["matched_variant"]["text"]
+    assert {item["product_id"] for item in selection["product_rejections"]} == {"B020"}
+    selection_gate = resolved[selection["section_id"]]["product_links"]
+    assert selection_gate["opportunity_state"] == "required"
+    assert selection_gate["max_allowed"] == 1
+    assert selection_gate["selected_ids"] == [
+        selection["product_candidates"][0]["candidate_id"]
+    ]
+
+    class_section = manifest["Class 2 vs Class 3R for Above-Ceiling Pointing"]
+    class_gate = resolved[class_section["section_id"]]["product_links"]
+    assert class_gate == {
+        "opportunity_state": "none",
+        "candidate_count": 0,
+        "min_required": 0,
+        "max_allowed": 0,
+        "reason_code": "site_profile_prohibits_product_link",
+        "selected_ids": [],
+        "rejected": [],
+    }
+    assert class_section["product_candidates"] == []
+    assert shadow["context_manifest"]["site_profile"]["site_slug"] == "laserpointerhub"
+    assert shadow["context_manifest"]["site_profile"]["product_candidate_limit"] == 5
+    assert shadow["context_manifest"]["site_profile"][
+        "product_link_limit_per_section"
+    ] == 1
+    assert shadow["context_manifest"]["site_profile"]["unique_product_per_article"] is True
+
+
+def test_laser_high_power_is_neutral_outside_energy_use_cases():
+    profile = get_sectional_site_profile("laserpointerhub")
+    context = "long distance ceiling pointing with a visible green single beam"
+    lower_power = score_site_product_preferences(
+        profile,
+        article_context=context,
+        product_text="520nm green single beam maximum visibility 5mW",
+    )
+    higher_power = score_site_product_preferences(
+        profile,
+        article_context=context,
+        product_text="520nm green single beam maximum visibility 6000mW high power",
+    )
+
+    assert lower_power == higher_power
+    assert profile.high_power_policy == "neutral_for_ranking_and_never_an_exclusion"
+
+
+def test_laser_related_catalog_fallback_is_recommended_not_required():
+    bundle = build_contract_bundle(
+        topic="Laser Pointer for Pointing Above Ceilings",
+        tier="Cluster Content",
+        intent="Help buyers choose a product.",
+        outline=["What to Look For in a Ceiling Construction Laser Pointer"],
+    )
+    blue_only = """# Products
+
+| SKU | Title | URL | Power | Wavelength |
+|---|---|---|---|---|
+| BLUE1 | General Blue Laser Pointer | https://example.com/p-blue | 6000mW | 450nm blue laser |
+"""
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        _registry(blue_only),
+        site_slug="laserpointerhub",
+    )
+    gate = shadow["section_link_contracts"]["sections"][0]["product_links"]
+
+    assert gate["opportunity_state"] == "recommended"
+    assert gate["min_required"] == 0
+
+
+def test_laser_site_allocates_one_unique_product_per_commercial_section():
+    bundle = build_contract_bundle(
+        topic="Green Laser Pointer for Long-Distance Ceiling Pointing",
+        tier="Cluster Content",
+        intent="Recommend visible green products for ceiling work.",
+        outline=[
+            "What to Look For in a Long-Distance Green Laser Pointer",
+            "Top Green Laser Recommendations for Ceiling Pointing",
+        ],
+    )
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        _registry(LASER_MERCH_PRODUCTS),
+        site_slug="laserpointerhub",
+    )
+    gates = [
+        item["product_links"] for item in shadow["section_link_contracts"]["sections"]
+    ]
+
+    assert all(gate["opportunity_state"] == "required" for gate in gates)
+    assert all(gate["max_allowed"] == 1 for gate in gates)
+    selected = [gate["selected_ids"][0] for gate in gates]
+    assert len(selected) == len(set(selected)) == 2
 
 
 def test_only_approved_generic_constraint_filters_catalog():

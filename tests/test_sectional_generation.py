@@ -79,7 +79,7 @@ EVIDENCE = {
 }
 
 
-def _setup():
+def _setup(site_slug: str = ""):
     bundle = build_contract_bundle(
         topic="Professional Ceiling Marking Tools",
         tier="Cluster Content",
@@ -101,12 +101,13 @@ def _setup():
         bundle["section_contracts"],
         bundle["section_link_contracts"],
         registry,
+        site_slug=site_slug,
     )
     return bundle["section_contracts"], shadow
 
 
-def _package_for_stage(stage: str, previous_summary: str = ""):
-    sections, shadow = _setup()
+def _package_for_stage(stage: str, previous_summary: str = "", site_slug: str = ""):
+    sections, shadow = _setup(site_slug)
     section = next(item for item in sections["sections"] if item["reader_stage"] == stage)
     return build_section_generation_package(
         sections,
@@ -296,6 +297,19 @@ def test_generation_prompt_contains_protocol_but_not_full_registry():
     assert "do not choose a winner" in prompt["system"]
     assert package["section_id"] in prompt["user"]
     assert "catalog_data_issues" not in prompt["user"]
+
+
+def test_laser_site_prompt_keeps_high_power_neutral_and_variants_separate():
+    package = _package_for_stage("select", site_slug="laserpointerhub")
+    prompt = build_section_generation_prompt(package)
+
+    assert package["site_profile"]["site_slug"] == "laserpointerhub"
+    assert package["site_profile"]["high_power_policy"] == (
+        "neutral_for_ranking_and_never_an_exclusion"
+    )
+    assert "treats high output as neutral for product ranking" in prompt["system"]
+    assert "never merge specifications from different variants" in prompt["system"].casefold()
+    assert '"site_slug": "laserpointerhub"' in prompt["user"]
 
 
 def test_zero_verified_quotes_remove_named_authority_from_model_contract():

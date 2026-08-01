@@ -368,6 +368,7 @@ def test_existing_pair_shadow_uses_current_pair_without_mutating_it(
     assert result["existing_pair_inputs"] == {
         "tier": "Cluster Content",
         "tier_source": "write_brief",
+        "site_slug": "default",
     }
 
 
@@ -420,6 +421,7 @@ def test_existing_pair_shadow_recovers_empty_brief_tier_from_matching_w1b_state(
     assert result["existing_pair_inputs"] == {
         "tier": "Cluster Content",
         "tier_source": "matching_w1b_state",
+        "site_slug": "default",
     }
 
 
@@ -625,6 +627,7 @@ def test_existing_pair_stage_delegates_without_changing_legacy_stage(
         workspace=tmp_path,
         settings=configured,
         action_id=3,
+        site_slug="laserpointerhub",
     )
 
     assert result["success"] is True
@@ -632,6 +635,7 @@ def test_existing_pair_stage_delegates_without_changing_legacy_stage(
     assert len(calls) == 1
     assert calls[0]["action_id"] == 3
     assert calls[0]["slug"] == "professional-ceiling-marking-tools"
+    assert calls[0]["site_slug"] == "laserpointerhub"
 
 
 def test_existing_pair_shadow_web_route_is_post_only(settings):
@@ -667,10 +671,15 @@ def test_shadow_mode_runs_pipeline_but_never_promotes(tmp_path, settings, monkey
         "recommendation": "eligible_for_single_action_promotion",
         "report_sha256": "c" * 64,
     }
+    pipeline_calls = []
+
+    def fake_pipeline(**kwargs):
+        pipeline_calls.append(kwargs)
+        return pipeline
 
     monkeypatch.setattr(
         "seo_ops.services.sectional_legacy_adapter.run_sectional_shadow_candidate",
-        lambda **kwargs: pipeline,
+        fake_pipeline,
     )
     monkeypatch.setattr(
         "seo_ops.services.sectional_legacy_adapter.build_shadow_comparison",
@@ -690,6 +699,7 @@ def test_shadow_mode_runs_pipeline_but_never_promotes(tmp_path, settings, monkey
         guidance="",
         workspace=tmp_path,
         slug="professional-ceiling-marking-tools",
+        site_slug="laserpointerhub",
         contracts={
             "brief": {"research_brief_excerpt": "H2: Example (100 words)"},
             "cards": {"all_cards": []},
@@ -701,6 +711,8 @@ def test_shadow_mode_runs_pipeline_but_never_promotes(tmp_path, settings, monkey
     )
     assert result["status"] == "shadow_complete"
     assert result["decision"]["promotion_allowed"] is False
+    assert len(pipeline_calls) == 1
+    assert pipeline_calls[0]["site_slug"] == "laserpointerhub"
 
 
 def test_action_mode_promotes_only_allowlisted_action(tmp_path, settings, monkeypatch):

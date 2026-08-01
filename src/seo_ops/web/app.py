@@ -606,6 +606,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _get_action_topic(action: dict) -> str:
         return (action.get("target_ref", "") or "").strip()
 
+    def _get_action_site(action: dict) -> dict:
+        site_id = int(action.get("site_id") or 0)
+        with connection(active_settings) as conn:
+            site = get_site(conn, site_id)
+        if not site:
+            raise HTTPException(status_code=404, detail="Action site not found")
+        return site
+
     def _get_action_requirements(action: dict) -> str:
         try:
             baseline = json_loads(action.get("baseline_json"), {})
@@ -691,8 +699,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def legacy_w0(action_id: int, request: Request):
         _require_local_form(request)
         form = await request.form()
-        author = form.get("author", "") or "LaserPointerHub"
         action = _get_action_or_404(action_id)
+        site = _get_action_site(action)
+        author = form.get("author", "") or site.get("name") or "LaserPointerHub"
         topic = _get_action_topic(action)
         run_workspace = _current_legacy_workspace(action_id, topic)
         result = await stage_w0_validate_and_draft(
@@ -701,6 +710,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             run_workspace,
             active_settings,
             action_id=action_id,
+            site_slug=str(site.get("slug") or ""),
         )
         _update_legacy_stage(action_id, result.get("stage"))
         msg = result.get("error") or "草稿已生成，等待预检"
@@ -711,8 +721,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Run sectional shadow against the existing formal Legacy pair."""
         _require_local_form(request)
         form = await request.form()
-        author = form.get("author", "") or "LaserPointerHub"
         action = _get_action_or_404(action_id)
+        site = _get_action_site(action)
+        author = form.get("author", "") or site.get("name") or "LaserPointerHub"
         topic = _get_action_topic(action)
         run_workspace = _current_legacy_workspace(action_id, topic)
         result = await stage_sectional_shadow_existing_pair(
@@ -721,6 +732,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             run_workspace,
             active_settings,
             action_id=action_id,
+            site_slug=str(site.get("slug") or ""),
         )
         if not result.get("success"):
             return _redirect(

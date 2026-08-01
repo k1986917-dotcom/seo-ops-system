@@ -1,3 +1,29 @@
+## 2026-08-01 — Add shared product ranking engine with laserpointerhub profile
+
+- MCP 审查最近一次完整 Shadow 后，确认自动 `eligible_for_single_action_promotion` 不足以
+  代表内容可发布：B017USB/B016 被写成远距离天花板施工方案，同一商品跨 section 重复，
+  delivery 去重后产生病句，且部分产品性能/用途结论未进入 claim ledger。因此候选保留、
+  正式产物不变、禁止 promotion。
+- 新增 `sectional_site_profiles.py`：共享排序算法不写死行业，站点只配置候选数量、链接
+  上限、禁放产品的章节模式、用途触发词与商品属性权重。未知站点使用 generic profile。
+- 站点入口已贯通 `Action.site_id → sites.slug → Web route → Legacy stage/adapter →
+  Sectional Pipeline → resolve_shadow_opportunities`；profile 元数据写入 context manifest、
+  shadow report、Section Package 和 pipeline result。
+- `laserpointerhub` 特殊规则经用户确认：高功率在产品排序中中性，不扣分、不淘汰；但
+  Class 3R/3B/4、安全、合规、法律、危险等章节不推荐商品。远距离/天花板指示优先绿光
+  520/532nm、可见度、single beam、focus、distance；另有精确指向、便携、燃烧用途规则。
+- 候选池最多 5 个，每个商业 section 最多 1 个产品，同一商品整篇最多分配一次；
+  `related_catalog` 仅可选、不再强制。多变体商品 prompt 禁止混合不同变体规格。
+- 回归 fixture 验证 B025、B023、G019/B019B、B030 进入绿光优先候选；B020 因
+  `520nm blue / 450nm green` 属性冲突被拒绝，与功率无关。
+- 验证：入口/排序/生成/Pipeline/Adapter 125 passed、1 deselected；Sectional 非 Web
+  222 passed、1 deselected；Legacy/W1b 非 Web 237 passed、2 deselected；Ruff lint、
+  compileall、`git diff --check` 通过。仓库仍有 28 个既有 Ruff format 差异，本次新增
+  profile 文件单独 format check 通过，未全仓重排。
+- 未 push、未运行真实 Shadow、未改正式 draft/claim-ledger/w2-state/`.env`/数据库，
+  未手工修改或删除 checkpoint/终态文件。下一次真实运行必须先原子归档已审查失败的完整
+  候选，再恰好运行一次 `--resume-existing --refresh-complete --ai-call-limit 36`。
+
 ## 2026-08-01 — Narrow sectional frame repair to authority-free only
 
 - 目标收窄为 frame-only：修好 article frame authority-free 门禁，保持 6 个已完成正文

@@ -1,34 +1,39 @@
 # Handoff — 当前接手状态
 
-最后更新：2026-08-01（Europe/Paris）
+最后更新：2026-08-01（Europe/Berlin）
 
-## 2026-08-01 — 收窄为 frame-only 修复：authority-free 门禁已修，正文 checkpoint 全部有效
+## 2026-08-01 — 站点感知产品内链：通用引擎 + laserpointerhub 配置
 
-- 目标：只修 article frame authority-free 门禁；保持 6 个已完成正文 section checkpoint
-  可恢复；不碰正文生成、链接或产品逻辑；最终只提交不 push。
-- 已移除上一轮过宽逻辑：related_catalog 语言门禁、`product_fit` repair、确定性
-  authority-free frame fallback 及两个相关指标，代码与测试无残留引用。
-- frame 修复机制：
-  1. validator 不放宽，`_validate_article_frame_evidence_language` 错误携带具体违规句；
-  2. 第一次 frame repair prompt 含 `SERVER-DETECTED OFFENDING PASSAGE`；
-  3. final authority-free repair 只用 topic + section summaries 从头生成四块，不回灌
-     失败 frame 全文；
-  4. 禁止命名/归因机构、禁止合规/安全/最高级/winner 表述，只允许中性过程语言；
-  5. final repair 仍失败时 fail-closed 停止，无 deterministic fallback 绕过。
-- 真实 Action #3 只读验证：6/6 section checkpoint 在最终代码下仍 valid（901=414、
-  049=401、429=423、2d=399、7bb=400、b92=358 词）；429 的 B017USB binding 保留。
-- 测试：frame/article_frame 专项 19 passed；Sectional 非 Web 230 passed；Legacy/W1b
-  非 Web 263 passed；Ruff/format/compileall/`git diff --check` 全部通过。
-- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=220`，DB SHA=
-  `3717d0fb8b3917285d7a2c196dede7f0289b3311b103002815b0568957f43183`，active=17，
-  archive=2，无 promotion manifest，正式四个 SHA 未变。
-- 本地 HEAD=`759b196`（相对远端 `c869bf0` ahead=1）；本轮新增一个 frame-only 修正提交
-  后，下一步为：推送 → 推送后核验 → 基线核验 → 恰好一次 `--resume-existing
-  --ai-call-limit 36` shadow → 停止并报告。
-
-# Handoff — 当前接手状态
-
-最后更新：2026-08-01（Europe/Paris）
+- 最近一次真实 Action #3 Shadow 在技术上成功：POST=1、`ai_runs 220→231`、22 个终态
+  artifact 完整、正式 draft/claim-ledger/w2-state/`.env` 与 Action 状态均未改变；DB SHA
+  因 11 条合法 AI 审计记录变为
+  `75242c1523bd38e5c81d2923be3b9afc6a0815004cb8c62d8d03dcaaafec9f62`。
+- 该完整候选虽然自动 comparison 报 `eligible_for_single_action_promotion`，但 MCP 内容
+  审查不通过，绝对不能 promotion：429/7bb 把 B017USB/B016 蓝光商品写成远距离施工
+  适用方案；同一商品跨 section 重复分配后去链接产生病句；高风险产品性能句未进入
+  claim ledger。终态文件保留为审查证据，没有手工编辑或删除。
+- 本次新增 `sectional_site_profiles.py`，将产品推荐拆为通用引擎与版本化站点配置：未知
+  网站继续使用原通用规则；`laserpointerhub` 从 Action 的 `site_id→sites.slug` 经 Web/
+  Legacy Adapter/Pipeline 进入推荐引擎，配置版本同时写入 context manifest、shadow report、
+  Section Package 和 pipeline result，便于审计。
+- `laserpointerhub` 规则：高功率不扣分、不淘汰；Class 3R/3B/4 以及 safety/compliance/
+  legal/hazard 等章节禁止产品链接；远距离/天花板指示优先 520/532nm 绿光、可见度、
+  single-beam、focus 和 distance 属性；精确指向、便携、燃烧用途分别加载自己的属性权重。
+- 商品候选池与实际链接数量分离：激光笔站每个 section 保留最多 5 个候选供审计，但每个
+  商业 section 最多 1 个产品，且同一商品整篇最多分配一次；仅 `related_catalog` 匹配时
+  不再强制链接。
+- 当前预期：B025、B023 绿光变体、G019/B019B、B030 优先进入远距离绿光候选；B020
+  继续因 `520nm blue / 450nm green` 数据冲突 fail-closed，不是因高功率被排除。
+- 写作 prompt 明确：不得仅因高功率拒绝已批准商品；不得由此生成安全、合规、批准或
+  普遍适用结论；一个页面包含多变体时只能描述当前匹配变体，禁止混合不同变体规格。
+- 验证：站点入口/排序/生成/Pipeline/Adapter 125 passed、1 deselected；Sectional 非 Web
+  222 passed、1 deselected；Legacy/W1b 非 Web 237 passed、2 deselected；Ruff lint、
+  compileall、`git diff --check` 通过。全仓 Ruff format check 仍报告 28 个既有未格式化
+  文件，本次新增配置文件单独 format check 通过，未制造全仓格式化噪音。
+- 当前代码尚未 push、未再次运行 Shadow、未 promotion。完成审查提交后，下一步是只推送
+  一次，再用 `--resume-existing --refresh-complete --ai-call-limit 36` 恰好运行一次：
+  `--refresh-complete` 只把已审查失败的完整候选原子归档并保留 checkpoints，由新配置的
+  package SHA/候选合同决定哪些 checkpoint 自动失效重算，不允许手工删除产物。
 
 ## 2026-08-01 — 第二十次普通 resume：正文完成后 frame authority-free 失败
 

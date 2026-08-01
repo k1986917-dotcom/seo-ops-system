@@ -2440,6 +2440,7 @@ async def stage_w0_validate_and_draft(
     settings=None,
     *,
     action_id: int | None = None,
+    site_slug: str = WEBSITE,
 ) -> dict:
     """Validate material pack (段0), then generate the draft (段1).
 
@@ -2592,6 +2593,7 @@ article Markdown only."""
             guidance=str(sectional_brief.get("guidance") or ""),
             workspace=workspace,
             slug=slug,
+            site_slug=site_slug,
             contracts=contracts,
             formal_draft_path=Path(written["draft_path"]),
             formal_claim_path=Path(written["claim_path"]),
@@ -2613,6 +2615,7 @@ async def stage_sectional_shadow_existing_pair(
     settings: Any | None = None,
     *,
     action_id: int,
+    site_slug: str = WEBSITE,
 ) -> dict[str, Any]:
     """Run sectional shadow for an existing formal Legacy pair.
 
@@ -2661,6 +2664,7 @@ async def stage_sectional_shadow_existing_pair(
             author=author.strip() or "LaserPointerHub",
             workspace=workspace,
             slug=slug,
+            site_slug=site_slug,
             settings=active_settings,
             generate_text_async=sectional_generate,
         )

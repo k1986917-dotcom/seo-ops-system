@@ -2235,7 +2235,7 @@ class TestPrecheckGateDisplay:
 
         s, action_id = self._make_action(tmp_path)
         slug = "precheck-gate-test-topic"
-        draft = self._write_draft(s, action_id, slug)
+        self._write_draft(s, action_id, slug)
         # Set state to "precheck ran but failed" (mismatched: real sha
         # vs a fake sha recorded in state).
         self._set_state(s, action_id, slug, precheck_passed=False, sha="0" * 64)
@@ -2283,7 +2283,7 @@ class TestPrecheckGateDisplay:
 
         s, action_id = self._make_action(tmp_path)
         slug = "precheck-gate-test-topic"
-        draft = self._write_draft(s, action_id, slug)
+        self._write_draft(s, action_id, slug)
         self._set_state(s, action_id, slug, precheck_passed=False, sha="0" * 64)
 
         app = create_app(s)

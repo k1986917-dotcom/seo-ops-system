@@ -435,6 +435,7 @@ async def run_existing_legacy_sectional_shadow(
     author: str,
     workspace: Path,
     slug: str,
+    site_slug: str = "",
     settings: Any,
     generate_text_async: Callable[..., Awaitable[str]],
 ) -> dict[str, Any]:
@@ -495,6 +496,7 @@ async def run_existing_legacy_sectional_shadow(
             guidance=str(brief.get("guidance") or ""),
             workspace=workspace,
             slug=slug,
+            site_slug=site_slug,
             contracts=contracts,
             formal_draft_path=formal_draft_path,
             formal_claim_path=formal_claim_path,
@@ -546,6 +548,7 @@ async def run_existing_legacy_sectional_shadow(
     result["existing_pair_inputs"] = {
         "tier": tier,
         "tier_source": tier_source,
+        "site_slug": site_slug or "default",
     }
     return result
 
@@ -560,6 +563,7 @@ async def run_legacy_sectional_rollout(
     guidance: str,
     workspace: Path,
     slug: str,
+    site_slug: str = "",
     contracts: dict[str, Any],
     formal_draft_path: Path,
     formal_claim_path: Path,
@@ -628,6 +632,7 @@ async def run_legacy_sectional_rollout(
             generate_text=generate,
             guidance=guidance,
             current_slug=slug,
+            site_slug=site_slug,
             resume=True,
             max_ai_calls=int(getattr(settings, "sectional_ai_call_limit", 24)),
         )

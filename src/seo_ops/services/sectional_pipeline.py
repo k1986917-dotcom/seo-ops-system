@@ -81,6 +81,7 @@ def run_sectional_shadow_candidate(
     guidance: str = "",
     current_url: str = "",
     current_slug: str = "",
+    site_slug: str = "",
     resume: bool = True,
     max_ai_calls: int = 24,
 ) -> dict[str, Any]:
@@ -121,6 +122,7 @@ def run_sectional_shadow_candidate(
             bundle["section_contracts"],
             bundle["section_link_contracts"],
             registry,
+            site_slug=site_slug,
         )
         shadow_paths = persist_shadow_context(
             workspace,
@@ -219,6 +221,7 @@ def run_sectional_shadow_candidate(
         "version": PIPELINE_VERSION,
         "topic": clean_topic,
         "slug": clean_slug,
+        "site_slug": site_slug or "default",
         "contract_paths": contract_paths,
         "shadow_paths": shadow_paths,
         "delivery_path": delivery_path,
@@ -250,6 +253,7 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         raise SectionalPipelineError("pipeline result must be a version 1 object")
     _clean_text(result.get("topic"), "pipeline result topic")
     _clean_text(result.get("slug"), "pipeline result slug")
+    _clean_text(result.get("site_slug"), "pipeline result site_slug")
     try:
         from seo_ops.services.sectional_assembly import validate_sectional_assembly
 

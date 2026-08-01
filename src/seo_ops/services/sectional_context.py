@@ -19,6 +19,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from seo_ops.services.sectional_consistency import wavelength_color_conflicts
+from seo_ops.services.sectional_site_profiles import (
+    SectionalSiteProfile,
+    get_sectional_site_profile,
+    product_section_block_reason,
+    score_site_product_preferences,
+    select_site_product_variant,
+    site_profile_manifest,
+)
 from seo_ops.services.sectional_writing import (
     CONTRACT_VERSION,
     ContractValidationError,
@@ -28,7 +36,6 @@ from seo_ops.services.sectional_writing import (
 )
 
 ARTICLE_CANDIDATE_LIMIT = 2
-PRODUCT_CANDIDATE_LIMIT = 2
 EVIDENCE_CANDIDATE_LIMIT = 3
 
 _GENERIC_TOKENS = frozenset({
@@ -669,10 +676,14 @@ def _rank(
     topic: str = "",
     ignored_section_tokens: set[str] | None = None,
     text_field: str = "search_text",
+    site_profile: SectionalSiteProfile | None = None,
+    article_context: str = "",
 ) -> list[dict[str, Any]]:
     section_tokens = _tokens(_section_text(section)) - set(
         ignored_section_tokens or set()
     )
+    if kind == "product" and site_profile is not None:
+        section_tokens -= set(site_profile.generic_product_terms)
     topic_tokens = _tokens(topic)
     ranked: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -680,10 +691,29 @@ def _rank(
         section_matches = sorted(section_tokens & haystack_tokens)
         topic_matches = sorted(topic_tokens & haystack_tokens)
         score = 3 * len(section_matches) + len(topic_matches)
+        site_preference = {
+            "score": 0,
+            "active_rules": [],
+            "matched_preferences": [],
+        }
         if kind in {"article", "product"}:
             title_tokens = _tokens(candidate.get("title", ""))
             score += 2 * len(section_tokens & title_tokens)
             score += len(topic_tokens & title_tokens)
+        if kind == "product" and site_profile is not None:
+            site_preference = score_site_product_preferences(
+                site_profile,
+                article_context=article_context,
+                product_text=candidate.get("search_text", ""),
+            )
+            score += int(site_preference["score"])
+            matched_variant = select_site_product_variant(
+                site_profile,
+                article_context=article_context,
+                product_text=candidate.get("search_text", ""),
+            )
+        else:
+            matched_variant = None
         if kind == "article":
             keyword_tokens = _tokens(candidate.get("primary_keyword", ""))
             score += len(section_tokens & keyword_tokens)
@@ -694,7 +724,7 @@ def _rank(
                 score += 2
         if score <= 0:
             continue
-        ranked.append({
+        ranked_item = {
             "candidate_id": candidate["candidate_id"],
             "score": score,
             "matched_terms": sorted(set(section_matches + topic_matches)),
@@ -705,7 +735,15 @@ def _rank(
             "url": candidate.get("url", ""),
             "product_id": candidate.get("product_id", ""),
             "required": bool(candidate.get("required")),
-        })
+        }
+        if kind == "product":
+            ranked_item.update({
+                "site_preference_score": int(site_preference["score"]),
+                "active_site_rules": list(site_preference["active_rules"]),
+                "matched_site_preferences": list(site_preference["matched_preferences"]),
+                "matched_variant": matched_variant,
+            })
+        ranked.append(ranked_item)
     ranked.sort(key=lambda item: (-item["score"], item["candidate_id"]))
     return ranked
 
@@ -835,7 +873,11 @@ def _annotate_product_fit(
         {
             **item,
             "fit_level": fit_level,
-            "fit_reason": fit_reason,
+            "fit_reason": (
+                "matches_site_use_case_preferences"
+                if item.get("matched_site_preferences")
+                else fit_reason
+            ),
         }
         for item in ranked
     ]
@@ -845,14 +887,41 @@ def resolve_shadow_opportunities(
     section_contracts: dict[str, Any],
     link_contracts: dict[str, Any],
     candidate_registry: dict[str, Any],
+    *,
+    site_slug: str = "",
 ) -> dict[str, Any]:
     sections = validate_section_contracts(section_contracts)
     links = validate_section_link_contracts(link_contracts, sections)
     registry = validate_candidate_registry(candidate_registry)
+    site_profile = get_sectional_site_profile(site_slug)
+    profile_manifest = site_profile_manifest(site_profile)
     link_by_id = {item["section_id"]: item for item in links["sections"]}
     resolved_sections: list[dict[str, Any]] = []
     manifest_sections: list[dict[str, Any]] = []
     opportunity_counts = {"required": 0, "recommended": 0, "none": 0}
+    assigned_product_ids: set[str] = set()
+    article_recommendation_context = " ".join(
+        [
+            sections["topic"],
+            *(
+                " ".join(
+                    [
+                        item.get("heading", ""),
+                        item.get("reader_question", ""),
+                        item.get("section_goal", ""),
+                        " ".join(item.get("must_answer", [])),
+                        " ".join(item.get("brief_points", [])),
+                        " ".join(
+                            rejected.get("text", "")
+                            for rejected in item.get("brief_points_rejected", [])
+                            if isinstance(rejected, dict)
+                        ),
+                    ]
+                )
+                for item in sections["sections"]
+            ),
+        ]
+    )
 
     for section in sections["sections"]:
         article_ranked = _rank(
@@ -903,17 +972,25 @@ def resolve_shadow_opportunities(
                 registry["catalog_profile"].get("common_product_tokens", [])
             ),
             text_field="eligibility_text",
+            site_profile=site_profile,
+            article_context=article_recommendation_context,
         )
         constraints = section.get("product_constraints", [])
         strong_products = [
             item
             for item in product_specific_ranked
             if item["section_match_count"] >= 2
+            or item["site_preference_score"] >= 35
+            or len(item["matched_site_preferences"]) >= 2
         ]
         contextual_products = [
             item
             for item in product_specific_ranked
-            if item["section_match_count"] == 1
+            if item not in strong_products
+            and (
+                item["section_match_count"] == 1
+                or item["site_preference_score"] > 0
+            )
         ]
         fallback_products = [
             item
@@ -923,8 +1000,10 @@ def resolve_shadow_opportunities(
                 kind="product",
                 topic=sections["topic"],
                 text_field="eligibility_text",
+                site_profile=site_profile,
+                article_context=article_recommendation_context,
             )
-            if item["topic_matches"]
+            if item["topic_matches"] or item["site_preference_score"] > 0
         ]
         if constraints:
             product_ranked = _annotate_product_fit(
@@ -981,19 +1060,37 @@ def resolve_shadow_opportunities(
             empty_reason_code="no_relevant_article_candidates",
         )
 
+        site_product_block = product_section_block_reason(
+            site_profile,
+            heading=section["heading"],
+            reader_question=section["reader_question"],
+            section_goal=section["section_goal"],
+        )
         if not section["product_link_allowed"]:
             product_gate = link_by_id[section["section_id"]]["product_links"]
+        elif site_product_block:
+            product_ranked = []
+            product_gate = {
+                "opportunity_state": "none",
+                "candidate_count": 0,
+                "min_required": 0,
+                "max_allowed": 0,
+                "reason_code": site_product_block,
+                "selected_ids": [],
+                "rejected": [],
+            }
         else:
+            if site_profile.unique_product_per_article:
+                product_ranked = [
+                    item
+                    for item in product_ranked
+                    if item["candidate_id"] not in assigned_product_ids
+                ]
             top_fit = product_ranked[0].get("fit_level") if product_ranked else ""
             product_required = (
                 bool(product_ranked)
                 and top_fit
-                in {
-                    "strong",
-                    "approved_constraint",
-                    "contextual",
-                    "related_catalog",
-                }
+                in site_profile.required_fit_levels
                 and section["reader_stage"] in {"select", "compare", "apply"}
             )
             product_reason = (
@@ -1011,12 +1108,14 @@ def resolve_shadow_opportunities(
             )
             product_gate = _resolved_gate(
                 product_ranked,
-                limit=PRODUCT_CANDIDATE_LIMIT,
+                limit=site_profile.product_link_limit_per_section,
                 state="required" if product_required else "recommended",
                 reason_code=product_reason,
                 rejected=constraint_rejections,
                 empty_reason_code="no_relevant_catalog_products",
             )
+            if site_profile.unique_product_per_article:
+                assigned_product_ids.update(product_gate["selected_ids"])
 
         evidence_required = bool(evidence_ranked) and (
             any(
@@ -1054,8 +1153,9 @@ def resolve_shadow_opportunities(
             "section_id": section["section_id"],
             "heading": section["heading"],
             "reader_stage": section["reader_stage"],
+            "site_product_policy_reason": site_product_block,
             "article_candidates": article_ranked[:ARTICLE_CANDIDATE_LIMIT],
-            "product_candidates": product_ranked[:PRODUCT_CANDIDATE_LIMIT],
+            "product_candidates": product_ranked[: site_profile.product_candidate_limit],
             "product_rejections": constraint_rejections,
             "brief_catalog_conflicts": brief_conflicts,
             "evidence_candidates": evidence_ranked[:EVIDENCE_CANDIDATE_LIMIT],
@@ -1074,6 +1174,7 @@ def resolve_shadow_opportunities(
         "version": CONTRACT_VERSION,
         "topic": sections["topic"],
         "content_language": sections["content_language"],
+        "site_profile": profile_manifest,
         "registry_sha256": hashlib.sha256(registry_json).hexdigest(),
         "catalog_profile": registry["catalog_profile"],
         "catalog_data_issues": registry["catalog_data_issues"],
@@ -1084,6 +1185,7 @@ def resolve_shadow_opportunities(
         "version": CONTRACT_VERSION,
         "topic": sections["topic"],
         "content_language": sections["content_language"],
+        "site_profile": profile_manifest,
         "section_count": len(resolved_sections),
         "opportunity_counts": opportunity_counts,
         "registry_counts": {
