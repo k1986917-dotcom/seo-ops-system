@@ -2,6 +2,34 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 收窄为 frame-only 修复：authority-free 门禁已修，正文 checkpoint 全部有效
+
+- 目标：只修 article frame authority-free 门禁；保持 6 个已完成正文 section checkpoint
+  可恢复；不碰正文生成、链接或产品逻辑；最终只提交不 push。
+- 已移除上一轮过宽逻辑：related_catalog 语言门禁、`product_fit` repair、确定性
+  authority-free frame fallback 及两个相关指标，代码与测试无残留引用。
+- frame 修复机制：
+  1. validator 不放宽，`_validate_article_frame_evidence_language` 错误携带具体违规句；
+  2. 第一次 frame repair prompt 含 `SERVER-DETECTED OFFENDING PASSAGE`；
+  3. final authority-free repair 只用 topic + section summaries 从头生成四块，不回灌
+     失败 frame 全文；
+  4. 禁止命名/归因机构、禁止合规/安全/最高级/winner 表述，只允许中性过程语言；
+  5. final repair 仍失败时 fail-closed 停止，无 deterministic fallback 绕过。
+- 真实 Action #3 只读验证：6/6 section checkpoint 在最终代码下仍 valid（901=414、
+  049=401、429=423、2d=399、7bb=400、b92=358 词）；429 的 B017USB binding 保留。
+- 测试：frame/article_frame 专项 19 passed；Sectional 非 Web 230 passed；Legacy/W1b
+  非 Web 263 passed；Ruff/format/compileall/`git diff --check` 全部通过。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=220`，DB SHA=
+  `3717d0fb8b3917285d7a2c196dede7f0289b3311b103002815b0568957f43183`，active=17，
+  archive=2，无 promotion manifest，正式四个 SHA 未变。
+- 本地 HEAD=`759b196`（相对远端 `c869bf0` ahead=1）；本轮新增一个 frame-only 修正提交
+  后，下一步为：推送 → 推送后核验 → 基线核验 → 恰好一次 `--resume-existing
+  --ai-call-limit 36` shadow → 停止并报告。
+
+# Handoff — 当前接手状态
+
+最后更新：2026-08-01（Europe/Paris）
+
 ## 2026-08-01 — 第二十次普通 resume：正文完成后 frame authority-free 失败
 
 - `c869bf0` 已推送并核验；随后只执行一次普通 resume，POST=1、无外层重试、未

@@ -1,3 +1,16 @@
+## [Unreleased] — Sectional frame authority-free repair (frame-only)
+
+### Changed
+
+- 收窄章节化修复范围为 article frame：validator 保持 fail-closed，错误现在携带被检测到
+  的具体违规句；第一次 frame repair 的 prompt 包含服务端检测的 offending passage。
+- final authority-free frame repair 只使用 ARTICLE FRAME PACKAGE 中的 topic 与已完成
+  section summaries 从头生成 Introduction/Takeaways/Conclusion/FAQ，不再回灌上一版失败
+  frame 全文；最终仍违规时继续 fail-closed 停止，不降级为确定性 fallback。
+- 移除上一轮过宽逻辑：related_catalog 语言门禁、`product_fit` repair、确定性
+  authority-free frame fallback，以及 `section_product_fit_retries` /
+  `frame_authority_free_fallback_applied` 指标。正文生成、链接与产品逻辑不变。
+
 # Changelog
 
 所有用户可见变化记录在此。版本遵循语义化版本。

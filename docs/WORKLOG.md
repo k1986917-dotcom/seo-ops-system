@@ -1,3 +1,33 @@
+## 2026-08-01 — Narrow sectional frame repair to authority-free only
+
+- 目标收窄为 frame-only：修好 article frame authority-free 门禁，保持 6 个已完成正文
+  section checkpoint 可恢复，不碰正文生成、链接或产品逻辑。
+- 移除上一轮过宽逻辑：related_catalog 语言门禁（`_RELATED_CATALOG_*`）、
+  `product_fit` repair、确定性 authority-free frame fallback，以及
+  `section_product_fit_retries` / `frame_authority_free_fallback_applied` 两个指标；
+  确认生成、pipeline、测试中均无残留引用。
+- frame 修复机制（validator 不放宽，fail-closed 保持）：
+  1. `_validate_article_frame_evidence_language` 错误现在携带被检测到的具体违规句
+     （`<FRAME_OVERSTATEMENT_ERROR>: <offending>`），不再只有笼统错误；
+  2. 第一次 frame repair 的 prompt 包含 `SERVER-DETECTED OFFENDING PASSAGE`，要求删除
+     或改写 authority/compliance/safety/superlative 表述，不新增事实；
+  3. final authority-free repair 只使用 ARTICLE FRAME PACKAGE 中的 topic 与已完成
+     section summaries 从头生成 Introduction/Takeaways/Conclusion/FAQ 四块；不再回灌
+     上一版失败 frame 全文；`_response_text` 参数已弃用；
+  4. 禁止命名/归因 OSHA/FDA/EPA/FTC/CDC/NIOSH/regulator/agency，禁止 compliant/
+     approved/acceptable/safe/safer/safest，禁止把 Class 2/Class 3R/波长/产品描述为
+     best/preferred/suitable/practical/balanced choice 或 winner；只允许中性过程语言
+     （compare/verify/review/check/document/depends on site conditions/follow
+     established site procedures）；
+  5. final repair 仍失败时继续 fail-closed 停止并报告，不降级为 deterministic fallback。
+- 真实 Action #3 只读验证：6/6 正文 section checkpoint 在最终代码下仍 valid
+  （901=414、049=401、429=423、2d=399、7bb=400、b92=358 词）；429 的
+  `product-2402cf9a1aa4`(B017USB) binding 保留；未修改任何 checkpoint。
+- 测试：frame/article_frame 专项 19 passed；Sectional 非 Web 230 passed（排除已知
+  Landlock Web 用例）；Legacy/W1b 非 Web 263 passed（排除两个 Web template 用例）；
+  Ruff check/format、compileall、`git diff --check` 全部通过。
+- 未 push、未运行真实 shadow；工作区清理临时验证脚本后干净。
+
 ## 2026-08-01 — Enforce neutral product links and deterministic frame fallback
 
 - 第二十次普通 resume 使六节正文写入 checkpoint，但 article frame 三次 AI 后仍因

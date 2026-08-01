@@ -98,21 +98,6 @@ _EVIDENCE_OVERSTATEMENT_ERROR = "section contains authority or recommendation la
 _FRAME_OVERSTATEMENT_ERROR = "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
 _INTERNAL_LINK_LAYOUT_ERROR = "a paragraph may contain at most one internal link placeholder"
 _TECHNICAL_CONSISTENCY_ERROR = "section contains contradictory wavelength and color pairing"
-_RELATED_CATALOG_LANGUAGE_ERROR = (
-    "related_catalog product language must remain neutral catalog navigation"
-)
-_RELATED_CATALOG_PROHIBITED = re.compile(
-    r"\b(?:designed|proven|safe|safer|safest|compliant|approved|preferred|best|"
-    r"suitable|ideal|recommended|provides?|offers?|delivers?|produces?|features?|"
-    r"includes?|simplif(?:y|ies)|easier|ergonomic|fatigue|visibility|visible|"
-    r"output|power|wavelength|beam|battery|charging|rechargeable|compact|"
-    r"stainless|performance|capabilit(?:y|ies))\b",
-    re.IGNORECASE,
-)
-_PRODUCT_SPEC_QUANTITY = re.compile(
-    r"\b\d+(?:\.\d+)?\s*(?:m?w|nm|mah|mm|cm|m|ft|feet|inch(?:es)?)\b",
-    re.IGNORECASE,
-)
 
 
 class SectionGenerationError(ContractValidationError):
@@ -681,39 +666,6 @@ def _validate_section_technical_consistency(markdown: str) -> None:
     raise SectionGenerationError(f"{_TECHNICAL_CONSISTENCY_ERROR}: {detail}")
 
 
-def _validate_related_catalog_language(
-    markdown: str,
-    package: dict[str, Any],
-) -> None:
-    related_ids = {
-        str(item.get("candidate_id"))
-        for item in package.get("candidates", {}).get("products", [])
-        if isinstance(item, dict) and item.get("fit_level") == "related_catalog"
-    }
-    if not related_ids:
-        return
-    body = "\n".join(markdown.splitlines()[1:])
-    for paragraph in re.split(r"\n\s*\n", body):
-        used_ids = [
-            candidate_id
-            for candidate_id, _anchor in _PRODUCT_PLACEHOLDER.findall(paragraph)
-            if candidate_id in related_ids
-        ]
-        if not used_ids:
-            continue
-        surrounding = " ".join(_PRODUCT_PLACEHOLDER.sub("", paragraph).split())
-        if not re.search(r"\brelated catalog option\b", surrounding, re.IGNORECASE):
-            raise SectionGenerationError(
-                f"{_RELATED_CATALOG_LANGUAGE_ERROR}: {', '.join(used_ids)}"
-            )
-        if _RELATED_CATALOG_PROHIBITED.search(surrounding) or _PRODUCT_SPEC_QUANTITY.search(
-            surrounding
-        ):
-            raise SectionGenerationError(
-                f"{_RELATED_CATALOG_LANGUAGE_ERROR}: {', '.join(used_ids)}"
-            )
-
-
 def _validate_section_evidence_strength(
     markdown: str,
     package: dict[str, Any],
@@ -897,11 +849,12 @@ def _build_internal_link_layout_repair_prompt(
     return {"system": system, "user": user}
 
 
-def _required_link_repair_plan(
+def _build_required_link_repair_prompt(
     package: dict[str, Any],
     response_text: str,
     error: SectionGenerationError,
-) -> tuple[str, list[str]] | None:
+) -> dict[str, str] | None:
+    """Build one bounded repair that restores only missing required placeholders."""
     match = _REQUIRED_LINK_ERROR.fullmatch(str(error))
     if match is None:
         return None
@@ -926,21 +879,7 @@ def _required_link_repair_plan(
     ]
     if len(available_ids) < missing_count:
         return None
-    return link_type, available_ids[:missing_count]
-
-
-def _build_required_link_repair_prompt(
-    package: dict[str, Any],
-    response_text: str,
-    error: SectionGenerationError,
-) -> dict[str, str] | None:
-    """Build one bounded repair that restores only missing required placeholders."""
-    plan = _required_link_repair_plan(package, response_text, error)
-    if plan is None:
-        return None
-    link_type, required_ids = plan
-    validated = validate_section_generation_package(package)
-    gate = validated["link_gates"][link_type]
+    required_ids = available_ids[:missing_count]
     if link_type == "article_links":
         placeholder_rule = (
             "Add exactly one ARTICLE placeholder for each listed ID by wrapping an "
@@ -983,110 +922,6 @@ def _build_required_link_repair_prompt(
         + " If the added placeholder would push the body over its word-count maximum, "
         "delete only equivalent non-essential prose that contains no placeholder or "
         "citation. Return the complete two-block response.\n\nPREVIOUS RESPONSE\n" + response_text
-    )
-    return {"system": system, "user": user}
-
-
-def _validate_required_link_repair_response(
-    package: dict[str, Any],
-    previous_response: str,
-    repaired_response: str,
-    original_error: SectionGenerationError,
-) -> str:
-    """Enforce that a required-link repair adds only the planned minimum IDs."""
-    plan = _required_link_repair_plan(package, previous_response, original_error)
-    if plan is None:
-        raise SectionGenerationError("required_link repair plan is unavailable")
-    link_type, required_ids = plan
-    previous_markdown, _ = _split_response(
-        previous_response,
-        SECTION_MARKDOWN_MARKER,
-        SECTION_DECISIONS_MARKER,
-    )
-    repaired_markdown, _ = _split_response(
-        repaired_response,
-        SECTION_MARKDOWN_MARKER,
-        SECTION_DECISIONS_MARKER,
-    )
-    previous_tokens = _placeholder_token_sequence(previous_markdown)
-    repaired_tokens = _placeholder_token_sequence(repaired_markdown)
-    previous_index = 0
-    added_tokens: list[str] = []
-    for token in repaired_tokens:
-        if previous_index < len(previous_tokens) and token == previous_tokens[previous_index]:
-            previous_index += 1
-        else:
-            added_tokens.append(token)
-    if previous_index != len(previous_tokens):
-        raise SectionGenerationError(
-            "required_link repair changed or reordered an existing placeholder"
-        )
-    added_ids: list[str] = []
-    for token in added_tokens:
-        if link_type == "article_links":
-            match = _ARTICLE_PLACEHOLDER.fullmatch(token)
-        elif link_type == "product_links":
-            match = _PRODUCT_PLACEHOLDER.fullmatch(token)
-        else:
-            match = _CITE_PLACEHOLDER.fullmatch(token)
-        if match is None:
-            raise SectionGenerationError("required_link repair added an unplanned placeholder type")
-        added_ids.append(match.group(1))
-    if added_ids != required_ids:
-        raise SectionGenerationError(
-            "required_link repair did not add exactly the planned placeholder IDs"
-        )
-    return repaired_response
-
-
-def _build_product_fit_repair_prompt(
-    package: dict[str, Any],
-    response_text: str,
-    error: SectionGenerationError,
-) -> dict[str, str] | None:
-    if not str(error).startswith(_RELATED_CATALOG_LANGUAGE_ERROR):
-        return None
-    validated = validate_section_generation_package(package)
-    markdown, _ = _split_response(
-        response_text,
-        SECTION_MARKDOWN_MARKER,
-        SECTION_DECISIONS_MARKER,
-    )
-    related_ids = {
-        str(item.get("candidate_id"))
-        for item in validated["candidates"]["products"]
-        if isinstance(item, dict) and item.get("fit_level") == "related_catalog"
-    }
-    used_ids = [
-        candidate_id
-        for candidate_id, _anchor in _PRODUCT_PLACEHOLDER.findall(markdown)
-        if candidate_id in related_ids
-    ]
-    if not used_ids:
-        return None
-    base = build_section_generation_prompt(validated)
-    system = (
-        base["system"] + "\nRELATED CATALOG LANGUAGE REPAIR. Preserve the exact H2, all supported "
-        "non-product meaning, every existing placeholder token and its global order, "
-        "the word-count contract, and the 2-5 paragraph contract. Rewrite only the "
-        "paragraphs containing the listed related_catalog PRODUCT placeholders. Each "
-        "such paragraph must identify the linked item only as a related catalog option. "
-        "Outside the unchanged PRODUCT token, remove specifications, power or wavelength "
-        "values, visibility or performance claims, features, ergonomic claims, exact-use "
-        "suitability, safety, compliance, approval, preference, and recommendation "
-        "language. Do not add or remove any placeholder or factual claim."
-    )
-    user = (
-        base["user"]
-        + "\n\nRELATED CATALOG LANGUAGE REPAIR\n"
-        + "Repair only these existing PRODUCT IDs: "
-        + ", ".join(used_ids)
-        + ". Use a neutral form such as: For a related catalog option, review "
-        + "[[PRODUCT:candidate_id|the existing anchor text]]. If removing product claims "
-        + "reduces the word count, add only neutral evaluation-process guidance already "
-        + "supported by the rest of the section, outside the product paragraphs. Return "
-        + "the complete two-block response.\n\nPREVIOUS RESPONSE\n"
-        + response_text
     )
     return {"system": system, "user": user}
 
@@ -1149,13 +984,6 @@ def _build_section_repair_prompt(
     )
     if required_link_prompt is not None:
         return required_link_prompt, "required_link"
-    product_fit_prompt = _build_product_fit_repair_prompt(
-        package,
-        response_text,
-        error,
-    )
-    if product_fit_prompt is not None:
-        return product_fit_prompt, "product_fit"
     technical_prompt = _build_technical_consistency_repair_prompt(
         package,
         response_text,
@@ -1262,14 +1090,6 @@ def _build_final_section_repair_prompt(
         )
         if strict_trim is not None:
             return strict_trim, "word_count_strict_trim"
-    else:
-        word_count = _build_word_count_repair_prompt(
-            package,
-            response_text,
-            error,
-        )
-        if word_count is not None:
-            return word_count, "word_count"
     if prior_kind != "technical_consistency":
         technical = _build_technical_consistency_repair_prompt(
             package,
@@ -1294,14 +1114,6 @@ def _build_final_section_repair_prompt(
         )
         if required_link is not None:
             return required_link, "required_link"
-    if prior_kind != "product_fit":
-        product_fit = _build_product_fit_repair_prompt(
-            package,
-            response_text,
-            error,
-        )
-        if product_fit is not None:
-            return product_fit, "product_fit"
     authority_free = _build_authority_free_repair_prompt(
         package,
         response_text,
@@ -1378,13 +1190,12 @@ def _canonical_decisions_for_inventory(
     return _validate_decisions(decisions, inventory, package)
 
 
-def _canonicalize_placeholder_preserving_repair_response(
+def _canonicalize_link_layout_repair_response(
     previous_response: str,
     repaired_response: str,
     package: dict[str, Any],
-    repair_kind: str,
 ) -> str:
-    """Keep bounded repairs from rewriting placeholders or redundant decisions JSON.
+    """Keep formatting-only repairs from rewriting redundant decisions JSON.
 
     The repaired Markdown is accepted only when every exact placeholder token,
     including anchor text and global order, matches the response that triggered
@@ -1404,26 +1215,13 @@ def _canonicalize_placeholder_preserving_repair_response(
     if _placeholder_token_sequence(previous_markdown) != _placeholder_token_sequence(
         repaired_markdown
     ):
-        raise SectionGenerationError(f"{repair_kind} repair changed placeholder inventory or order")
+        raise SectionGenerationError("link_layout repair changed placeholder inventory or order")
     inventory = _placeholder_inventory(repaired_markdown)
     decisions = _canonical_decisions_for_inventory(inventory, package)
     return (
         f"{SECTION_MARKDOWN_MARKER}\n{repaired_markdown}\n"
         f"{SECTION_DECISIONS_MARKER}\n"
         f"{json.dumps(decisions, ensure_ascii=False, sort_keys=True)}"
-    )
-
-
-def _canonicalize_link_layout_repair_response(
-    previous_response: str,
-    repaired_response: str,
-    package: dict[str, Any],
-) -> str:
-    return _canonicalize_placeholder_preserving_repair_response(
-        previous_response,
-        repaired_response,
-        package,
-        "link_layout",
     )
 
 
@@ -1699,7 +1497,6 @@ def parse_section_generation_response(
             f"section must contain 2-5 coherent paragraphs (got {paragraph_count})"
         )
     _validate_section_technical_consistency(markdown)
-    _validate_related_catalog_language(markdown, validated_package)
     _validate_section_evidence_strength(markdown, validated_package)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
@@ -1779,7 +1576,6 @@ def validate_section_generation_output(
     if output.get("paragraph_count") != paragraph_count or not 2 <= paragraph_count <= 5:
         raise SectionGenerationError("section output paragraph count is invalid")
     _validate_section_technical_consistency(markdown)
-    _validate_related_catalog_language(markdown, validated_package)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
     target = validated_package["target_words"]
@@ -1942,7 +1738,6 @@ def run_section_generation_sequence(
     evidence_strength_retry_count = 0
     link_layout_retry_count = 0
     required_link_retry_count = 0
-    product_fit_retry_count = 0
     technical_consistency_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
@@ -1979,8 +1774,6 @@ def run_section_generation_sequence(
                     link_layout_retry_count += 1
                 elif repair_kind == "required_link":
                     required_link_retry_count += 1
-                elif repair_kind == "product_fit":
-                    product_fit_retry_count += 1
                 elif repair_kind == "technical_consistency":
                     technical_consistency_retry_count += 1
                 else:
@@ -1991,20 +1784,6 @@ def run_section_generation_sequence(
                             response,
                             repaired_response,
                             package,
-                        )
-                    elif repair_kind == "required_link":
-                        repaired_response = _validate_required_link_repair_response(
-                            package,
-                            response,
-                            repaired_response,
-                            exc,
-                        )
-                    elif repair_kind == "product_fit":
-                        repaired_response = _canonicalize_placeholder_preserving_repair_response(
-                            response,
-                            repaired_response,
-                            package,
-                            "product_fit",
                         )
                     output = parse_section_generation_response(repaired_response, package)
                 except SectionGenerationError as repair_exc:
@@ -2028,11 +1807,9 @@ def run_section_generation_sequence(
                         link_layout_retry_count += 1
                     elif final_kind == "required_link":
                         required_link_retry_count += 1
-                    elif final_kind == "product_fit":
-                        product_fit_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
-                    elif final_kind in {"word_count", "word_count_strict_trim"}:
+                    elif final_kind == "word_count_strict_trim":
                         word_count_retry_count += 1
                     else:
                         evidence_strength_retry_count += 1
@@ -2042,20 +1819,6 @@ def run_section_generation_sequence(
                                 repaired_response,
                                 final_response,
                                 package,
-                            )
-                        elif final_kind == "required_link":
-                            final_response = _validate_required_link_repair_response(
-                                package,
-                                repaired_response,
-                                final_response,
-                                repair_exc,
-                            )
-                        elif final_kind == "product_fit":
-                            final_response = _canonicalize_placeholder_preserving_repair_response(
-                                repaired_response,
-                                final_response,
-                                package,
-                                "product_fit",
                             )
                         output = parse_section_generation_response(final_response, package)
                     except SectionGenerationError as final_exc:
@@ -2081,7 +1844,6 @@ def run_section_generation_sequence(
         "evidence_strength_retry_count": evidence_strength_retry_count,
         "link_layout_retry_count": link_layout_retry_count,
         "required_link_retry_count": required_link_retry_count,
-        "product_fit_retry_count": product_fit_retry_count,
         "technical_consistency_retry_count": technical_consistency_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
@@ -2179,7 +1941,8 @@ Return exactly four blocks and no other text:
 def _validate_article_frame_evidence_language(value: str) -> None:
     for part in re.split(r"(?<=[.!?])\s+|\n+", value):
         if _contains_strong_evidence_claim(part):
-            raise SectionGenerationError(_FRAME_OVERSTATEMENT_ERROR)
+            offending = " ".join(part.split())[:500]
+            raise SectionGenerationError(f"{_FRAME_OVERSTATEMENT_ERROR}: {offending}")
 
 
 def _build_article_frame_repair_prompt(
@@ -2187,8 +1950,10 @@ def _build_article_frame_repair_prompt(
     response_text: str,
     error: SectionGenerationError,
 ) -> dict[str, str] | None:
-    if str(error) != _FRAME_OVERSTATEMENT_ERROR:
+    error_text = str(error)
+    if not error_text.startswith(_FRAME_OVERSTATEMENT_ERROR):
         return None
+    offending = error_text.removeprefix(_FRAME_OVERSTATEMENT_ERROR).lstrip(": ")
     base = build_article_frame_prompt(package)
     return {
         "system": (
@@ -2202,113 +1967,47 @@ def _build_article_frame_repair_prompt(
             base["user"]
             + "\n\nFRAME EVIDENCE STRENGTH REPAIR\n"
             + "Remove unsupported recommended/compliant/only/best/go-to wording and "
-            "return the complete four-block response again.\n\nPREVIOUS RESPONSE\n" + response_text
+            "return the complete four-block response again.\n\n"
+            "SERVER-DETECTED OFFENDING PASSAGE\n"
+            + offending
+            + "\n\nPREVIOUS RESPONSE\n"
+            + response_text
         ),
     }
 
 
 def _build_article_frame_authority_free_repair_prompt(
     package: dict[str, Any],
-    response_text: str,
+    _response_text: str,
     error: SectionGenerationError,
 ) -> dict[str, str] | None:
-    if str(error) != _FRAME_OVERSTATEMENT_ERROR:
+    if not str(error).startswith(_FRAME_OVERSTATEMENT_ERROR):
         return None
     base = build_article_frame_prompt(package)
     return {
         "system": (
             base["system"] + "\nFINAL FRAME AUTHORITY-FREE REPAIR. Rewrite all four "
-            "blocks from scratch. None of the prose or FAQ text may contain OSHA, "
+            "blocks from scratch using only the ARTICLE FRAME PACKAGE section summaries. "
+            "None of the prose or FAQ text may contain OSHA, "
             "Occupational Safety and Health Administration, FDA, EPA, FTC, CDC, "
             "NIOSH, regulator, or agency. Do not describe what an authority publishes, "
             "governs, requires, permits, prohibits, recommends, warns, approves, or "
-            "enforces. Keep only neutral practical guidance already present in the "
-            "section summaries."
+            "enforces. Do not call anything compliant, approved, acceptable, safe, safer, "
+            "safest, best, preferred, suitable, a practical choice, a balanced choice, "
+            "or a winner. Do not select Class 2, Class 3R, a wavelength, an output level, "
+            "or a product as the answer. Use neutral process language such as compare, "
+            "verify, review, document, check, depends on site conditions, and follow "
+            "established site procedures. Do not add any fact, number, regulation, "
+            "product, URL, link, or citation."
         ),
         "user": (
             base["user"]
             + "\n\nFINAL FRAME AUTHORITY-FREE REPAIR\n"
-            + "The previous frame repair still failed the evidence-strength gate. "
-            "Return the complete four-block response again without copying or "
-            "paraphrasing any named-authority statement.\n\nPREVIOUS REPAIRED RESPONSE\n"
-            + response_text
+            + "Generate a fresh introduction, 3-5 key takeaways, conclusion, and 3-4 "
+            "FAQ items from the supplied section summaries only. Return the complete "
+            "four-block response. Do not reuse or imitate any earlier frame response."
         ),
     }
-
-
-def _build_deterministic_authority_free_frame(
-    package: dict[str, Any],
-) -> dict[str, Any]:
-    """Return a validated neutral frame after all bounded AI repairs fail."""
-    validated = validate_article_frame_package(package)
-    output = {
-        "version": CONTRACT_VERSION,
-        "content_language": DEFAULT_CONTENT_LANGUAGE,
-        "package_sha256": validated["package_sha256"],
-        "introduction": (
-            "This article brings the completed sections together as a practical review "
-            "of the topic. Start by defining the task, the working conditions, and the "
-            "decision that must be made. Read the body in order so each comparison, "
-            "verification step, and operating consideration stays connected to the "
-            "context in which it applies. Avoid treating one detail, label, or catalog "
-            "entry as a universal answer. Instead, use the sections to compare the "
-            "available information, note uncertainties, and document the checks that "
-            "remain before use. The aim is a clear, site-specific evaluation based on "
-            "the supplied material rather than an unsupported ranking or conclusion."
-        ),
-        "key_takeaways": [
-            "Define the task, working conditions, and decision before comparing alternatives.",
-            "Read the completed sections in order and keep each point tied to its context.",
-            "Separate documented information from assumptions, marketing language, and universal claims.",
-            "Record completed checks, observed limits, remaining questions, and any local follow-up.",
-        ],
-        "conclusion": (
-            "The completed sections provide a sequence for reviewing the topic without "
-            "reducing it to a single feature or universal answer. Revisit the task, "
-            "conditions, available information, and operating limits before making a "
-            "final decision. Keep comparisons tied to the context described in the "
-            "article, and separate verified details from assumptions or marketing "
-            "language. Record the checks completed, the alternatives considered, and "
-            "any questions that still require local review. This approach keeps the "
-            "conclusion practical and traceable while avoiding claims that go beyond "
-            "the material already presented in the body."
-        ),
-        "faq": [
-            {
-                "question": "How should I begin evaluating the topic?",
-                "answer": (
-                    "Start with the task, working conditions, and decision to be made. "
-                    "Then read the sections in order and record the checks, alternatives, "
-                    "and unresolved questions."
-                ),
-            },
-            {
-                "question": "Which factors should I compare?",
-                "answer": (
-                    "Compare the conditions, labels, available information, operating "
-                    "steps, and limits described in the body. Do not treat one detail or "
-                    "catalog entry as a universal answer."
-                ),
-            },
-            {
-                "question": "Why should the intended conditions be reviewed?",
-                "answer": (
-                    "Reviewing the intended conditions keeps each comparison connected "
-                    "to the actual context. It also helps separate observed limits from "
-                    "assumptions carried over from a different setting."
-                ),
-            },
-            {
-                "question": "How should catalog options be used?",
-                "answer": (
-                    "Use catalog options as references within the broader evaluation. "
-                    "Compare them with the documented task and conditions, but do not "
-                    "treat a listing as proof of an exact fit."
-                ),
-            },
-        ],
-    }
-    return validate_article_frame_output(output, validated)
 
 
 def _between(text: str, start: str, end: str | None) -> str:
@@ -2570,9 +2269,7 @@ def run_article_frame_generation(
             "resumed": True,
             "evidence_strength_repaired": False,
             "evidence_strength_retry_count": 0,
-            "authority_free_fallback_applied": False,
         }
-    authority_free_fallback_applied = False
     prompt = build_article_frame_prompt(package)
     response = generate_text(prompt["system"], prompt["user"])
     try:
@@ -2605,12 +2302,9 @@ def run_article_frame_generation(
             try:
                 output = parse_article_frame_response(final_response, package)
             except SectionGenerationError as final_exc:
-                if str(final_exc) != _FRAME_OVERSTATEMENT_ERROR:
-                    raise SectionGenerationError(
-                        f"article frame authority_free repair failed: {final_exc}"
-                    ) from final_exc
-                output = _build_deterministic_authority_free_frame(package)
-                authority_free_fallback_applied = True
+                raise SectionGenerationError(
+                    f"article frame authority_free repair failed: {final_exc}"
+                ) from final_exc
             retry_count = 2
         repaired = True
     persist_article_frame_checkpoint(workspace, slug, package, output)
@@ -2620,5 +2314,4 @@ def run_article_frame_generation(
         "resumed": False,
         "evidence_strength_repaired": repaired,
         "evidence_strength_retry_count": retry_count,
-        "authority_free_fallback_applied": authority_free_fallback_applied,
     }
