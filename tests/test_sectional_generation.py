@@ -188,6 +188,72 @@ def _response(package, *, omit_required=None, raw_url=False, cjk=False):
     )
 
 
+def _same_sentence_internal_link_collision_response(package):
+    gates = package["link_gates"]
+    article_id = gates["article_links"]["selected_ids"][0]
+    product_id = gates["product_links"]["selected_ids"][0]
+    external_ids = []
+    external_placeholder = ""
+    if gates["external_citations"]["opportunity_state"] == "required":
+        external_ids = [gates["external_citations"]["selected_ids"][0]]
+        external_placeholder = f" [[CITE:{external_ids[0]}]]"
+    first = (
+        "A clear marking process helps the team identify the intended location, "
+        "communicate the task, and avoid unnecessary movement around the work area. "
+        f"Compare [[ARTICLE:{article_id}|detailed tool selection guidance]] and "
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool]] before work begins."
+    )
+    second = (
+        "Professionals should match the tool to the working distance, surrounding "
+        "conditions, handling needs, and established site procedures. The choice "
+        "should remain easy to explain and supported by the available evidence."
+        + external_placeholder
+    )
+    decisions = {
+        "article_links": {
+            "used_ids": [article_id],
+            "reason_code": "used_approved_candidate",
+        },
+        "product_links": {
+            "used_ids": [product_id],
+            "reason_code": "used_approved_candidate",
+        },
+        "external_citations": {
+            "used_ids": external_ids,
+            "reason_code": (
+                "used_approved_candidate"
+                if external_ids
+                else gates["external_citations"]["reason_code"]
+                if gates["external_citations"]["opportunity_state"] == "none"
+                else "not_needed_for_this_section"
+            ),
+        },
+    }
+    return (
+        f"{SECTION_MARKDOWN_MARKER}\n"
+        f"## {package['heading']}\n\n{first}\n\n{second}\n"
+        f"{SECTION_DECISIONS_MARKER}\n"
+        f"{json.dumps(decisions, sort_keys=True)}"
+    )
+
+
+def _separated_internal_link_response(package):
+    response = _same_sentence_internal_link_collision_response(package)
+    article_id = package["link_gates"]["article_links"]["selected_ids"][0]
+    product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+    collision = (
+        f"Compare [[ARTICLE:{article_id}|detailed tool selection guidance]] and "
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool]] before work begins."
+    )
+    separated = (
+        f"Review [[ARTICLE:{article_id}|detailed tool selection guidance]] before "
+        "work begins.\n\n"
+        f"Review [[PRODUCT:{product_id}|professional ceiling marking tool]] before "
+        "work begins."
+    )
+    return response.replace(collision, separated)
+
+
 def _package_from_prompt(user_prompt: str):
     payload = user_prompt.split("SECTION PACKAGE\n", 1)[1]
     return json.JSONDecoder().raw_decode(payload)[0]
@@ -1168,6 +1234,107 @@ def test_sequence_uses_final_authority_free_repair_before_stopping(tmp_path):
     assert result["evidence_strength_retry_count"] == 2
     assert len(calls) == len(sections["section_order"]) + 2
     assert "FINAL AUTHORITY-FREE REPAIR" in calls[2][1]
+
+
+def test_sequence_repairs_same_sentence_internal_link_collision(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            if target_attempts == 1:
+                return _same_sentence_internal_link_collision_response(package)
+            return _separated_internal_link_response(package)
+        return _response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["link_layout_retry_count"] == 1
+    assert result["evidence_strength_retry_count"] == 0
+    assert len(select_calls) == 2
+    assert "INTERNAL LINK LAYOUT REPAIR" in select_calls[1][1]
+    assert "PREVIOUS RESPONSE" in select_calls[1][2]
+
+
+def test_sequence_stops_after_one_link_layout_retry(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def remain_collided(system, user):
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] == "select":
+            return _same_sentence_internal_link_collision_response(package)
+        return _response(package)
+
+    with pytest.raises(SectionGenerationError, match="link_layout repair failed"):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_collided,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 2
+    assert "INTERNAL LINK LAYOUT REPAIR" in select_calls[1][1]
+
+
+def test_evidence_repair_can_expose_one_final_link_layout_repair(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] != "select":
+            return _response(package)
+        target_attempts += 1
+        if target_attempts == 1:
+            return _same_sentence_internal_link_collision_response(package).replace(
+                "A clear marking process helps the team identify the intended location,",
+                "OSHA recommends Class 3R as the best choice for ceiling marking. "
+                "A clear marking process helps the team identify the intended location,",
+            )
+        if target_attempts == 2:
+            return _same_sentence_internal_link_collision_response(package)
+        return _separated_internal_link_response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["evidence_strength_retry_count"] == 1
+    assert result["link_layout_retry_count"] == 1
+    assert len(select_calls) == 3
+    assert "EVIDENCE STRENGTH REPAIR" in select_calls[1][2]
+    assert "INTERNAL LINK LAYOUT REPAIR" in select_calls[2][1]
+    assert "PREVIOUS RESPONSE" in select_calls[2][2]
 
 
 def test_section_authority_recommendation_requires_verified_quote_citation():

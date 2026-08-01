@@ -1,3 +1,31 @@
+## 2026-08-01 — Add bounded internal-link layout recovery
+
+### 第十四次真实 resume
+
+- `a15d69b` 推送后只运行一次普通 resume，POST=1、无外层重试、未 refresh/promotion。
+- 901 恢复，049 重生成并持久化；429 的非结论式 H2 与 authority-free 约束生效，失败点
+  推进为单段含多个 ARTICLE/PRODUCT placeholder。正式 pair 与 Action 不变；
+  `ai_runs 188→190`，DB SHA=`7ce1514b...`。
+
+### 根因与修复
+
+- Parser 已有无语义 paragraph normalizer，能在既有句界处分开多个链接；本次错误说明
+  碰撞位于同一句或不可安全自动拆分的结构块。
+- 旧受控链只识别 word-count/evidence-strength 首错；evidence 修订后新出现的 link-layout
+  错误没有最终修订分支。
+- 新增 formatting-only link-layout prompt：只允许最小段落/句子拆分，必须保留 H2、事实
+  含义、placeholder inventory/order 与 decisions JSON，所有原 validator 不变。
+- 最终修订选择器只允许不同 repair kind 接力；直接 link-layout 失败只修一次，只有
+  evidence-strength 后新暴露 link-layout 时才会进入第三次调用。全程最多三次正文调用，
+  仍只属于同一个 POST。Pipeline 新增兼容可选计数
+  `section_link_layout_retries`。
+
+### 验证
+
+- 新增“直接同句双内链”和“evidence 修订后暴露双内链”两条完整序列测试。
+- Sectional 非 Web 196 passed；Legacy/W1b 非 Web 237 passed；Ruff、format、compileall、
+  `git diff --check` passed。
+
 ## 2026-08-01 — Neutralize unsupported technical winner selection
 
 ### 第十三次真实 resume

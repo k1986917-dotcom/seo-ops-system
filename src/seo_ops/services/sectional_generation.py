@@ -95,6 +95,7 @@ _TECHNICAL_CHOICE_TERM = re.compile(
 )
 _EVIDENCE_OVERSTATEMENT_ERROR = "section contains authority or recommendation language unsupported by source-verified quote evidence"
 _FRAME_OVERSTATEMENT_ERROR = "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
+_INTERNAL_LINK_LAYOUT_ERROR = "a paragraph may contain at most one internal link placeholder"
 
 
 class SectionGenerationError(ContractValidationError):
@@ -743,6 +744,38 @@ def _build_word_count_repair_prompt(
     return {"system": repair_system, "user": repair_user}
 
 
+def _build_internal_link_layout_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    """Build one formatting-only repair for an unresolved link collision."""
+    if str(error) != _INTERNAL_LINK_LAYOUT_ERROR:
+        return None
+    base = build_section_generation_prompt(package)
+    system = (
+        base["system"] + "\nINTERNAL LINK LAYOUT REPAIR. Preserve the exact H2, factual meaning, "
+        "approved placeholder IDs, citation IDs, and link decisions. Do not add or "
+        "remove any fact, product, article, evidence item, URL, specification, law, "
+        "or recommendation. Reformat the body so every paragraph contains at most "
+        "one ARTICLE or PRODUCT placeholder. Prefer turning existing sentence breaks "
+        "into paragraph breaks. If two internal placeholders occur in one sentence, "
+        "split only that sentence into two concise sentences with equivalent meaning "
+        "and place them in separate paragraphs. Keep 2-5 coherent paragraphs, keep "
+        "the same placeholder inventory and order, and return the complete two-block "
+        "response with decisions JSON matching the final placeholders."
+    )
+    user = (
+        base["user"]
+        + "\n\nINTERNAL LINK LAYOUT REPAIR\n"
+        + "The previous response passed the content contract but still placed more "
+        "than one ARTICLE or PRODUCT placeholder in a paragraph. Make only the "
+        "minimum formatting or sentence-split change needed to satisfy the rule. "
+        "Do not rewrite unrelated prose.\n\nPREVIOUS RESPONSE\n" + response_text
+    )
+    return {"system": system, "user": user}
+
+
 def _build_section_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -755,6 +788,13 @@ def _build_section_repair_prompt(
     )
     if word_count_prompt is not None:
         return word_count_prompt, "word_count"
+    link_layout_prompt = _build_internal_link_layout_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if link_layout_prompt is not None:
+        return link_layout_prompt, "link_layout"
     error_text = str(error)
     if not error_text.startswith(_EVIDENCE_OVERSTATEMENT_ERROR):
         return None
@@ -837,6 +877,31 @@ def _build_authority_free_repair_prompt(
         "Return the complete two-block response again."
     )
     return {"system": system, "user": user}
+
+
+def _build_final_section_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+    prior_kind: str,
+) -> tuple[dict[str, str], str] | None:
+    """Choose one final bounded repair from the newly exposed failure kind."""
+    if prior_kind != "link_layout":
+        link_layout = _build_internal_link_layout_repair_prompt(
+            package,
+            response_text,
+            error,
+        )
+        if link_layout is not None:
+            return link_layout, "link_layout"
+    authority_free = _build_authority_free_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if authority_free is not None:
+        return authority_free, "authority_free"
+    return None
 
 
 def _split_response(text: str, first: str, second: str) -> tuple[str, str]:
@@ -1159,9 +1224,7 @@ def parse_section_generation_response(
     for block in re.split(r"\n\s*\n", "\n".join(lines[1:])):
         count = len(_ARTICLE_PLACEHOLDER.findall(block)) + len(_PRODUCT_PLACEHOLDER.findall(block))
         if count > 1:
-            raise SectionGenerationError(
-                "a paragraph may contain at most one internal link placeholder"
-            )
+            raise SectionGenerationError(_INTERNAL_LINK_LAYOUT_ERROR)
     try:
         decisions = json.loads(decisions_text)
     except json.JSONDecodeError as exc:
@@ -1384,6 +1447,7 @@ def run_section_generation_sequence(
     resumed_count = 0
     word_count_retry_count = 0
     evidence_strength_retry_count = 0
+    link_layout_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
             sections,
@@ -1413,39 +1477,42 @@ def run_section_generation_sequence(
                     repair_prompt["system"],
                     repair_prompt["user"],
                 )
+                if repair_kind == "word_count":
+                    word_count_retry_count += 1
+                elif repair_kind == "link_layout":
+                    link_layout_retry_count += 1
+                else:
+                    evidence_strength_retry_count += 1
                 try:
                     output = parse_section_generation_response(repaired_response, package)
                 except SectionGenerationError as repair_exc:
-                    final_repair = (
-                        _build_authority_free_repair_prompt(
-                            package,
-                            repaired_response,
-                            repair_exc,
-                        )
-                        if repair_kind == "evidence_strength"
-                        else None
+                    final_repair = _build_final_section_repair_prompt(
+                        package,
+                        repaired_response,
+                        repair_exc,
+                        repair_kind,
                     )
                     if final_repair is None:
                         raise SectionGenerationError(
                             f"section {section_id} ({package['heading']}) "
                             f"{repair_kind} repair failed: {repair_exc}"
                         ) from repair_exc
+                    final_prompt, final_kind = final_repair
                     final_response = generate_text(
-                        final_repair["system"],
-                        final_repair["user"],
+                        final_prompt["system"],
+                        final_prompt["user"],
                     )
+                    if final_kind == "link_layout":
+                        link_layout_retry_count += 1
+                    else:
+                        evidence_strength_retry_count += 1
                     try:
                         output = parse_section_generation_response(final_response, package)
                     except SectionGenerationError as final_exc:
                         raise SectionGenerationError(
                             f"section {section_id} ({package['heading']}) "
-                            f"authority_free repair failed: {final_exc}"
+                            f"{final_kind} repair failed: {final_exc}"
                         ) from final_exc
-                    evidence_strength_retry_count += 1
-                if repair_kind == "word_count":
-                    word_count_retry_count += 1
-                else:
-                    evidence_strength_retry_count += 1
             persist_section_checkpoint(workspace, slug, package, output)
             generated_count += 1
         else:
@@ -1462,6 +1529,7 @@ def run_section_generation_sequence(
         "resumed_count": resumed_count,
         "word_count_retry_count": word_count_retry_count,
         "evidence_strength_retry_count": evidence_strength_retry_count,
+        "link_layout_retry_count": link_layout_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
 

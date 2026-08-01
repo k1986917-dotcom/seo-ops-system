@@ -2,6 +2,36 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十四次普通 resume：429 推进到内链占位符排版门禁
+
+- `a15d69b` 已由本机成功推送并核验本地/远端一致；随后只执行一次普通
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing --ai-call-limit 36`，POST=1、
+  无外层重试、未 refresh、未 promotion。正式 draft、claim ledger、w2-state、`.env` 和
+  Action 全部不变；`ai_runs 188→190`，DB SHA 变为
+  `7ce1514bf81bba018c8ab590819fbe3998bf6f8efae79a429a2a6227f56e9b51`。
+- 901 合法恢复；049 在新 package 下重新生成并持久化。429 的新 H2
+  `How to Compare Class 2 and Class 3R for Above-Ceiling Pointing` 生效，且本轮已不再触发
+  authority/safety 结论门禁。真实停止点推进为严格格式错误：模型在一个段落内放置超过
+  一个 ARTICLE/PRODUCT 占位符，现有确定性 paragraph normalizer 无法安全处理，修订后
+  仍报 `a paragraph may contain at most one internal link placeholder`。429 未覆盖旧 checkpoint，
+  后三节未到达；active=17、archive=1、promotion manifest 不存在。
+- MCP 独立确认旧代码只会为首个字数或 evidence-strength 错误构建修订。此次首轮先暴露
+  evidence 问题，第二次输出通过 evidence gate 后才暴露 link-layout 错误，因此没有对应的
+  最终修订路径而直接停止。本次修复保持严格门禁，不允许同段多内链：
+  1. 继续优先使用服务端 `_normalize_section_paragraphs`，仅在既有句界可以无语义拆段时
+     自动重排，不增加 AI 调用；
+  2. 同一句内含多个内链或结构化 Markdown 无法安全自动拆分时，新增一次 formatting-only
+     `INTERNAL LINK LAYOUT REPAIR`，要求保留 H2、事实含义、placeholder IDs/顺序和 decisions；
+  3. 每种 repair kind 最多执行一次；直接 link-layout 错误只修一次。仅当
+     evidence-strength 修订后新暴露 link-layout 错误时，同一个 POST 才可使用第三次、
+     也是最后一次格式修订；仍无外层重试；
+  4. Pipeline 新增可选兼容字段 `section_link_layout_retries`，旧 version-1 结果缺失该字段
+     仍可验证；最终失败会精确报告 `link_layout repair failed`。
+- 回归：sectional 非 Web 196 项通过；Legacy/W1b 非 Web 237 项通过；Ruff、format、
+  compileall、`git diff --check` 通过。已知 Web `/etc/mime.types` Landlock 用例继续排除。
+- 下一步：提交并推送本次修复；核验真实基线后只运行一次普通 `--resume-existing`。继续
+  禁止 `--refresh-complete`、第二次 runner、promotion、rollback 和手工改 checkpoint。
+
 ## 2026-08-01 — 第十三次普通 resume：从机构归因推进到技术等级结论
 
 - `97f6f6e` 已由本机成功推送并核验本地/远端一致；随后只执行一次普通

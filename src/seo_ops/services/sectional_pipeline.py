@@ -227,6 +227,7 @@ def run_sectional_shadow_candidate(
         "generated_sections": section_run["generated_count"],
         "resumed_sections": section_run["resumed_count"],
         "section_word_count_retries": section_run["word_count_retry_count"],
+        "section_link_layout_retries": section_run["link_layout_retry_count"],
         "frame_generated": bool(frame_run["generated"]),
         "frame_resumed": bool(frame_run["resumed"]),
         "section_evidence_strength_retries": section_run["evidence_strength_retry_count"],
@@ -275,6 +276,13 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         or frame_retry_count < 0
     ):
         raise SectionalPipelineError("pipeline result frame_evidence_strength_retries is invalid")
+    link_layout_retry_count = result.get("section_link_layout_retries")
+    if link_layout_retry_count is not None and (
+        not isinstance(link_layout_retry_count, int)
+        or isinstance(link_layout_retry_count, bool)
+        or link_layout_retry_count < 0
+    ):
+        raise SectionalPipelineError("pipeline result section_link_layout_retries is invalid")
     if result["generated_sections"] + result["resumed_sections"] != result["section_count"]:
         raise SectionalPipelineError("pipeline section counts do not reconcile")
     if result["generated_ledgers"] + result["resumed_ledgers"] != len(

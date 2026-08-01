@@ -39,6 +39,14 @@
 
 ### Fixed
 
+- Sectional body generation now recovers from internal-link layout collisions
+  without relaxing the one-internal-link-per-paragraph validator. Existing
+  sentence boundaries are still normalized deterministically first; only
+  unresolved same-sentence or structured collisions receive one bounded
+  formatting-only repair. When an evidence-strength repair exposes the layout
+  error, the same POST may use one final link-layout repair, with an explicit
+  retry count in the pipeline result. Placeholder IDs, order, decisions and all
+  content validators remain fail-closed.
 - Zero-verified-quote sectional contracts now neutralize unsupported technical
   winner selection as well as named-authority attribution. Prompts such as
   `Which Laser Class Works...` and `...Is A Practical Choice...` become

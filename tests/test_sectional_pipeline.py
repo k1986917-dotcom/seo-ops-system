@@ -192,6 +192,7 @@ def test_shadow_pipeline_builds_complete_candidate_without_formal_artifacts(tmp_
 
     assert result["section_count"] == 3
     assert result["generated_sections"] == 3
+    assert result["section_link_layout_retries"] == 0
     assert result["frame_generated"] is True
     assert result["generated_ledgers"] == len(result["assembly"]["delivery"]["section_order"])
     assert result["run_metrics"]["ai_calls"] == len(calls)
@@ -275,7 +276,7 @@ def test_pipeline_result_rejects_nested_tampering(tmp_path):
         validate_sectional_pipeline_result(result)
 
 
-def test_pipeline_result_accepts_legacy_version_one_without_frame_retry_count(tmp_path):
+def test_pipeline_result_accepts_legacy_version_one_without_new_retry_counts(tmp_path):
     result = run_sectional_shadow_candidate(
         workspace=tmp_path,
         generate_text=_generator([]),
@@ -283,6 +284,7 @@ def test_pipeline_result_accepts_legacy_version_one_without_frame_retry_count(tm
         **_inputs(),
     )
     result.pop("frame_evidence_strength_retries")
+    result.pop("section_link_layout_retries")
     unsigned = dict(result)
     unsigned.pop("result_sha256")
     result["result_sha256"] = hashlib.sha256(
