@@ -2,28 +2,29 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
-## 2026-08-02 — 激光商品文案改为自然省略冲突字段，并增加目录 provenance
+## 2026-08-02 — 高功率商品参数可中性展示，但必须带完整安全提醒
 
 - 对首次完整 Shadow 终态进行 MCP 独立内容审查后确认：产品选择 B025 与安全/Class 章节
   分区正确，但产品句仍展示 `1.5W`、写成 `ceiling-focused`，且 429/b92 使用了未核验
   quote 的直接引语或“某人指出”式归因；旧 comparison 的 `blockers=[]` 也没有证明产品句
   来自当前目录。
-- 按商业规则修正设计：高功率继续不扣分、不淘汰；不在成文中解释高功率与 Class 2/3R
-  的关系。产品链接句直接省略功率、output、Class、安全、合规、认证和 hazard 字段，只写
-  目录支持的中性商业属性。安全与等级章节继续使用 Evidence Manifest，但不反向评价或
-  绑定具体商品。
-- `laserpointerhub.json` 新增产品 copy instruction 与 suppression patterns；生成 package
-  在发送给模型前先清理商品标题、属性和 variant 文本中的受抑制字段，完整目录不变，仍供
-  排序及服务器 provenance 使用。输出再次出现受抑制字段，或杜撰“专为施工/吊顶设计”等
-  精确用途，会触发 bounded `content_provenance` repair，再失败继续 fail-closed。
+- 商业规则最终确定为：高功率继续不扣分、不淘汰，目录支持的功率参数可中性展示；不再
+  全局隐藏 `1.5W`。但 PRODUCT 段写出超过 5mW 的数值、`high-power` 或 Class 3R/3A/3B/4
+  时，必须在同段提供完整安全提醒，不能用销售语气弱化风险。
+- 安全提醒必须同时包含：与激光波长匹配的激光防护眼镜、对该输出足够的 optical density、
+  避免直接眼部暴露与反射面、不得指向车辆或航空器。仅写“戴护目镜”会 fail-closed；也
+  不能声称防护眼镜会使产品安全。安全/Class/合规章节仍不放商品。
+- 产品句继续禁止无目录依据的 `ceiling-focused`、专为施工设计、合规、认证或安全结论；
+  缺少高功率安全提醒或越界用途时会进入 bounded `content_provenance` repair。
 - 未核验 evidence（`quote`/`key_finding`）不得以引号、`said/noted/wrote` 等方式归因；
   只允许自然概括。`verified_quote` 仍可保留逐字引语。
 - PRODUCT binding 现在包含目录标题、目录 facts 和可重算的内层 catalog SHA；assembly
   将每个产品 URL 绑定到唯一 sentence ID，并在 audit metrics 输出产品 provenance。
   comparison 的产品链接数与 provenance 数不一致时强制 `keep_legacy`。
 - 对 Action #3 做了纯只读 checkpoint 边界核验（无 AI、无业务写入）：901、049 可恢复；
-  429、7bb、b92 在新规则下自动失效。7bb 仍应选择 B025，但新锚文本/产品句不得包含
-  `1.5W`、Class 或 `ceiling-focused`；429/b92 应改为无引号、无“某人说”的自然概括。
+  429、7bb、b92 在新规则下自动失效。7bb 仍应选择 B025，模型上下文继续保留真实 `1.5W`；
+  若最终商品段使用该功率，必须同时生成完整安全提醒。`ceiling-focused` 仍禁止；429/b92
+  应改为无引号、无“某人说”的自然概括。
 - 验证：Sectional 非 Web `240 passed`（排除唯一已知 MCP `/etc/mime.types` Web 路由
   用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
   `git diff --check` 全部通过。

@@ -1,20 +1,22 @@
-## 2026-08-02 — Natural laser product copy and deterministic catalog provenance
+## 2026-08-02 — High-power copy requires a complete safety reminder
 
 - 首次完整 Shadow 的结构门禁已通过，但人工内容审查发现三个自动门禁缺口：B025 产品句
   展示 `1.5W` 并称为 `ceiling-focused`；未核验 quote 被直接引用或包装成“某人指出”；
-  产品链接句没有机器可验证的目录 provenance。根据商业要求，本轮不把高功率与 Class
-  讨论判定为商品冲突，而是让产品文案自然省略这些字段。
+  产品链接句没有机器可验证的目录 provenance。商业规则进一步确认：高功率不是排序淘汰
+  条件，功率参数也不应被全局隐藏；真正需要的是在展示高功率时提供完整、准确的安全上下文。
 - `laserpointerhub` 站点配置新增：
-  - `product_copy_instruction`：产品句不写 wattage/output、laser class、安全、合规、认证、
-    hazard，也不解释这些字段为什么被省略；
-  - `product_copy_suppressed_patterns`：模型写作上下文中的商品 title/attributes/variant 先
-    脱敏，但完整 registry 保持不变，用于排序和机器审计；
+  - `product_copy_instruction`：功率可按目录中性展示，不得包装成自动更安全或普遍更好；
+  - `product_power_copy_policy=require_safety_notice_when_high_power_is_mentioned`，覆盖 >5mW、
+    `high-power` 与 Class 3R/3A/3B/4；
+  - `high_power_notice_threshold_mw=5`；
+  - 高功率段必须写明波长匹配、足够 OD 的激光防护眼镜，以及眼睛、反射面、车辆和航空器
+    的避免事项；
   - 高功率政策仍为 `neutral_for_ranking_and_never_an_exclusion`。
 - Section generation 新增两类确定性内容 gate：
   1. `quote`/`key_finding` evidence 不能以直接引号或 `said/noted/wrote` 归因式转述发布，
      只有 `verified_quote` 可逐字引用；
-  2. 产品句不能包含站点抑制字段，也不能杜撰 `ceiling-focused`、`designed for construction`
-     等目录未声明的精确用途。
+  2. 高功率产品段缺少完整安全提醒时拒绝；产品句也不能杜撰 `ceiling-focused`、
+     `designed for construction` 等目录未声明的精确用途。
   两类错误均有一次最小 `content_provenance` repair 与一次 clean final repair，调用上限和
   全部既有 gate 不变；新增 `section_content_provenance_retries`。
 - Phase 4 PRODUCT binding 增加服务器生成的 `catalog_provenance`（catalog title、facts、
@@ -23,7 +25,8 @@
   SHA 时，resolved delivery 即使重算外层 SHA 也会失败。
 - Comparison 增加 `product_provenance_count`；若与 product binding 数不一致，加入
   `product_copy_provenance_missing` blocker。
-- Action #3 只读 checkpoint 复核：901/049 可恢复；429/7bb/b92 自动失效，无手工删除或
+- Action #3 只读 checkpoint 复核：B025 与 `1.5W` 均保留在新 package；旧 7bb 因展示
+  `1.5W` 但没有完整安全提醒而自动失效。901/049 可恢复；429/7bb/b92 自动失效，无手工删除或
   修改。active root 当前仍有完整终态候选，因此下次真实运行必须使用一次
   `--resume-existing --refresh-complete --ai-call-limit 36` 原子归档后继续，禁止普通 resume
   直接覆盖、二次 POST 或 promotion。

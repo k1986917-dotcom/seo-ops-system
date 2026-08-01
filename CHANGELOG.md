@@ -1,17 +1,18 @@
-## [Unreleased] — Keep laser product copy natural and catalog-auditable
+## [Unreleased] — Require safety context for high-power product copy
 
 ### Fixed
 
-- `laserpointerhub` 继续把高功率视为排序中性条件，不因功率扣分或淘汰商品；但产品链接
-  所在句现在自然省略 wattage/output、laser class、安全、合规、认证与 hazard 字段，也不
-  把商品与文章中的 Class 2/Class 3R 讨论强行绑定或解释冲突。
-- 站点配置新增 `product_copy_instruction` 与 `product_copy_suppressed_patterns`。写作模型
-  看到的商品标题、属性和 variant 文本会先按站点规则脱敏；完整目录仍保留给候选排序和
-  服务器审计。产品句只能使用目录支持的波长/颜色、形态、单光束、调焦、充电和可见度等
-  商业属性，除非目录原文明确声明，否则禁止写成专为施工、吊顶或特定场景设计。
+- `laserpointerhub` 继续把高功率视为排序中性条件，不因功率扣分或淘汰商品。目录支持的
+  wattage/output 可以中性写入商品文案，不再全局隐藏；但高于站点阈值（当前 5mW）、使用
+  `high-power` 措辞或写出 Class 3R/3A/3B/4 时，同一 PRODUCT 段必须包含完整安全提醒。
+- 高功率安全提醒必须说明使用与激光波长匹配、且 optical density 适合输出的激光防护
+  眼镜，并提醒避免直接眼部暴露和反射面、不得指向车辆或航空器。普通“戴护目镜”不足以
+  通过；也禁止暗示护目镜会使高功率激光变得安全，或弱化文章其他位置的风险说明。
+- 产品句仍只能使用目录支持的属性，禁止无目录依据的 `ceiling-focused`、专为施工设计、
+  合规、认证或安全结论。安全/Class/合规章节继续保持 product gate=`none`。
 - `support_basis=quote` 不再允许作为直接引语或“某人说/指出/写道”的归因式转述发布；
   仅 `verified_quote` 可保留逐字引语。新增 bounded content-provenance repair，把未核验
-  引语改成自然概括，把越界商品句改成不解释功率/Class 冲突的正常商业文案。
+  引语改成自然概括，并为缺少安全上下文的高功率商品段补充受控提醒。
 - PRODUCT binding 新增服务器生成的目录 provenance：目录标题、目录事实与内层 SHA；
   assembly 将每个产品 URL 绑定到唯一 canonical sentence，并记录 candidate/product、
   sentence ID、catalog SHA 和事实字段。内层 provenance 被改写时，即使外层 delivery SHA

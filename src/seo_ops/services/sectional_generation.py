@@ -117,10 +117,44 @@ _PRODUCT_USE_CASE_CLAIM = re.compile(
     r"long[- ]distance\s+pointing|professional\s+pointing))\b",
     re.IGNORECASE,
 )
+_PRODUCT_POWER_VALUE = re.compile(
+    r"\b(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>mw|w|watts?)\b",
+    re.IGNORECASE,
+)
+_HIGH_POWER_WORDING = re.compile(r"\bhigh[- ]?power(?:ed)?\b", re.IGNORECASE)
+_HIGHER_HAZARD_CLASS_WORDING = re.compile(
+    r"\bclass\s*(?:3r|3a|3b|4)\b",
+    re.IGNORECASE,
+)
+_LASER_EYEWEAR = re.compile(
+    r"\b(?:laser\s+)?(?:protective\s+|safety\s+)?(?:eyewear|goggles|glasses)\b",
+    re.IGNORECASE,
+)
+_WAVELENGTH_MATCH = re.compile(
+    r"\b(?:matched|rated|specified|appropriate|suitable)\b[^.!?]{0,80}"
+    r"\b(?:wavelength|\d{3,4}\s*nm)\b|"
+    r"\b(?:wavelength|\d{3,4}\s*nm)\b[^.!?]{0,80}"
+    r"\b(?:matched|rated|specified|appropriate|suitable)\b",
+    re.IGNORECASE,
+)
+_OPTICAL_DENSITY = re.compile(r"\b(?:optical\s+density|OD)\b", re.IGNORECASE)
+_DIRECT_EYE_AVOIDANCE = re.compile(
+    r"\b(?:avoid|never)\b[^.!?]{0,100}\b(?:direct\s+eye\s+exposure|eyes?)\b",
+    re.IGNORECASE,
+)
+_REFLECTION_AVOIDANCE = re.compile(
+    r"\b(?:avoid|never)\b[^.!?]{0,120}\b(?:reflections?|reflective\s+surfaces?)\b",
+    re.IGNORECASE,
+)
+_VEHICLE_AIRCRAFT_AVOIDANCE = re.compile(
+    r"\b(?:avoid|never|do\s+not)\b[^.!?]{0,120}\b(?:vehicles?|aircraft)\b",
+    re.IGNORECASE,
+)
 _EVIDENCE_OVERSTATEMENT_ERROR = "section contains authority or recommendation language unsupported by source-verified quote evidence"
 _UNVERIFIED_QUOTE_ERROR = "section publishes unverified evidence as a direct quote"
 _PRODUCT_PROVENANCE_ERROR = "product-linked sentence exceeds approved catalog provenance"
 _PRODUCT_COPY_POLICY_ERROR = "product-linked sentence violates the active site copy policy"
+_PRODUCT_POWER_NOTICE_ERROR = "high-power product copy is missing the required safety notice"
 _FRAME_OVERSTATEMENT_ERROR = "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
 _INTERNAL_LINK_LAYOUT_ERROR = "a paragraph may contain at most one internal link placeholder"
 _TECHNICAL_CONSISTENCY_ERROR = "section contains contradictory wavelength and color pairing"
@@ -512,11 +546,14 @@ def build_section_generation_package(
                 "high_power_policy": "not_applicable",
                 "product_copy_instruction": "",
                 "product_copy_suppressed_patterns": [],
+                "product_power_copy_policy": "not_applicable",
+                "product_power_copy_instruction": "",
+                "high_power_notice_threshold_mw": 5,
                 "use_case_rules": [],
             }
         )
-        copy_patterns = site_profile_payload.get("product_copy_suppressed_patterns", [])
-        if isinstance(copy_patterns, list) and all(isinstance(item, str) for item in copy_patterns):
+        copy_patterns = list(site_profile_payload.get("product_copy_suppressed_patterns", []))
+        if all(isinstance(item, str) for item in copy_patterns):
             product_candidates = [
                 _sanitize_product_candidate_for_copy(item, copy_patterns)
                 for item in product_candidates
@@ -599,6 +636,16 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
         or not isinstance(site_profile.get("high_power_policy"), str)
         or not isinstance(site_profile.get("product_copy_instruction", ""), str)
         or not isinstance(site_profile.get("product_copy_suppressed_patterns", []), list)
+        or not isinstance(site_profile.get("product_power_copy_policy", ""), str)
+        or site_profile.get("product_power_copy_policy", "not_applicable")
+        not in {
+            "not_applicable",
+            "require_safety_notice_when_high_power_is_mentioned",
+        }
+        or not isinstance(site_profile.get("product_power_copy_instruction", ""), str)
+        or not isinstance(site_profile.get("high_power_notice_threshold_mw", 5), int)
+        or isinstance(site_profile.get("high_power_notice_threshold_mw", 5), bool)
+        or site_profile.get("high_power_notice_threshold_mw", 5) <= 0
         or any(
             not isinstance(item, str)
             for item in site_profile.get("product_copy_suppressed_patterns", [])
@@ -677,6 +724,12 @@ def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
     product_copy_instruction = str(site_profile.get("product_copy_instruction") or "").strip()
     if product_copy_instruction:
         site_policy_rule += "\nPRODUCT COPY POLICY. " + product_copy_instruction
+    if site_profile.get("product_power_copy_policy") == (
+        "require_safety_notice_when_high_power_is_mentioned"
+    ):
+        power_instruction = str(site_profile.get("product_power_copy_instruction") or "").strip()
+        if power_instruction:
+            site_policy_rule += "\nHIGH-POWER SAFETY COPY POLICY. " + power_instruction
     authority_free_rule = (
         "\nThis package has zero source-verified quotes. In body paragraphs, do not "
         "name OSHA, FDA, EPA, FTC, CDC, NIOSH, the Occupational Safety and Health "
@@ -845,6 +898,29 @@ def _validate_unverified_direct_quotes(
                 raise SectionGenerationError(f"{_UNVERIFIED_QUOTE_ERROR}: {evidence_id}")
 
 
+def _mentions_high_power(text: str, *, threshold_mw: int) -> bool:
+    if _HIGH_POWER_WORDING.search(text) or _HIGHER_HAZARD_CLASS_WORDING.search(text):
+        return True
+    for match in _PRODUCT_POWER_VALUE.finditer(text):
+        value = float(match.group("value"))
+        unit = match.group("unit").casefold()
+        value_mw = value * 1000 if unit in {"w", "watt", "watts"} else value
+        if value_mw > threshold_mw:
+            return True
+    return False
+
+
+def _has_required_high_power_safety_notice(text: str) -> bool:
+    return bool(
+        _LASER_EYEWEAR.search(text)
+        and _WAVELENGTH_MATCH.search(text)
+        and _OPTICAL_DENSITY.search(text)
+        and _DIRECT_EYE_AVOIDANCE.search(text)
+        and _REFLECTION_AVOIDANCE.search(text)
+        and _VEHICLE_AIRCRAFT_AVOIDANCE.search(text)
+    )
+
+
 def _validate_product_catalog_provenance(
     markdown: str,
     package: dict[str, Any],
@@ -862,8 +938,30 @@ def _validate_product_catalog_provenance(
             [],
         )
     ]
+    site_profile = package.get("site_profile") or {}
+    power_notice_required = site_profile.get("product_power_copy_policy") == (
+        "require_safety_notice_when_high_power_is_mentioned"
+    )
+    power_threshold_mw = int(site_profile.get("high_power_notice_threshold_mw", 5))
     body = "\n".join(markdown.splitlines()[1:])
     for block in re.split(r"\n\s*\n", body):
+        block_product_ids = [item[0] for item in _PRODUCT_PLACEHOLDER.findall(block)]
+        visible_block = _PRODUCT_PLACEHOLDER.sub(lambda match: match.group(2), block)
+        product_power_mentioned = any(
+            _PRODUCT_PLACEHOLDER.search(sentence)
+            and _mentions_high_power(
+                _PRODUCT_PLACEHOLDER.sub(lambda match: match.group(2), sentence),
+                threshold_mw=power_threshold_mw,
+            )
+            for sentence in re.split(r"(?<=[.!?])\s+", block)
+        )
+        if (
+            block_product_ids
+            and power_notice_required
+            and product_power_mentioned
+            and not _has_required_high_power_safety_notice(visible_block)
+        ):
+            raise SectionGenerationError(f"{_PRODUCT_POWER_NOTICE_ERROR}: {block_product_ids[0]}")
         for sentence in _POTENTIAL_SENTENCE_BREAK.split(block):
             product_ids = [item[0] for item in _PRODUCT_PLACEHOLDER.findall(sentence)]
             for candidate_id in product_ids:
@@ -924,7 +1022,24 @@ def _validate_section_evidence_strength(
         body_block = "\n".join(
             line for line in block.splitlines() if not line.lstrip().startswith("#")
         )
-        visible = _ARTICLE_PLACEHOLDER.sub(lambda match: match.group(2), body_block)
+        raw_sentences = re.split(r"(?<=[.!?])\s+", body_block)
+        block_visible = _PRODUCT_PLACEHOLDER.sub(lambda match: match.group(2), body_block)
+        valid_power_notice = _has_required_high_power_safety_notice(block_visible)
+        evidence_sentences = []
+        for sentence in raw_sentences:
+            if _PRODUCT_PLACEHOLDER.search(sentence):
+                continue
+            if valid_power_notice and (
+                _LASER_EYEWEAR.search(sentence)
+                or _OPTICAL_DENSITY.search(sentence)
+                or _DIRECT_EYE_AVOIDANCE.search(sentence)
+                or _REFLECTION_AVOIDANCE.search(sentence)
+                or _VEHICLE_AIRCRAFT_AVOIDANCE.search(sentence)
+            ):
+                continue
+            evidence_sentences.append(sentence)
+        evidence_block = " ".join(evidence_sentences)
+        visible = _ARTICLE_PLACEHOLDER.sub(lambda match: match.group(2), evidence_block)
         visible = _PRODUCT_PLACEHOLDER.sub(lambda match: match.group(2), visible)
         visible = _CITE_PLACEHOLDER.sub("", visible)
         if not _contains_strong_evidence_claim(visible):
@@ -1383,7 +1498,14 @@ def _build_content_provenance_repair_prompt(
 
     error_text = str(error)
     quote_error = error_text.startswith(_UNVERIFIED_QUOTE_ERROR)
-    product_error = error_text.startswith((_PRODUCT_PROVENANCE_ERROR, _PRODUCT_COPY_POLICY_ERROR))
+    product_error = error_text.startswith(
+        (
+            _PRODUCT_PROVENANCE_ERROR,
+            _PRODUCT_COPY_POLICY_ERROR,
+            _PRODUCT_POWER_NOTICE_ERROR,
+        )
+    )
+    power_notice_error = error_text.startswith(_PRODUCT_POWER_NOTICE_ERROR)
     if not quote_error and not product_error:
         return None
     validated = validate_section_generation_package(package)
@@ -1395,12 +1517,22 @@ def _build_content_provenance_repair_prompt(
             "text as words someone said, wrote, or noted. Paraphrase only the supported "
             "meaning. Keep the approved citation placeholder if it remains relevant."
         )
+    elif power_notice_error:
+        specific = (
+            "The PRODUCT-linked paragraph mentions high power. Keep the catalog-supported "
+            "power specification if it is useful, but add a concise safety reminder in the "
+            "same paragraph. State that laser protective eyewear must be matched or rated "
+            "for the laser wavelength and have optical density adequate for the output. "
+            "Also tell the reader to avoid direct eye exposure and reflective surfaces and "
+            "never aim at vehicles or aircraft. Do not say that eyewear makes the laser safe, "
+            "and do not weaken any hazard discussion elsewhere in the article."
+        )
     else:
         specific = (
             "Rewrite each PRODUCT-linked sentence as natural commercial copy using only "
-            "the approved catalog candidate. Omit wattage, output level, laser class, "
-            "safety, compliance, certification, and hazard wording when the site copy "
-            "policy suppresses it. Do not explain or reconcile the omitted fields. Do "
+            "the approved catalog candidate. A catalog-supported power specification may "
+            "remain when relevant. Omit unsupported safety, compliance, certification, or "
+            "approval claims. Do "
             "not call the product ceiling-focused, construction-focused, designed for, "
             "approved for, safe for, or specifically suitable for the article use case "
             "unless that exact claim appears in the supplied catalog attributes. Keep "

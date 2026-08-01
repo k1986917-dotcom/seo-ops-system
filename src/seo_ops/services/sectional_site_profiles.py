@@ -51,6 +51,9 @@ class SectionalSiteProfile:
     high_power_policy: str
     product_copy_instruction: str
     product_copy_suppressed_patterns: tuple[str, ...]
+    product_power_copy_policy: str
+    product_power_copy_instruction: str
+    high_power_notice_threshold_mw: int
     variant_label_pattern: str
     source: str
 
@@ -70,6 +73,9 @@ GENERIC_PROFILE = SectionalSiteProfile(
     high_power_policy="not_applicable",
     product_copy_instruction="",
     product_copy_suppressed_patterns=(),
+    product_power_copy_policy="not_applicable",
+    product_power_copy_instruction="",
+    high_power_notice_threshold_mw=5,
     variant_label_pattern="",
     source="builtin:default",
 )
@@ -77,6 +83,12 @@ GENERIC_PROFILE = SectionalSiteProfile(
 _PROFILE_DIR = Path(__file__).resolve().parents[1] / "site_profiles"
 _SITE_SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _FIT_LEVELS = frozenset({"strong", "approved_constraint", "contextual", "related_catalog"})
+_POWER_COPY_POLICIES = frozenset(
+    {
+        "not_applicable",
+        "require_safety_notice_when_high_power_is_mentioned",
+    }
+)
 
 
 class SectionalSiteProfileError(ValueError):
@@ -165,6 +177,25 @@ def _profile_from_payload(payload: Any, *, source: str) -> SectionalSiteProfile:
             raise SectionalSiteProfileError(
                 f"product_copy_suppressed_patterns contains invalid regex: {pattern}"
             ) from exc
+    product_power_copy_policy = _required_text(
+        payload.get("product_power_copy_policy", "not_applicable"),
+        "product_power_copy_policy",
+    )
+    if product_power_copy_policy not in _POWER_COPY_POLICIES:
+        raise SectionalSiteProfileError("product_power_copy_policy is unsupported")
+    product_power_copy_instruction = str(
+        payload.get("product_power_copy_instruction") or ""
+    ).strip()
+    if (
+        product_power_copy_policy == "require_safety_notice_when_high_power_is_mentioned"
+        and not product_power_copy_instruction
+    ):
+        raise SectionalSiteProfileError("active product_power_copy_policy requires an instruction")
+    high_power_notice_threshold_mw = _positive_int(
+        payload.get("high_power_notice_threshold_mw", 5),
+        "high_power_notice_threshold_mw",
+        maximum=100000,
+    )
     variant_label_pattern = str(payload.get("variant_label_pattern") or "")
     if variant_label_pattern:
         try:
@@ -247,6 +278,9 @@ def _profile_from_payload(payload: Any, *, source: str) -> SectionalSiteProfile:
         ),
         product_copy_instruction=str(payload.get("product_copy_instruction") or "").strip(),
         product_copy_suppressed_patterns=product_copy_patterns,
+        product_power_copy_policy=product_power_copy_policy,
+        product_power_copy_instruction=product_power_copy_instruction,
+        high_power_notice_threshold_mw=high_power_notice_threshold_mw,
         variant_label_pattern=variant_label_pattern,
         source=source,
     )
@@ -392,6 +426,9 @@ def site_profile_manifest(profile: SectionalSiteProfile) -> dict[str, Any]:
         "high_power_policy": profile.high_power_policy,
         "product_copy_instruction": profile.product_copy_instruction,
         "product_copy_suppressed_patterns": list(profile.product_copy_suppressed_patterns),
+        "product_power_copy_policy": profile.product_power_copy_policy,
+        "product_power_copy_instruction": profile.product_power_copy_instruction,
+        "high_power_notice_threshold_mw": profile.high_power_notice_threshold_mw,
         "variant_label_pattern": profile.variant_label_pattern,
         "use_case_rules": [rule.name for rule in profile.use_case_rules],
         "source": profile.source,

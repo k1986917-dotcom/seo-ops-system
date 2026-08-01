@@ -2153,6 +2153,17 @@ def test_section_authority_recommendation_requires_verified_quote_citation():
     ):
         parse_section_generation_response(practical_choice_response, package)
 
+    cross_sentence_response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "The label states Class 3R. It is a suitable choice for this task. "
+        "Professionals should match the tool to the working distance,",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="source-verified quote evidence",
+    ):
+        parse_section_generation_response(cross_sentence_response, package)
+
     neutral_process_response = _response(package).replace(
         "Professionals should match the tool to the working distance,",
         "The practical choice depends on visibility, handling, and the surrounding "
@@ -2249,47 +2260,17 @@ def test_unverified_quote_must_be_paraphrased_but_verified_quote_is_allowed():
     assert parse_section_generation_response(verified_response, verified_package)
 
 
-def test_laser_site_product_copy_omits_power_class_and_unsupported_use_case_fit():
-    package = _package_for_stage("select", site_slug="laserpointerhub")
-    prompt = build_section_generation_prompt(package)
-    product_id = package["link_gates"]["product_links"]["selected_ids"][0]
-    neutral_token = f"[[PRODUCT:{product_id}|professional ceiling marking tool]]"
-
-    assert "omit wattage, output level, laser class" in prompt["system"]
-
-    power_response = _response(package).replace(
-        neutral_token,
-        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
-    )
-    with pytest.raises(
-        SectionGenerationError,
-        match="active site copy policy",
-    ):
-        parse_section_generation_response(power_response, package)
-
-    use_case_response = _response(package).replace(
-        neutral_token,
-        neutral_token + " is designed for ceiling construction.",
-    )
-    with pytest.raises(
-        SectionGenerationError,
-        match="catalog provenance",
-    ):
-        parse_section_generation_response(use_case_response, package)
-
-    assert parse_section_generation_response(_response(package), package)
-
-
-def test_laser_site_hides_power_from_model_product_context_but_keeps_candidate():
+def _laser_power_policy_package():
+    outline = [
+        "Why Clear Ceiling Marking Matters",
+        "Choosing the Right Ceiling Marking Tool",
+        "Using a Ceiling Marking Tool Efficiently",
+    ]
     bundle = build_contract_bundle(
         topic="Professional Ceiling Marking Tools",
         tier="Cluster Content",
         intent="Help professionals select and use a suitable marking tool.",
-        outline=[
-            "Why Clear Ceiling Marking Matters",
-            "Choosing the Right Ceiling Marking Tool",
-            "Worksite Safety and Compliance",
-        ],
+        outline=outline,
     )
     for section in bundle["section_contracts"]["sections"]:
         section["target_words"] = {"min": 45, "max": 130}
@@ -2317,15 +2298,114 @@ def test_laser_site_hides_power_from_model_product_context_but_keeps_candidate()
         shadow["context_manifest"],
         select["section_id"],
     )
-
-    candidate = package["candidates"]["products"][0]
-    assert candidate["candidate_id"]
-    assert "1.5W" not in candidate["title"]
-    assert "Professional Ceiling Marking Tool" in candidate["title"]
+    return bundle["section_contracts"], shadow, package
 
 
-def test_sequence_repairs_laser_product_copy_without_explaining_power_conflict(tmp_path):
-    sections, shadow = _setup(site_slug="laserpointerhub")
+def test_laser_high_power_copy_requires_complete_safety_notice():
+    _, _, package = _laser_power_policy_package()
+    prompt = build_section_generation_prompt(package)
+    product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+    neutral_token = f"[[PRODUCT:{product_id}|professional ceiling marking tool]]"
+
+    assert "1.5W" in package["candidates"]["products"][0]["title"]
+    assert "HIGH-POWER SAFETY COPY POLICY" in prompt["system"]
+    assert "optical density adequate for the output" in prompt["system"]
+
+    power_response = _response(package).replace(
+        neutral_token,
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="missing the required safety notice",
+    ):
+        parse_section_generation_response(power_response, package)
+
+    wording_response = _response(package).replace(
+        neutral_token,
+        f"[[PRODUCT:{product_id}|high-power professional ceiling marking tool]]",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="missing the required safety notice",
+    ):
+        parse_section_generation_response(wording_response, package)
+
+    class_response = _response(package).replace(
+        neutral_token,
+        f"[[PRODUCT:{product_id}|Class 3R professional ceiling marking tool]]",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="missing the required safety notice",
+    ):
+        parse_section_generation_response(class_response, package)
+
+    incomplete_notice = power_response.replace(
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]] "
+        "Wear laser goggles and avoid direct eye exposure.",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="missing the required safety notice",
+    ):
+        parse_section_generation_response(incomplete_notice, package)
+
+    partial_notice = power_response.replace(
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]] "
+        "Use laser protective eyewear rated for the 520nm wavelength with optical "
+        "density adequate for the output and avoid direct eye exposure.",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="missing the required safety notice",
+    ):
+        parse_section_generation_response(partial_notice, package)
+
+    complete_notice = power_response.replace(
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]] "
+        "Use laser protective eyewear rated for the 520nm wavelength with optical "
+        "density adequate for the output, avoid direct eye exposure and reflective "
+        "surfaces, and never aim at vehicles or aircraft.",
+    )
+    assert parse_section_generation_response(complete_notice, package)
+
+    use_case_response = _response(package).replace(
+        neutral_token,
+        neutral_token + " is designed for ceiling construction.",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="catalog provenance",
+    ):
+        parse_section_generation_response(use_case_response, package)
+
+    assert parse_section_generation_response(_response(package), package)
+
+
+def test_laser_low_power_copy_does_not_require_high_power_notice():
+    _, _, package = _laser_power_policy_package()
+    product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+    neutral_token = f"[[PRODUCT:{product_id}|professional ceiling marking tool]]"
+    low_power_response = _response(package).replace(
+        neutral_token,
+        f"[[PRODUCT:{product_id}|professional ceiling marking tool 5mW]]",
+    )
+
+    assert parse_section_generation_response(low_power_response, package)
+
+    background_only = _response(package).replace(
+        neutral_token,
+        "Review the high-power safety guide separately. " + neutral_token,
+    )
+    assert parse_section_generation_response(background_only, package)
+
+
+def test_sequence_repairs_high_power_copy_with_safety_notice(tmp_path):
+    sections, shadow, _ = _laser_power_policy_package()
     calls = []
     select_attempts = 0
 
@@ -2341,6 +2421,15 @@ def test_sequence_repairs_laser_product_copy_without_explaining_power_conflict(t
                 return response.replace(
                     f"[[PRODUCT:{product_id}|professional ceiling marking tool]]",
                     f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]]",
+                )
+            if select_attempts == 2:
+                product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+                return response.replace(
+                    f"[[PRODUCT:{product_id}|professional ceiling marking tool]]",
+                    f"[[PRODUCT:{product_id}|professional ceiling marking tool 1.5W]] "
+                    "Use laser protective eyewear rated for the 520nm wavelength with "
+                    "optical density adequate for the output, avoid direct eye exposure "
+                    "and reflective surfaces, and never aim at vehicles or aircraft.",
                 )
         return response
 
@@ -2358,7 +2447,8 @@ def test_sequence_repairs_laser_product_copy_without_explaining_power_conflict(t
     assert result["content_provenance_retry_count"] == 1
     assert len(select_calls) == 2
     assert "CONTENT PROVENANCE REPAIR" in select_calls[1][1]
-    assert "Do not explain or reconcile the omitted fields" in select_calls[1][1]
+    assert "add a concise safety reminder" in select_calls[1][1]
+    assert "optical density adequate for the output" in select_calls[1][1]
 
 
 def test_sequence_repairs_unverified_quote_as_plain_paraphrase(tmp_path):

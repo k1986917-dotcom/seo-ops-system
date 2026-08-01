@@ -547,14 +547,19 @@ def test_site_profile_entry_loads_packaged_config_and_unknown_site_falls_back():
     assert laser.source == "package:site_profiles/laserpointerhub.json"
     manifest = site_profile_manifest(laser)
     assert manifest["source"] == laser.source
-    assert "omit wattage" in laser.product_copy_instruction
+    assert "may be stated neutrally" in laser.product_copy_instruction
+    assert laser.product_power_copy_policy == ("require_safety_notice_when_high_power_is_mentioned")
+    assert "optical density adequate for the output" in laser.product_power_copy_instruction
     assert manifest["product_copy_instruction"] == laser.product_copy_instruction
     assert manifest["product_copy_suppressed_patterns"]
+    assert manifest["high_power_notice_threshold_mw"] == 5
     assert generic.site_slug == "default"
     assert generic.source == "builtin:default"
     assert generic.use_case_rules == ()
     assert generic.product_copy_instruction == ""
     assert generic.product_copy_suppressed_patterns == ()
+    assert generic.product_power_copy_policy == "not_applicable"
+    assert generic.high_power_notice_threshold_mw == 5
 
 
 def test_laser_related_catalog_fallback_is_recommended_not_required():

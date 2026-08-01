@@ -24,13 +24,13 @@
     "\\bclass\\s*(?:3r|3b|4)\\b"
   ],
   "high_power_policy": "neutral_for_ranking_and_never_an_exclusion",
-  "product_copy_instruction": "In a sentence that links a product, omit wattage, output level, laser class, safety status, compliance status, certification, and hazard language. Do not connect the product to the article's Class 2/Class 3R discussion. Describe only catalog-supported commercial attributes such as wavelength/color, form factor, single-beam design, focus, charging, and visibility. Present the item as a catalog option to compare, not as designed, approved, safe, or specifically suitable for construction or ceiling work unless the catalog itself states that exact use case.",
+  "product_copy_instruction": "Use only catalog-supported product attributes. Do not claim that a product is safe, compliant, approved, certified, or specifically designed for the article use case unless the catalog explicitly supports that exact claim. A catalog-supported power specification may be stated neutrally; never present higher power as automatically safer or universally better.",
   "product_copy_suppressed_patterns": [
-    "\\b\\d+(?:\\.\\d+)?\\s*(?:mw|w|watts?)\\b",
-    "\\b(?:high[- ]?power(?:ed)?|high[- ]?output|output\\s+(?:power|level))\\b",
-    "\\bclass\\s*(?:1|2|2m|3r|3a|3b|4)\\b",
-    "\\b(?:safe|safer|safest|safety|compliant|compliance|approved|certified|certification|hazard|danger)\\b"
+    "\\b(?:safe|safer|safest|compliant|compliance|approved|certified|certification)\\b"
   ],
+  "product_power_copy_policy": "require_safety_notice_when_high_power_is_mentioned",
+  "product_power_copy_instruction": "When a PRODUCT-linked paragraph states a power above 5mW, uses high-power wording, or names Class 3R, Class 3A, Class 3B, or Class 4, add a concise safety reminder in the same paragraph. Tell the reader to use laser protective eyewear matched to the laser wavelength with optical density adequate for the output, avoid direct eye exposure and reflective surfaces, and never aim at vehicles or aircraft. Do not imply that eyewear makes the laser safe, and do not weaken or contradict any hazard discussion elsewhere in the article.",
+  "high_power_notice_threshold_mw": 5,
   "variant_label_pattern": "\\b(?:B|G)\\d{3}(?:\\.\\d+)?[A-Z]\\b",
   "use_case_rules": [
     {
