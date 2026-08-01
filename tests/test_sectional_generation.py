@@ -220,8 +220,69 @@ def test_generation_prompt_contains_protocol_but_not_full_registry():
     assert "Do not invent URLs" in prompt["system"]
     assert "at most one ARTICLE or PRODUCT placeholder" in prompt["system"]
     assert "set reason_code to used_approved_candidate" in prompt["system"]
+    assert "This package has zero source-verified quotes" in prompt["system"]
+    assert "do not name OSHA" in prompt["system"]
     assert package["section_id"] in prompt["user"]
     assert "catalog_data_issues" not in prompt["user"]
+
+
+def test_zero_verified_quotes_remove_named_authority_from_model_contract():
+    bundle = build_contract_bundle(
+        topic="Worksite Marking Guide",
+        tier="Cluster Content",
+        intent="Explain how to verify applicable worksite requirements.",
+        outline=["What OSHA Says About Worksite Marking"],
+    )
+    registry = build_candidate_registry(
+        internal_links_map=ARTICLES,
+        product_report=PRODUCTS,
+        evidence_cards=EVIDENCE,
+    )
+    shadow = resolve_shadow_opportunities(
+        bundle["section_contracts"],
+        bundle["section_link_contracts"],
+        registry,
+    )
+    section = bundle["section_contracts"]["sections"][0]
+    package = build_section_generation_package(
+        bundle["section_contracts"],
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        section["section_id"],
+    )
+    prompt = build_section_generation_prompt(package)
+
+    assert package["section_id"] == section["section_id"]
+    assert package["heading"] == "How to Verify Applicable Requirements for Worksite Marking"
+    model_contract = json.dumps(
+        {
+            "heading": package["heading"],
+            "reader_question": package["reader_question"],
+            "section_goal": package["section_goal"],
+            "must_answer": package["must_answer"],
+            "must_not_repeat": package["must_not_repeat"],
+            "previous_heading": package["previous_heading"],
+            "previous_summary": package["previous_summary"],
+            "next_heading": package["next_heading"],
+        }
+    )
+    assert "OSHA" not in model_contract
+    assert "OSHA" not in prompt["user"]
+    assert "This package has zero source-verified quotes" in prompt["system"]
+
+    verified_manifest = copy.deepcopy(shadow["context_manifest"])
+    for candidate in verified_manifest["registry"]["evidence"]["candidates"]:
+        candidate["support_basis"] = "verified_quote"
+    verified_package = build_section_generation_package(
+        bundle["section_contracts"],
+        shadow["section_link_contracts"],
+        verified_manifest,
+        section["section_id"],
+    )
+    verified_prompt = build_section_generation_prompt(verified_package)
+
+    assert verified_package["heading"] == "How to Verify OSHA Requirements for Worksite Marking"
+    assert "This package has zero source-verified quotes" not in verified_prompt["system"]
 
 
 def test_writing_context_filters_unverified_strong_support_without_relaxing_gate():
@@ -957,9 +1018,11 @@ def test_sequence_reports_section_identity_when_evidence_repair_still_fails(tmp_
     sections, shadow = _setup()
     first_id = sections["section_order"][0]
     first_heading = sections["sections"][0]["heading"]
+    calls = []
 
     def remain_unsupported(system, user):
         package = _package_from_prompt(user)
+        calls.append((system, user))
         return _response(package).replace(
             "A clear marking process helps the team identify the intended location,",
             "OSHA recommends Class 3R as the best choice for ceiling marking. "
@@ -970,7 +1033,7 @@ def test_sequence_reports_section_identity_when_evidence_repair_still_fails(tmp_
         SectionGenerationError,
         match=(
             rf"section {first_id} \({re.escape(first_heading)}\) "
-            r"evidence_strength repair failed"
+            r"authority_free repair failed"
         ),
     ):
         run_section_generation_sequence(
@@ -981,6 +1044,42 @@ def test_sequence_reports_section_identity_when_evidence_repair_still_fails(tmp_
             context_manifest=shadow["context_manifest"],
             generate_text=remain_unsupported,
         )
+
+    assert len(calls) == 3
+    assert "EVIDENCE STRENGTH REPAIR" in calls[1][1]
+    assert "FINAL AUTHORITY-FREE REPAIR" in calls[2][1]
+    assert "body must contain none of these names" in calls[2][0]
+
+
+def test_sequence_uses_final_authority_free_repair_before_stopping(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def generate(system, user):
+        package = _package_from_prompt(user)
+        calls.append((system, user))
+        safe = _response(package)
+        if len(calls) < 3:
+            return safe.replace(
+                "A clear marking process helps the team identify the intended location,",
+                "OSHA guidance states that employers must follow this rule. "
+                "A clear marking process helps the team identify the intended location,",
+            )
+        return safe
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    assert result["complete"] is True
+    assert result["evidence_strength_retry_count"] == 2
+    assert len(calls) == len(sections["section_order"]) + 2
+    assert "FINAL AUTHORITY-FREE REPAIR" in calls[2][1]
 
 
 def test_section_authority_recommendation_requires_verified_quote_citation():
@@ -1196,6 +1295,7 @@ def test_article_frame_uses_summaries_and_validates_all_components():
     assert len(package["sections"]) == 3
     assert "markdown" not in package["sections"][0]
     assert FRAME_FAQ_MARKER in prompt["system"]
+    assert "Do not name OSHA" in prompt["system"]
     assert len(output["key_takeaways"]) == 4
     assert len(output["faq"]) == 3
 
@@ -1369,8 +1469,64 @@ def test_article_frame_repairs_unsupported_recommendation_once(tmp_path):
 
     assert result["generated"] is True
     assert result["evidence_strength_repaired"] is True
+    assert result["evidence_strength_retry_count"] == 1
     assert len(calls) == 2
     assert "FRAME EVIDENCE STRENGTH REPAIR" in calls[1]
+
+
+def test_article_frame_uses_final_authority_free_repair(tmp_path):
+    section_run = _completed_section_run()
+    calls = []
+
+    def generate(system, user):
+        calls.append((system, user))
+        if len(calls) < 3:
+            return _frame_response().replace(
+                "Professional ceiling marking depends on a clear method,",
+                "OSHA guidance states that employers must follow this rule. "
+                "Professional ceiling marking depends on a clear method,",
+            )
+        return _frame_response()
+
+    result = run_article_frame_generation(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_run=section_run,
+        generate_text=generate,
+    )
+
+    assert result["generated"] is True
+    assert result["evidence_strength_repaired"] is True
+    assert result["evidence_strength_retry_count"] == 2
+    assert len(calls) == 3
+    assert "FINAL FRAME AUTHORITY-FREE REPAIR" in calls[2][1]
+
+
+def test_article_frame_reports_final_authority_free_failure(tmp_path):
+    section_run = _completed_section_run()
+    calls = []
+
+    def remain_unsupported(system, user):
+        calls.append((system, user))
+        return _frame_response().replace(
+            "Professional ceiling marking depends on a clear method,",
+            "OSHA guidance states that employers must follow this rule. "
+            "Professional ceiling marking depends on a clear method,",
+        )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="article frame authority_free repair failed",
+    ):
+        run_article_frame_generation(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_run=section_run,
+            generate_text=remain_unsupported,
+        )
+
+    assert len(calls) == 3
+    assert "FINAL FRAME AUTHORITY-FREE REPAIR" in calls[2][1]
 
 
 @pytest.mark.parametrize(

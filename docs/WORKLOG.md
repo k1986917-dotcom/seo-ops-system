@@ -1,3 +1,27 @@
+## 2026-08-01 — Preflight the full authority-free generation chain
+
+### 第十二次真实 resume
+
+- `f993868` 下只执行一次普通 resume，POST=1、无外层重试；危险 support 过滤有效，901
+  保存为 351 词，049 仍因模型自行写出 `OSHA publishes standards...` 在唯一修订后失败。
+- 正式 pair、Action、Git 和 archive 不变；`ai_runs 180→183`。
+
+### 保质提速方案
+
+- 不增加外层重试、不降低 evidence gate、不手工改稿。
+- 零 verified quote 的 section 初稿即禁止 named authority 和 authority attribution；模型可见
+  合同字段与 previous summary 也同步 neutralize，避免 H2/上下文反向诱导。
+- 正文第一次 evidence-strength repair 仍失败时，同一 POST 内允许一次最终 authority-free
+  rewrite；frame 也采用同样的两级 bounded repair。每次结果仍由原 validator fail-closed。
+- Pipeline 输出新增 `frame_evidence_strength_retries`，便于准确审计内部调用。
+
+### 全链路真实只读预检
+
+- 6 个 section package 全部 `authority_in_user_payload=[]`。
+- 6 个 section package 全部 `unsafe_support_ids_still_visible=[]`。
+- 049 模型 heading 改为 `How to Verify Applicable Laser Requirements...`，稳定 section ID 不变。
+- 所有 required citation minima 保持，没有章节因过滤后安全 evidence 不足而提前失败。
+
 ## 2026-08-01 — Filter unsafe unverified support before generation
 
 ### 第十一次真实 resume

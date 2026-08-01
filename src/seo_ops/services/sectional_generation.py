@@ -65,6 +65,11 @@ _AUTHORITY_TERM = re.compile(
     r"\b(?:OSHA|FDA|EPA|FTC|CDC|NIOSH|regulator(?:y|s)?|law|legal)\b",
     re.IGNORECASE,
 )
+_NAMED_AUTHORITY_TERM = re.compile(
+    r"\b(?:OSHA|FDA|EPA|FTC|CDC|NIOSH|"
+    r"Occupational\s+Safety\s+and\s+Health\s+Administration)\b",
+    re.IGNORECASE,
+)
 _STRONG_RECOMMENDATION_TERM = re.compile(
     r"\b(?:recommend(?:ed|s|ation)?|compliant|compliance|approved|acceptable|"
     r"requires?|must|should\s+stick|only\s+choice|go-to\s+choice|best\s+choice|"
@@ -283,6 +288,32 @@ def _writing_safe_evidence_context(
     return filtered_gate, safe
 
 
+def _authority_neutral_contract_text(value: str) -> str:
+    """Remove named-authority direction from model-facing contract prose."""
+    text = str(value or "")
+    text = re.sub(
+        r"\bHow\s+to\s+Verify\s+"
+        r"(?:OSHA|FDA|EPA|FTC|CDC|NIOSH)\s+Requirements\s+for\s+Lasers\b",
+        "How to Verify Applicable Laser Requirements",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bHow\s+to\s+Verify\s+"
+        r"(?:OSHA|FDA|EPA|FTC|CDC|NIOSH)\s+Requirements\s+for\s+",
+        "How to Verify Applicable Requirements for ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bWhat\s+(?:OSHA|FDA|EPA|FTC|CDC|NIOSH)\s+Says\s+About\b",
+        "How to Verify Applicable Requirements for",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _NAMED_AUTHORITY_TERM.sub("the applicable authority", text)
+
+
 def build_section_generation_package(
     section_contracts: dict[str, Any],
     link_contracts: dict[str, Any],
@@ -369,6 +400,10 @@ def build_section_generation_package(
         evidence_candidates,
         section_id=clean_section_id,
     )
+    has_verified_quote = any(
+        item.get("support_basis") == "verified_quote" for item in evidence_candidates
+    )
+    model_text = (lambda value: value) if has_verified_quote else _authority_neutral_contract_text
 
     package = {
         "version": CONTRACT_VERSION,
@@ -376,18 +411,18 @@ def build_section_generation_package(
         "content_language": sections["content_language"],
         "section_id": clean_section_id,
         "position": section["position"],
-        "heading": section["heading"],
+        "heading": model_text(section["heading"]),
         "reader_stage": section["reader_stage"],
-        "reader_question": section["reader_question"],
-        "section_goal": section["section_goal"],
-        "must_answer": section["must_answer"],
-        "brief_points": approved_brief_points,
+        "reader_question": model_text(section["reader_question"]),
+        "section_goal": model_text(section["section_goal"]),
+        "must_answer": [model_text(item) for item in section["must_answer"]],
+        "brief_points": [model_text(item) for item in approved_brief_points],
         "brief_points_rejected": rejected_brief_points,
-        "must_not_repeat": section["must_not_repeat"],
+        "must_not_repeat": [model_text(item) for item in section["must_not_repeat"]],
         "target_words": section["target_words"],
-        "previous_heading": section["previous_section"],
-        "previous_summary": previous,
-        "next_heading": section["next_section"],
+        "previous_heading": model_text(section["previous_section"]),
+        "previous_summary": model_text(previous),
+        "next_heading": model_text(section["next_section"]),
         "link_gates": {
             "article_links": dict(link["article_links"]),
             "product_links": dict(link["product_links"]),
@@ -469,7 +504,21 @@ def validate_section_generation_package(package: Any) -> dict[str, Any]:
 
 def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
     validated = validate_section_generation_package(package)
-    system = """You write exactly one English H2 section for a larger article.
+    verified_ids = _verified_quote_ids(validated)
+    authority_free_rule = (
+        "\nThis package has zero source-verified quotes. In body paragraphs, do not "
+        "name OSHA, FDA, EPA, FTC, CDC, NIOSH, the Occupational Safety and Health "
+        "Administration, any regulator, or any named authority. Do not claim that an "
+        "authority publishes, issues, sets, governs, defines, requires, permits, "
+        "prohibits, recommends, warns, approves, or enforces anything. The exact H2 "
+        "may contain an authority name; do not repeat that name below the H2. Explain "
+        "only neutral verification steps, employer/site procedures, labels, hazard "
+        "assessment, training, and operational controls supported by the package."
+        if not verified_ids
+        else ""
+    )
+    system = (
+        """You write exactly one English H2 section for a larger article.
 Use only the supplied section contract, evidence, article candidates, and product candidates.
 Do not invent URLs, product IDs, article IDs, evidence IDs, specifications, statistics, laws, or claims.
 Do not output raw URLs, Markdown links, HTML links, an H1, or a second H2.
@@ -488,6 +537,8 @@ Return exactly two blocks and no other text:
 <section markdown>
 ===SECTION_DECISIONS===
 {"article_links":{"used_ids":[],"reason_code":"..."},"product_links":{"used_ids":[],"reason_code":"..."},"external_citations":{"used_ids":[],"reason_code":"..."}}"""
+        + authority_free_rule
+    )
     user_payload = {
         key: validated[key]
         for key in (
@@ -556,6 +607,14 @@ def _evidence_support_basis(package: dict[str, Any]) -> dict[str, str]:
         for item in evidence
         if isinstance(item, dict)
     }
+
+
+def _verified_quote_ids(package: dict[str, Any]) -> list[str]:
+    return [
+        evidence_id
+        for evidence_id, basis in _evidence_support_basis(package).items()
+        if basis == "verified_quote"
+    ]
 
 
 def _validate_section_evidence_strength(
@@ -668,16 +727,15 @@ def _build_section_repair_prompt(
         return None
     base = build_section_generation_prompt(package)
     offending = error_text.removeprefix(_EVIDENCE_OVERSTATEMENT_ERROR).lstrip(": ")
-    verified_ids = [
-        str(item.get("evidence_id") or item.get("candidate_id") or "")
-        for item in package.get("candidates", {}).get("evidence", [])
-        if isinstance(item, dict) and item.get("support_basis") == "verified_quote"
-    ]
+    verified_ids = _verified_quote_ids(package)
     verified_note = (
         "This package has no source-verified quote evidence. Do not state or imply "
-        "that any named authority says, warns, requires, allows, recommends, approves, "
-        "or defines a rule. Replace those claims with neutral verification steps and "
-        "site-specific safety controls."
+        "that any named authority says, publishes, issues, sets, governs, defines, "
+        "warns, requires, permits, prohibits, allows, recommends, approves, enforces, "
+        "or regulates anything. Do not name OSHA, FDA, EPA, FTC, CDC, NIOSH, the "
+        "Occupational Safety and Health Administration, a regulator, or an agency in "
+        "body paragraphs. The exact H2 may retain an authority name. Replace all body "
+        "attribution with neutral verification steps and site-specific safety controls."
         if not verified_ids
         else "Only the listed source-verified evidence IDs may support a direct authority attribution: "
         + ", ".join(verified_ids)
@@ -708,6 +766,41 @@ def _build_section_repair_prompt(
         + response_text
     )
     return {"system": repair_system, "user": repair_user}, "evidence_strength"
+
+
+def _build_authority_free_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    """Build one final bounded repair when zero verified quotes remain."""
+    error_text = str(error)
+    if not error_text.startswith(_EVIDENCE_OVERSTATEMENT_ERROR) or _verified_quote_ids(package):
+        return None
+    base = build_section_generation_prompt(package)
+    offending = error_text.removeprefix(_EVIDENCE_OVERSTATEMENT_ERROR).lstrip(": ")
+    system = (
+        base["system"] + "\nFINAL AUTHORITY-FREE REPAIR. Keep the exact H2, but after that H2 the "
+        "body must contain none of these names or labels: OSHA, Occupational Safety "
+        "and Health Administration, FDA, EPA, FTC, CDC, NIOSH, regulator, agency. "
+        "Do not discuss what any authority publishes, governs, requires, permits, "
+        "prohibits, recommends, warns, approves, or enforces. Write the body as a "
+        "practical checklist for checking current federal, state, employer, and site "
+        "requirements, reading the product label, documenting a hazard assessment, "
+        "training workers, and applying operational controls. Use no new facts."
+    )
+    user = (
+        base["user"]
+        + "\n\nFINAL AUTHORITY-FREE REPAIR\n"
+        + "The previous evidence-strength repair still contained prohibited authority "
+        "language. Rewrite the complete response from scratch. Preserve only supported "
+        "facts and approved placeholders. Do not copy or paraphrase the offending "
+        "authority statement.\n\nSERVER-DETECTED OFFENDING PASSAGE\n"
+        + offending
+        + "\n\nPREVIOUS REPAIRED RESPONSE\n"
+        + response_text
+    )
+    return {"system": system, "user": user}
 
 
 def _split_response(text: str, first: str, second: str) -> tuple[str, str]:
@@ -1287,10 +1380,32 @@ def run_section_generation_sequence(
                 try:
                     output = parse_section_generation_response(repaired_response, package)
                 except SectionGenerationError as repair_exc:
-                    raise SectionGenerationError(
-                        f"section {section_id} ({package['heading']}) "
-                        f"{repair_kind} repair failed: {repair_exc}"
-                    ) from repair_exc
+                    final_repair = (
+                        _build_authority_free_repair_prompt(
+                            package,
+                            repaired_response,
+                            repair_exc,
+                        )
+                        if repair_kind == "evidence_strength"
+                        else None
+                    )
+                    if final_repair is None:
+                        raise SectionGenerationError(
+                            f"section {section_id} ({package['heading']}) "
+                            f"{repair_kind} repair failed: {repair_exc}"
+                        ) from repair_exc
+                    final_response = generate_text(
+                        final_repair["system"],
+                        final_repair["user"],
+                    )
+                    try:
+                        output = parse_section_generation_response(final_response, package)
+                    except SectionGenerationError as final_exc:
+                        raise SectionGenerationError(
+                            f"section {section_id} ({package['heading']}) "
+                            f"authority_free repair failed: {final_exc}"
+                        ) from final_exc
+                    evidence_strength_retry_count += 1
                 if repair_kind == "word_count":
                     word_count_retry_count += 1
                 else:
@@ -1385,6 +1500,7 @@ def build_article_frame_prompt(package: dict[str, Any]) -> dict[str, str]:
     system = """Create the short framing components for an English article whose body sections are already complete.
 Use only the supplied section summaries. Do not introduce new specifications, statistics, legal claims, products, URLs, links, or citations.
 Summarize trade-offs neutrally. Do not state that an authority recommends, approves, accepts, or deems a product/class compliant. Do not use absolute phrases such as only choice, go-to choice, best choice, safest default, or practical sweet spot.
+Do not name OSHA, FDA, EPA, FTC, CDC, NIOSH, the Occupational Safety and Health Administration, any regulator, or any agency. The article frame has no citation channel, so named-authority statements are prohibited even when a body H2 mentions an authority.
 Return exactly four blocks and no other text:
 ===INTRODUCTION===
 <80-180 words, one or two paragraphs, direct answer first>
@@ -1422,13 +1538,43 @@ def _build_article_frame_repair_prompt(
             base["system"] + "\nThis is the only repair attempt. Preserve the four-block protocol, "
             "word/count limits, questions, and useful reader guidance, but rewrite "
             "authority attributions, compliance claims, recommendations, and "
-            "superlatives as neutral trade-off language. Do not add facts."
+            "superlatives as neutral trade-off language. Do not name OSHA, FDA, EPA, "
+            "FTC, CDC, NIOSH, any regulator, or any agency. Do not add facts."
         ),
         "user": (
             base["user"]
             + "\n\nFRAME EVIDENCE STRENGTH REPAIR\n"
             + "Remove unsupported recommended/compliant/only/best/go-to wording and "
             "return the complete four-block response again.\n\nPREVIOUS RESPONSE\n" + response_text
+        ),
+    }
+
+
+def _build_article_frame_authority_free_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    if str(error) != _FRAME_OVERSTATEMENT_ERROR:
+        return None
+    base = build_article_frame_prompt(package)
+    return {
+        "system": (
+            base["system"] + "\nFINAL FRAME AUTHORITY-FREE REPAIR. Rewrite all four "
+            "blocks from scratch. None of the prose or FAQ text may contain OSHA, "
+            "Occupational Safety and Health Administration, FDA, EPA, FTC, CDC, "
+            "NIOSH, regulator, or agency. Do not describe what an authority publishes, "
+            "governs, requires, permits, prohibits, recommends, warns, approves, or "
+            "enforces. Keep only neutral practical guidance already present in the "
+            "section summaries."
+        ),
+        "user": (
+            base["user"]
+            + "\n\nFINAL FRAME AUTHORITY-FREE REPAIR\n"
+            + "The previous frame repair still failed the evidence-strength gate. "
+            "Return the complete four-block response again without copying or "
+            "paraphrasing any named-authority statement.\n\nPREVIOUS REPAIRED RESPONSE\n"
+            + response_text
         ),
     }
 
@@ -1691,12 +1837,14 @@ def run_article_frame_generation(
             "generated": False,
             "resumed": True,
             "evidence_strength_repaired": False,
+            "evidence_strength_retry_count": 0,
         }
     prompt = build_article_frame_prompt(package)
     response = generate_text(prompt["system"], prompt["user"])
     try:
         output = parse_article_frame_response(response, package)
         repaired = False
+        retry_count = 0
     except SectionGenerationError as exc:
         repair_prompt = _build_article_frame_repair_prompt(package, response, exc)
         if repair_prompt is None:
@@ -1705,7 +1853,28 @@ def run_article_frame_generation(
             repair_prompt["system"],
             repair_prompt["user"],
         )
-        output = parse_article_frame_response(repaired_response, package)
+        try:
+            output = parse_article_frame_response(repaired_response, package)
+            retry_count = 1
+        except SectionGenerationError as repair_exc:
+            final_prompt = _build_article_frame_authority_free_repair_prompt(
+                package,
+                repaired_response,
+                repair_exc,
+            )
+            if final_prompt is None:
+                raise
+            final_response = generate_text(
+                final_prompt["system"],
+                final_prompt["user"],
+            )
+            try:
+                output = parse_article_frame_response(final_response, package)
+            except SectionGenerationError as final_exc:
+                raise SectionGenerationError(
+                    f"article frame authority_free repair failed: {final_exc}"
+                ) from final_exc
+            retry_count = 2
         repaired = True
     persist_article_frame_checkpoint(workspace, slug, package, output)
     return {
@@ -1713,4 +1882,5 @@ def run_article_frame_generation(
         "generated": True,
         "resumed": False,
         "evidence_strength_repaired": repaired,
+        "evidence_strength_retry_count": retry_count,
     }

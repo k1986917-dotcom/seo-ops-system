@@ -39,6 +39,13 @@
 
 ### Fixed
 
+- Sectional generation now performs an authority-free preflight whenever a
+  section has no source-verified quote. Named authorities are removed from the
+  model-facing contract and prior-summary context, the initial prompt prohibits
+  named-authority attribution, and one final bounded authority-free repair is
+  allowed after the normal evidence-strength repair. Article framing uses the
+  same bounded strategy, with exact retry counts exposed in the pipeline result.
+  All repaired outputs continue through the unchanged fail-closed validators.
 - Unverified evidence support that already contains regulatory attribution,
   recommendation/compliance conclusions, absolute safety language, or a
   technical-class preference is now withheld from model-facing sectional

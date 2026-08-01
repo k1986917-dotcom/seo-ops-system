@@ -2,6 +2,36 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十二次普通 resume 后改为整链路预检与双层受控修订
+
+- `f993868` 推送并由 MCP 独立核验后，本机只执行一次普通
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing`；POST=1、无外层重试、
+  未 refresh，archive 仍只有上一轮 1 份。正式 draft、claim ledger、w2-state、`.env`、
+  Action 和 Git 均未变化；`ai_runs 180→183`，DB SHA 变为
+  `f0b692118fe3f345c7118d116a366357d873bd97eaf0b04a61c156fce31ed9b0`。
+- 危险 evidence support 过滤确认生效；901 重生成并落盘为 351 词。049 新 H2 正确，但模型
+  仍自行写出 `OSHA publishes standards...`，初稿和唯一 evidence-strength 修订均被门禁
+  拒绝，准确停止在 `section-04981e6fc7`；后四节未到达。
+- 为保证质量同时减少“修一处→推送→再实跑”的循环，本次不增加外层重跑，也不放宽
+  validator，而是一次性强化完整生成链：
+  1. 当 section package 没有 verified quote 时，初稿 prompt 明确禁止正文出现 OSHA/FDA/
+     EPA/FTC/CDC/NIOSH、完整机构名、regulator/agency 及任何 publishes/governs/requires/
+     recommends 等机构归因；
+  2. 模型可见的 heading、reader question、goal、must-answer、must-not-repeat、previous/
+     next heading 和 previous summary 同步去除机构指向；049 最终模型 H2 为
+     `The Critical Safety Line: How to Verify Applicable Laser Requirements on Construction Sites`，
+     section ID 仍为 `section-04981e6fc7`；
+  3. 第一次 evidence-strength 修订仍失败时，同一 POST 内允许一次最终 authority-free 重写；
+     所有结果仍经过原 validator，第二次仍失败立即停止；
+  4. Introduction/Takeaways/Conclusion/FAQ 同样禁止 named authority，并允许一次最终 bounded
+     authority-free frame 修订；pipeline 新增精确 frame retry 计数。
+- 对当前 Action 的 6 个 section package 做了真实只读整链路预检：全部
+  `authority_in_user_payload=[]`、`unsafe_support_ids_still_visible=[]`，required citation
+  minima 均保持；不存在因过滤而提前耗尽 required evidence 的章节。预检脚本已删除，
+  未修改任何 data/正式产物。
+- 下一步：完成回归、提交并 push。独立核验后只运行一次普通 `--resume-existing`；不得
+  refresh、手工删 checkpoint 或 promotion。
+
 ## 2026-08-01 — 第十一次普通 resume：049 被危险未核验 support 反复诱导
 
 - `2851982` 推送并由 MCP 独立核验后，本机只执行一次普通

@@ -141,9 +141,7 @@ def run_sectional_shadow_candidate(
 
     def counted_generate(system: str, user: str, **kwargs: Any) -> str:
         if counters["ai_calls"] >= max_ai_calls:
-            raise SectionalPipelineError(
-                f"sectional AI call budget exhausted ({max_ai_calls})"
-            )
+            raise SectionalPipelineError(f"sectional AI call budget exhausted ({max_ai_calls})")
         counters["ai_calls"] += 1
         counters["prompt_chars"] += len(system) + len(user)
         max_tokens = kwargs.get("max_tokens", 0)
@@ -233,6 +231,7 @@ def run_sectional_shadow_candidate(
         "frame_resumed": bool(frame_run["resumed"]),
         "section_evidence_strength_retries": section_run["evidence_strength_retry_count"],
         "frame_evidence_strength_repaired": bool(frame_run["evidence_strength_repaired"]),
+        "frame_evidence_strength_retries": frame_run["evidence_strength_retry_count"],
         "generated_ledgers": ledger_run["generated_count"],
         "resumed_ledgers": ledger_run["resumed_count"],
         "run_metrics": counters,
@@ -269,6 +268,13 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         value = result.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise SectionalPipelineError(f"pipeline result {field} is invalid")
+    frame_retry_count = result.get("frame_evidence_strength_retries")
+    if frame_retry_count is not None and (
+        not isinstance(frame_retry_count, int)
+        or isinstance(frame_retry_count, bool)
+        or frame_retry_count < 0
+    ):
+        raise SectionalPipelineError("pipeline result frame_evidence_strength_retries is invalid")
     if result["generated_sections"] + result["resumed_sections"] != result["section_count"]:
         raise SectionalPipelineError("pipeline section counts do not reconcile")
     if result["generated_ledgers"] + result["resumed_ledgers"] != len(
@@ -276,9 +282,7 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
     ):
         raise SectionalPipelineError("pipeline ledger counts do not reconcile")
     if not isinstance(result.get("frame_evidence_strength_repaired"), bool):
-        raise SectionalPipelineError(
-            "pipeline result frame_evidence_strength_repaired is invalid"
-        )
+        raise SectionalPipelineError("pipeline result frame_evidence_strength_repaired is invalid")
     counters = result.get("run_metrics")
     if not isinstance(counters, dict):
         raise SectionalPipelineError("pipeline run_metrics are missing")
@@ -300,9 +304,7 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         or isinstance(completion_tokens, bool)
         or completion_tokens < 0
     ):
-        raise SectionalPipelineError(
-            "pipeline run_metrics.completion_tokens is invalid"
-        )
+        raise SectionalPipelineError("pipeline run_metrics.completion_tokens is invalid")
     digest = result.get("result_sha256")
     if not isinstance(digest, str) or len(digest) != 64:
         raise SectionalPipelineError("pipeline result SHA is invalid")

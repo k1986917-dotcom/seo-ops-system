@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -126,9 +127,7 @@ def _generator(calls):
             if candidate_id is not None:
                 used_internal_ids.add(candidate_id)
                 used["product_links"].append(candidate_id)
-                second_links.append(
-                    f"[[PRODUCT:{candidate_id}|documented catalog option]]"
-                )
+                second_links.append(f"[[PRODUCT:{candidate_id}|documented catalog option]]")
         if gates["external_citations"]["selected_ids"]:
             candidate_id = gates["external_citations"]["selected_ids"][0]
             used["external_citations"].append(candidate_id)
@@ -194,16 +193,16 @@ def test_shadow_pipeline_builds_complete_candidate_without_formal_artifacts(tmp_
     assert result["section_count"] == 3
     assert result["generated_sections"] == 3
     assert result["frame_generated"] is True
-    assert result["generated_ledgers"] == len(
-        result["assembly"]["delivery"]["section_order"]
-    )
+    assert result["generated_ledgers"] == len(result["assembly"]["delivery"]["section_order"])
     assert result["run_metrics"]["ai_calls"] == len(calls)
     assert result["run_metrics"]["completion_tokens"] is None
     assert result["assembly"]["audit"]["blockers"] == []
     assert Path(result["delivery_path"]).exists()
     assert all(Path(path).exists() for path in result["assembly_paths"].values())
     assert not list((tmp_path / "drafts").glob("professional-ceiling-marking-tools-*.md"))
-    assert not (tmp_path / "research" / "claim-ledger-professional-ceiling-marking-tools.json").exists()
+    assert not (
+        tmp_path / "research" / "claim-ledger-professional-ceiling-marking-tools.json"
+    ).exists()
 
 
 def test_shadow_pipeline_resumes_all_valid_checkpoints_without_ai(tmp_path):
@@ -260,9 +259,7 @@ def test_shadow_pipeline_stops_at_ai_call_budget_without_formal_pair(tmp_path):
         )
     assert not list((tmp_path / "drafts").glob("professional-ceiling-marking-tools-*.md"))
     assert not (
-        tmp_path
-        / "research"
-        / "claim-ledger-professional-ceiling-marking-tools.json"
+        tmp_path / "research" / "claim-ledger-professional-ceiling-marking-tools.json"
     ).exists()
 
 
@@ -276,3 +273,25 @@ def test_pipeline_result_rejects_nested_tampering(tmp_path):
     result["assembly"]["draft_markdown"] += "tampered"
     with pytest.raises(SectionalPipelineError, match="assembly is invalid"):
         validate_sectional_pipeline_result(result)
+
+
+def test_pipeline_result_accepts_legacy_version_one_without_frame_retry_count(tmp_path):
+    result = run_sectional_shadow_candidate(
+        workspace=tmp_path,
+        generate_text=_generator([]),
+        resume=False,
+        **_inputs(),
+    )
+    result.pop("frame_evidence_strength_retries")
+    unsigned = dict(result)
+    unsigned.pop("result_sha256")
+    result["result_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert validate_sectional_pipeline_result(result) == result
