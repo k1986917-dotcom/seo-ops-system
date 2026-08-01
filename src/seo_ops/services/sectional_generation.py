@@ -1034,13 +1034,20 @@ def _build_unapproved_candidate_repair_prompt(
 
     base = build_section_generation_prompt(validated)
     label = "FINAL APPROVED CANDIDATE REPAIR" if final else "APPROVED CANDIDATE REPAIR"
+    preservation_rule = (
+        "Rebuild every link type from the clean section package. Every ARTICLE, PRODUCT, "
+        "and CITE placeholder must use only its gate's selected_ids and satisfy that "
+        "gate's min/max counts. Do not preserve placeholder choices from the rejected "
+        "response. The server will canonicalize decisions from the final Markdown. "
+        if final
+        else "Preserve every placeholder of the other two link types with the same IDs "
+        "and order. The server will canonicalize decisions from the final Markdown. "
+    )
     system = (
         base["system"] + f"\n{label}. The server rejected placeholder IDs outside the active gate. "
         "Never widen the gate, invent an ID, or reuse a candidate from another section "
         "or an earlier run. Preserve the exact H2, supported non-candidate facts, word "
-        "count, paragraph contract, and every placeholder of the other two link types "
-        "with the same IDs and order. The server will canonicalize decisions from the "
-        "final Markdown. " + target_rule
+        "count, and paragraph contract. " + preservation_rule + target_rule
     )
     user = (
         base["user"]
@@ -1057,6 +1064,42 @@ def _build_unapproved_candidate_repair_prompt(
         )
     else:
         user += "\n\nPREVIOUS RESPONSE\n" + response_text
+    return {"system": system, "user": user}
+
+
+def _build_final_candidate_selection_repair_prompt(
+    package: dict[str, Any],
+) -> dict[str, str]:
+    """Rebuild one section from clean gates after a bounded repair drifted."""
+
+    validated = validate_section_generation_package(package)
+    base = build_section_generation_prompt(validated)
+    gate_lines = []
+    for link_type in _LINK_TYPES:
+        gate = validated["link_gates"][link_type]
+        gate_lines.append(
+            f"- {link_type}: state={gate['opportunity_state']}; "
+            f"allowed={', '.join(gate['selected_ids']) or '(none)'}; "
+            f"min={gate['min_required']}; max={gate['max_allowed']}"
+        )
+    system = (
+        base["system"]
+        + "\nFINAL APPROVED CANDIDATE REPAIR. Rewrite the complete section only from "
+        "the clean SECTION PACKAGE. Do not reuse any product, article, citation, anchor, "
+        "specification, feature, suitability claim, recommendation, or placeholder "
+        "choice from a rejected response. Rebuild all three placeholder inventories "
+        "from their active gates. Never widen a gate or invent an ID. PRODUCT wording "
+        "may describe only attributes supplied for the approved product candidate. "
+        "Preserve the exact H2, supported non-candidate facts, word-count contract, and "
+        "paragraph contract. The server will derive decisions from the final Markdown."
+    )
+    user = (
+        base["user"]
+        + "\n\nFINAL APPROVED CANDIDATE REPAIR\n"
+        + "Build a fresh complete two-block response. Obey these gates exactly:\n"
+        + "\n".join(gate_lines)
+        + "\nDo not refer to either rejected response."
+    )
     return {"system": system, "user": user}
 
 
@@ -1223,6 +1266,8 @@ def _build_final_section_repair_prompt(
     prior_kind: str,
 ) -> tuple[dict[str, str], str] | None:
     """Choose one final bounded repair from the newly exposed failure kind."""
+    if prior_kind == "candidate_selection":
+        return _build_final_candidate_selection_repair_prompt(package), "candidate_selection"
     if prior_kind == "word_count":
         strict_trim = _build_final_word_count_trim_prompt(
             package,
@@ -1378,40 +1423,49 @@ def _canonicalize_candidate_selection_repair_response(
     previous_response: str,
     repaired_response: str,
     package: dict[str, Any],
+    *,
+    preserve_unrelated: bool = True,
 ) -> str:
-    """Allow only rejected link types to change during candidate repair."""
+    """Canonicalize candidate repair while keeping every gate fail-closed.
 
-    previous_markdown, _ = _split_response(
-        previous_response,
-        SECTION_MARKDOWN_MARKER,
-        SECTION_DECISIONS_MARKER,
-    )
+    The first repair is a minimal edit and must preserve unrelated placeholder
+    inventories.  The final repair is generated from the clean package and may
+    rebuild all three inventories, but every ID and count is still validated
+    against the active gates before the response can be accepted.
+    """
+
     repaired_markdown, _ = _split_response(
         repaired_response,
         SECTION_MARKDOWN_MARKER,
         SECTION_DECISIONS_MARKER,
     )
-    previous_inventory = _placeholder_inventory(previous_markdown)
     repaired_inventory = _placeholder_inventory(repaired_markdown)
-    invalid_types = {
-        link_type
-        for link_type in _LINK_TYPES
-        if any(
-            candidate_id not in package["link_gates"][link_type]["selected_ids"]
-            for candidate_id in previous_inventory[link_type]
+    if preserve_unrelated:
+        previous_markdown, _ = _split_response(
+            previous_response,
+            SECTION_MARKDOWN_MARKER,
+            SECTION_DECISIONS_MARKER,
         )
-    }
-    if not invalid_types:
-        raise SectionGenerationError(
-            "candidate_selection repair has no rejected placeholder to repair"
-        )
-    for link_type in _LINK_TYPES:
-        if link_type in invalid_types:
-            continue
-        if repaired_inventory[link_type] != previous_inventory[link_type]:
-            raise SectionGenerationError(
-                "candidate_selection repair changed unrelated placeholder inventory or order"
+        previous_inventory = _placeholder_inventory(previous_markdown)
+        invalid_types = {
+            link_type
+            for link_type in _LINK_TYPES
+            if any(
+                candidate_id not in package["link_gates"][link_type]["selected_ids"]
+                for candidate_id in previous_inventory[link_type]
             )
+        }
+        if not invalid_types:
+            raise SectionGenerationError(
+                "candidate_selection repair has no rejected placeholder to repair"
+            )
+        for link_type in _LINK_TYPES:
+            if link_type in invalid_types:
+                continue
+            if repaired_inventory[link_type] != previous_inventory[link_type]:
+                raise SectionGenerationError(
+                    "candidate_selection repair changed unrelated placeholder inventory or order"
+                )
     decisions = _canonical_decisions_for_inventory(repaired_inventory, package)
     return (
         f"{SECTION_MARKDOWN_MARKER}\n{repaired_markdown}\n"
@@ -2031,6 +2085,7 @@ def run_section_generation_sequence(
                                 repaired_response,
                                 final_response,
                                 package,
+                                preserve_unrelated=False,
                             )
                         output = parse_section_generation_response(final_response, package)
                     except SectionGenerationError as final_exc:

@@ -1,3 +1,25 @@
+## 2026-08-01 — Split minimal candidate repair from clean final gate rebuild
+
+- 推送 `1b8825e` 后只执行一次普通 resume。901/049/429/2d resumed；7bb 初始响应使用
+  集外 PRODUCT，第一次 approved-candidate repair 与 final repair 共新增 2 次调用，但最终
+  报 `candidate_selection repair changed unrelated placeholder inventory or order`。POST=1，
+  `ai_runs 234→237`，正式产物与 Action 不变，无 checkpoint/终态文件写入。
+- 根因是同一个 canonicalizer 同时承担了两个相反合同：第一次修订应保持 ARTICLE/CITE
+  inventory 不变；final repair 已明确从 clean package 重写，却仍被要求与上一版错误响应
+  的无关 inventory 完全一致。
+- `_canonicalize_candidate_selection_repair_response` 新增两种模式：默认保留第一次修订的
+  unrelated-inventory 原子后置条件；final 模式允许重建三类 inventory，但仍调用
+  `_canonical_decisions_for_inventory`，逐类验证 selected_ids、state、min/max 和禁止规则。
+- 新增 `_build_final_candidate_selection_repair_prompt`：不回灌任何 rejected response，列出
+  ARTICLE/PRODUCT/CITE 三类 gate 的 state、allowed IDs 和 min/max，要求从 clean Section
+  Package 生成完整响应。产品描述仍只能使用批准 candidate 的已提供属性。
+- 测试改为复现真实链路：初始集外 PRODUCT → 第一次修订漂移 ARTICLE → final clean rebuild
+  成功；另验证第一次修订 markers 损坏时 final 不读取旧响应；并保留 final 仍集外时
+  fail-closed 测试。验证：Sectional 非 Web 228 passed、1 deselected；当前 Legacy/W1b
+  非 Web 范围 225 passed、5 deselected；Ruff、format、compileall 与 diff check 通过。
+  未运行新的真实 Shadow，active root 仍为 17 个 checkpoint/ledger-checkpoint；下次只能
+  普通 resume，禁止 refresh/promotion。
+
 ## 2026-08-01 — Add approved-candidate repair after site-aware ranking
 
 - 推送 `fafc8fc`/`a4475b2` 后执行一次真实 refresh Shadow。旧终态候选成功归档，901/049

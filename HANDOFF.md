@@ -2,6 +2,34 @@
 
 最后更新：2026-08-01（Europe/Berlin）
 
+## 2026-08-01 — 7bb 第二次实跑暴露 final repair 合同冲突，已修复
+
+- `1b8825e` 已推送并只执行一次普通 `--resume-existing --ai-call-limit 36`。POST=1，
+  `ai_runs 234→237`；901/049/429/2d 全部 resumed，7bb 调用正文生成、approved-candidate
+  repair、final repair 共 3 次后停止。正式 draft/claim-ledger/w2-state/`.env`、Action、Git
+  均未改变，无 promotion manifest，也没有新 checkpoint 或终态文件落盘。
+- 真实错误为
+  `candidate_selection repair changed unrelated placeholder inventory or order`。第一次修订和
+  final repair 都改动了 ARTICLE/CITE inventory；服务端正确拒绝，但原实现把“从干净
+  package 重写”的 final repair 也要求与上一版错误响应的无关 inventory 完全一致，合同
+  自相矛盾。
+- 当前修复将两层合同拆开：
+  1. 第一次 approved-candidate repair 仍是最小改动，只允许发生错误的链接类型变化；
+  2. 若第一次修订发生无关 placeholder 漂移或继续使用集外 ID，final repair 不读取或继承
+     失败正文，而是从 clean Section Package 重建 ARTICLE/PRODUCT/CITE 三类 inventory；
+  3. final repair 可以重新选择无关 placeholder，但每个 ID 必须属于该类型的
+     `selected_ids`，并满足对应 min/max/state；
+  4. PRODUCT 仍只能使用批准商品及 clean package 中的属性；B025 gate 没有放宽；
+  5. final repair 再使用任何集外 ID、缺少 required link、超过数量或违反其他正文门禁时，
+     继续 fail-closed。
+- 测试已改为覆盖本次真实失败模式：第一次修订改变 ARTICLE inventory 会被拒绝，第二次
+  clean rebuild 可恢复全部 gates；上一版修订即使 markers 损坏也不会污染 final；最终仍
+  使用集外产品时继续失败。验证：Sectional 非 Web 228 passed、1 deselected；当前
+  Legacy/W1b 非 Web 范围 225 passed、5 deselected；Ruff、format、compileall、
+  `git diff --check` 通过。尚未 push 本次修复，尚未再次运行真实 Shadow。active root 仍
+  只有 17 个 checkpoint/ledger-checkpoint，下一次仍只能普通 resume，禁止
+  `--refresh-complete`。
+
 ## 2026-08-01 — 站点排序已生效；7bb 集外 candidate 修订已补齐
 
 - `fafc8fc` 与 `a4475b2` 已推送，local/remote 同步。随后只运行一次真实
