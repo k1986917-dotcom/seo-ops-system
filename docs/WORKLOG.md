@@ -1,3 +1,30 @@
+## 2026-08-01 — Add deletion-only final word-count trim
+
+### 第十六次真实 refresh-complete
+
+- `53852b2` 推送后只执行一次 reviewed refresh-complete，POST=1、无外层重试、未
+  promotion。旧不合格候选已事务归档，archive 1→2；active root 保留 17 个 checkpoints。
+- 429 新生成和普通 word-count repair 均为 502 words，严格 350–500 门禁停止。旧 446-word
+  checkpoint 未覆盖；正式 pair 与 Action 不变；`ai_runs 206→208`，DB SHA=`a1a1bc0e...`。
+
+### 根因与修复
+
+- 旧普通 repair 虽写明 `trim` 和目标区间，但没有精确删除预算，模型可整段改写后保持原
+  计数。不能为 2-word overage 放宽 500 hard max。
+- 普通 word-count prompt 现在按服务端实际计数给出明确 add/delete 数量；超长时禁止新增
+  或扩写表达。
+- 普通修订后仍超上限时，只允许一次 `FINAL WORD COUNT TRIM`：deletion-only、保留 H2、
+  事实含义、placeholder/citation、decisions 和段落合同，并把输出压到 hard max 下方的
+  30-word safety band。低于下限仍只修一次，不开放第二次内容扩写。
+- 两次字数修订均计入 `section_word_count_retries`；仍属于同一个 POST 和 AI call budget。
+
+### 验证与下一步
+
+- Word-count 专项 4/4 passed；sectional 非 Web 203/203 passed；Legacy/W1b 非 Web
+  237/237 passed。
+- 当前 ai_runs=208、active=17、archive=2、promotion manifest=false、正式四个 SHA 未变。
+  推送后下一次只允许普通 `--resume-existing`；不得再次 refresh-complete。
+
 ## 2026-08-01 — Reject technically inconsistent completed candidate
 
 ### 第十五次真实 resume 与独立验收

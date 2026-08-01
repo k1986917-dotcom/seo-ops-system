@@ -39,6 +39,13 @@
 
 ### Fixed
 
+- Sectional word-count recovery now distinguishes normal content adjustment from
+  a final deletion-only trim. The first repair receives an exact add/delete
+  budget instead of a vague expand/trim instruction. If an over-limit response
+  remains too long, the same POST may use one final bounded trim that forbids
+  adding or paraphrasing text, preserves placeholders/citations/decisions, and
+  targets a safe buffer below the hard maximum. Under-length sections still get
+  only one repair so the system does not repeatedly invent additional content.
 - Sectional promotion eligibility now fails closed on deterministic wavelength/
   color contradictions and unsupported compliance metadata. Product registry
   parsing marks combinations such as `520nm blue`, `450nm green`, and

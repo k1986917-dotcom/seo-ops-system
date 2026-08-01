@@ -738,6 +738,21 @@ def _build_word_count_repair_prompt(
     preferred_min = min(target["max"], target["min"] + buffer)
     preferred_max = max(preferred_min, target["max"] - buffer)
     direction = "expand" if count < target["min"] else "trim"
+    if direction == "trim":
+        minimum_change = max(1, count - preferred_max)
+        maximum_change = max(minimum_change, count - preferred_min)
+        exact_action = (
+            f"Delete {minimum_change}-{maximum_change} visible words. Do not add any "
+            "new words or replace short wording with longer wording. Prefer deleting "
+            "one non-essential clause or sentence that contains no placeholder or citation. "
+        )
+    else:
+        minimum_change = max(1, preferred_min - count)
+        maximum_change = max(minimum_change, preferred_max - count)
+        exact_action = (
+            f"Add {minimum_change}-{maximum_change} visible words using only the "
+            "existing approved meaning. Do not add a new claim or specification. "
+        )
     base = build_section_generation_prompt(validated)
     repair_system = (
         base["system"]
@@ -752,11 +767,50 @@ def _build_word_count_repair_prompt(
         + f"The previous section had {count} visible words and must be {target['min']}-"
         + f"{target['max']}. {direction.capitalize()} only the existing approved "
         + f"content and aim safely inside {preferred_min}-{preferred_max} visible words. "
+        + exact_action
         + "Return the complete two-block response again.\n\n"
         + "PREVIOUS RESPONSE\n"
         + response_text
     )
     return {"system": repair_system, "user": repair_user}
+
+
+def _build_final_word_count_trim_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    """Build one deletion-only final trim when the normal repair remains too long."""
+    match = _SECTION_WORD_COUNT_ERROR.fullmatch(str(error))
+    if match is None:
+        return None
+    validated = validate_section_generation_package(package)
+    target = validated["target_words"]
+    count = int(match.group("count"))
+    if count <= target["max"]:
+        return None
+    final_max = max(target["min"], target["max"] - 10)
+    final_min = max(target["min"], final_max - 30)
+    minimum_delete = max(1, count - final_max)
+    maximum_delete = max(minimum_delete, count - final_min)
+    base = build_section_generation_prompt(validated)
+    system = (
+        base["system"] + "\nFINAL WORD COUNT TRIM. This is deletion-only, not a rewrite. Preserve "
+        "the exact H2, factual meaning, approved placeholders and their order, link "
+        "decisions, citations, and 2-5 paragraph structure. Do not add, substitute, "
+        "or expand any wording. Delete only non-essential prose that contains no "
+        "placeholder or citation. Keep the decisions JSON unchanged."
+    )
+    user = (
+        base["user"]
+        + "\n\nFINAL WORD COUNT TRIM\n"
+        + f"The server still counts {count} visible words after the normal repair. "
+        + f"Delete {minimum_delete}-{maximum_delete} visible words so the final body "
+        + f"lands inside {final_min}-{final_max}. Do not add or paraphrase anything. "
+        + "Return the complete two-block response.\n\nPREVIOUS RESPONSE\n"
+        + response_text
+    )
+    return {"system": system, "user": user}
 
 
 def _build_internal_link_layout_repair_prompt(
@@ -940,6 +994,14 @@ def _build_final_section_repair_prompt(
     prior_kind: str,
 ) -> tuple[dict[str, str], str] | None:
     """Choose one final bounded repair from the newly exposed failure kind."""
+    if prior_kind == "word_count":
+        strict_trim = _build_final_word_count_trim_prompt(
+            package,
+            response_text,
+            error,
+        )
+        if strict_trim is not None:
+            return strict_trim, "word_count_strict_trim"
     if prior_kind != "technical_consistency":
         technical = _build_technical_consistency_repair_prompt(
             package,
@@ -1573,6 +1635,8 @@ def run_section_generation_sequence(
                         link_layout_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
+                    elif final_kind == "word_count_strict_trim":
+                        word_count_retry_count += 1
                     else:
                         evidence_strength_retry_count += 1
                     try:

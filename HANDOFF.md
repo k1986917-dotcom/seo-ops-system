@@ -2,6 +2,41 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十六次 refresh-complete：归档成功，429 停在 502/500 字数门禁
+
+- `53852b2` 已由本机推送并核验本地/远端一致；随后只执行一次经审查允许的
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing --refresh-complete
+  --ai-call-limit 36`，POST=1、无外层重试、未 promotion。
+- 已审查的不合格完整候选被 runner 事务归档到
+  `20260801T085402Z-562328656-1d902709b991`；5 个终态文件和 manifest SHA 均可复算，
+  archive 1→2。Active root 只保留 7 个 section/frame checkpoints 与 10 个 ledger
+  checkpoints，共 17 文件；无手工移动或编辑。
+- 新运行恢复 901、049；429 在新 package 下生成 502 visible words。普通 word-count
+  repair 调用一次后仍为 502，因严格 350–500 合同失败，未覆盖旧 446-word checkpoint；
+  后三节未到达，无新 resolved delivery、assembly 或 comparison。正式 draft、claim
+  ledger、w2-state、`.env`、Action 与 Git 均未变化；`ai_runs 206→208`，DB SHA 变为
+  `a1a1bc0e708050a4494be0336dc736238aa056249edd27b7dcf17f1596284f0c`。
+- MCP 独立确认根因不是需要放宽 500 上限，而是普通修订只给出模糊的 `trim` 指令，
+  未给模型明确删减预算；本轮仅超 2 词，模型仍整段重写并保持相同计数。
+- 本次修复保持 350–500 硬门禁：
+  1. 普通 word-count repair 现在根据服务端实际计数给出精确 add/delete 区间；超长时
+     明确禁止新增文字或把短表达改长，并优先删除不含 placeholder/citation 的非必要句；
+  2. 若普通修订后仍超上限，只允许一次不同类型的 `FINAL WORD COUNT TRIM`。它是
+     deletion-only，必须保留 H2、事实含义、placeholder/citation inventory/order、
+     decisions JSON 和 2–5 段结构；对 502/500 场景会明确要求删除 12–42 words，目标
+     460–490；
+  3. Under-length section 仍只有一次普通扩写，禁止通过第二次 final trim/expand 反复创造
+     内容；最终字数修订仍属于同一个 POST，不增加 runner 或外层重试；
+  4. `section_word_count_retries` 会把普通修订与 final trim 分别计数；成功使用两次时为 2，
+     `run_metrics.retry_count` 也会由实际多出的 AI 调用自动反映。
+- 验证：word-count 专项 4/4 passed；sectional 非 Web 203/203 passed；Legacy/W1b 非 Web
+  237/237 passed。两个 Web template 测试因 MCP Landlock 禁止读取 `/etc/mime.types`
+  继续排除，与本次变更无关。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=208`，active=17，archive=2，
+  promotion manifest 不存在，正式四个 SHA 未变。下一步提交并推送后只运行一次普通
+  `--resume-existing --ai-call-limit 36`；不得再次 `--refresh-complete`，因为 active root
+  已是合法中间 checkpoint 集合且本轮没有完整终态候选。
+
 ## 2026-08-01 — 第十五次普通 resume 完成，但独立质量验收拒绝 promotion
 
 - `be710d3` 已由本机推送并核验本地/远端一致；随后只执行一次普通

@@ -1128,6 +1128,105 @@ def test_sequence_limits_word_count_repair_to_one_attempt(tmp_path):
 
     assert len(calls) == 2
     assert "WORD COUNT REPAIR" in calls[1]
+    assert "FINAL WORD COUNT TRIM" not in calls[1]
+
+
+def test_sequence_uses_one_final_deletion_only_trim_for_over_limit_section(tmp_path):
+    sections, shadow = _setup()
+    first_id = sections["section_order"][0]
+    baseline_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        first_id,
+        previous_summary="",
+    )
+    baseline_response = _response(baseline_package)
+    baseline_count = parse_section_generation_response(
+        baseline_response,
+        baseline_package,
+    )["word_count"]
+    first_contract = next(item for item in sections["sections"] if item["section_id"] == first_id)
+    first_contract["target_words"] = {
+        "min": baseline_count - 30,
+        "max": baseline_count - 5,
+    }
+    removable = (
+        " The section answers the practical question first and then explains the "
+        "selection factors that matter for professional work."
+    )
+    calls = []
+
+    def generate(system, user):
+        package = _package_from_prompt(user)
+        calls.append({"system": system, "user": user})
+        response = _response(package)
+        if "FINAL WORD COUNT TRIM" in user:
+            return response.replace(removable, "")
+        return response
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    assert result["complete"] is True
+    assert result["word_count_retry_count"] == 2
+    assert len(calls) == len(sections["section_order"]) + 2
+    assert "WORD COUNT REPAIR" in calls[1]["user"]
+    assert "FINAL WORD COUNT TRIM" in calls[2]["user"]
+    assert "deletion-only" in calls[2]["system"]
+    first_output = result["outputs"][0]
+    assert first_contract["target_words"]["min"] <= first_output["word_count"]
+    assert first_output["word_count"] <= first_contract["target_words"]["max"]
+
+
+def test_sequence_stops_after_final_word_count_trim_still_exceeds_limit(tmp_path):
+    sections, shadow = _setup()
+    first_id = sections["section_order"][0]
+    baseline_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        first_id,
+        previous_summary="",
+    )
+    baseline_count = parse_section_generation_response(
+        _response(baseline_package),
+        baseline_package,
+    )["word_count"]
+    first_contract = next(item for item in sections["sections"] if item["section_id"] == first_id)
+    first_contract["target_words"] = {
+        "min": baseline_count - 30,
+        "max": baseline_count - 5,
+    }
+    calls = []
+
+    def remain_long(system, user):
+        package = _package_from_prompt(user)
+        calls.append(user)
+        return _response(package)
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="word_count_strict_trim repair failed",
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_long,
+        )
+
+    assert len(calls) == 3
+    assert "WORD COUNT REPAIR" in calls[1]
+    assert "FINAL WORD COUNT TRIM" in calls[2]
 
 
 def test_sequence_repairs_key_finding_authority_overstatement_once(tmp_path):
