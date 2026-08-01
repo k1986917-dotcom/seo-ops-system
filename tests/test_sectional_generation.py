@@ -1546,6 +1546,120 @@ def test_sequence_repairs_one_missing_required_product_placeholder(tmp_path):
     assert output["used_ids"]["product_links"]
 
 
+def test_sequence_repairs_one_unapproved_product_candidate(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+    approved_id = ""
+
+    def generate(system, user):
+        nonlocal target_attempts, approved_id
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            approved_id = package["link_gates"]["product_links"]["selected_ids"][0]
+            if target_attempts == 1:
+                return _response(package).replace(approved_id, "product-not-approved")
+        return _response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["candidate_selection_retry_count"] == 1
+    assert len(select_calls) == 2
+    assert "APPROVED CANDIDATE REPAIR" in select_calls[1][1]
+    assert "Rejected IDs: product-not-approved" in select_calls[1][2]
+    assert f"Allowed IDs: {approved_id}" in select_calls[1][2]
+    output = next(
+        item for item in result["outputs"] if item["section_id"] == sections["section_order"][1]
+    )
+    assert output["used_ids"]["product_links"] == [approved_id]
+
+
+def test_unapproved_candidate_repair_remains_fail_closed_after_final_attempt(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def remain_unapproved(system, user):
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] != "select":
+            return response
+        approved_id = package["link_gates"]["product_links"]["selected_ids"][0]
+        return response.replace(approved_id, "product-not-approved")
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=(
+            r"candidate_selection repair failed: "
+            r"product_links uses an unapproved candidate"
+        ),
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_unapproved,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 3
+    assert "APPROVED CANDIDATE REPAIR" in select_calls[1][1]
+    assert "FINAL APPROVED CANDIDATE REPAIR" in select_calls[2][1]
+    assert "PREVIOUS RESPONSE" not in select_calls[2][2]
+
+
+def test_candidate_selection_repair_cannot_change_unrelated_placeholders(tmp_path):
+    sections, shadow = _setup()
+    target_attempts = 0
+
+    def change_article_inventory(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        response = _response(package)
+        if package["reader_stage"] != "select":
+            return response
+        target_attempts += 1
+        product_id = package["link_gates"]["product_links"]["selected_ids"][0]
+        if target_attempts == 1:
+            return response.replace(product_id, "product-not-approved")
+        article_id = package["link_gates"]["article_links"]["selected_ids"][0]
+        return response.replace(
+            f"[[ARTICLE:{article_id}|detailed tool selection guidance]]",
+            "detailed tool selection guidance",
+        )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=(
+            r"candidate_selection repair failed: candidate_selection repair changed "
+            r"unrelated placeholder inventory or order"
+        ),
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=change_article_inventory,
+        )
+
+    assert target_attempts == 2
+
+
 def test_sequence_stops_after_one_required_link_retry(tmp_path):
     sections, shadow = _setup()
     calls = []

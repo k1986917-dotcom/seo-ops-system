@@ -1,3 +1,16 @@
+## [Unreleased] — Repair unapproved sectional link candidates
+
+### Fixed
+
+- Section writer 生成了 gate 外的 ARTICLE、PRODUCT 或 CITE candidate 时，validator 仍然
+  fail-closed，但不再立即终止整个 Shadow。新增一次受控 approved-candidate repair：明确
+  列出被拒 ID 与当前 `selected_ids`，要求只从干净 Section Package 中改用批准 candidate。
+- 若第一次修订仍使用集外 ID，允许一次不回灌失败正文的 final repair，从干净 package
+  重写；再次失败仍停止。修订不能改变另外两类链接的 placeholder inventory 或顺序，
+  decisions JSON 继续由最终 Markdown inventory 规范化。
+- Pipeline 新增 `section_candidate_selection_retries` 审计指标。该修复不扩大 candidate
+  gate，也不允许模型从 manifest 的审计候选池、其他 section 或旧 checkpoint 复用产品。
+
 ## [Unreleased] — Site-aware sectional product recommendations
 
 ### Changed

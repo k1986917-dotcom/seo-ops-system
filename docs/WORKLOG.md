@@ -1,3 +1,27 @@
+## 2026-08-01 — Add approved-candidate repair after site-aware ranking
+
+- 推送 `fafc8fc`/`a4475b2` 后执行一次真实 refresh Shadow。旧终态候选成功归档，901/049
+  resumed，429/2d 依新产品政策重生成；7bb 的 gate 只批准 B025，但模型写入集外
+  PRODUCT candidate，服务端以 `product_links uses an unapproved candidate` fail-closed。
+- MCP 核验确认 context manifest 的审计候选池排序正确：B025、B023/B023B、G019/B019B、
+  B030、B01.6；link contract 的 `selected_ids` 仅含 B025。问题属于 generation repair
+  缺口，不是站点配置、排序或 gate 放宽问题。
+- 新增 `_build_unapproved_candidate_repair_prompt`：第一次明确 rejected/allowed IDs，并要求
+  PRODUCT 修订删除集外商品的名称、规格、功能、适用性和 anchor，只能描述 clean package
+  中批准候选；ARTICLE/CITE 使用对应的保守合同。
+- 新增 `_canonicalize_candidate_selection_repair_response`：只允许发生错误的链接类型改变；
+  另外两类 placeholder inventory/order 必须完全一致，decisions 由 Markdown 重建并继续
+  经过原 gate 校验。
+- 若第一次修订仍使用集外 ID，final repair 从干净 package 重写且不回灌失败正文；再次
+  失败继续停止。Pipeline 增加 `section_candidate_selection_retries` 指标，并保持旧 version 1
+  结果缺少该可选字段时仍可验证。
+- 新增测试覆盖：一次修订成功、两次仍集外时 fail-closed、修订不能改变 unrelated
+  placeholders。验证：Sectional 非 Web 227 passed、1 deselected；Legacy/W1b 非 Web
+  237 passed、2 deselected。
+- 本轮没有运行新的真实 Shadow、没有修改正式产物、checkpoint、数据库或 `.env`。由于
+  refresh 已归档旧终态，active root 当前仅有部分 checkpoint；下次只能普通
+  `--resume-existing --ai-call-limit 36`，不得再次使用 `--refresh-complete`。
+
 ## 2026-08-01 — Add shared product ranking engine with laserpointerhub profile
 
 - MCP 审查最近一次完整 Shadow 后，确认自动 `eligible_for_single_action_promotion` 不足以

@@ -2,6 +2,35 @@
 
 最后更新：2026-08-01（Europe/Berlin）
 
+## 2026-08-01 — 站点排序已生效；7bb 集外 candidate 修订已补齐
+
+- `fafc8fc` 与 `a4475b2` 已推送，local/remote 同步。随后只运行一次真实
+  `--resume-existing --refresh-complete --ai-call-limit 36`：旧完整候选已原子归档，
+  POST=1，`ai_runs 231→234`，正式 draft/claim-ledger/w2-state/`.env`、Action 与 Git
+  全部不变，无 promotion manifest。
+- 本轮真实恢复边界符合预期：901、049 resumed；429 因 Class 3R 产品禁放规则重生成且
+  无 PRODUCT；2d 因 previous summary 变化重生成。7bb 的新 package 只批准 B025，真实
+  排序审计池为 B025 → B023/B023B → G019/B019B → B030 → B01.6。
+- 7bb 初次 AI 响应使用了 gate 外 candidate，validator 正确报
+  `product_links uses an unapproved candidate` 并停止。根因不是产品排序或配置入口，而是
+  generation sequence 对该错误没有受控 repair 分支；旧 B017USB/B016 checkpoint 在新
+  package 下失效且不会恢复。
+- 本次新增 approved-candidate repair：
+  1. 精确识别 ARTICLE/PRODUCT/CITE 的集外 placeholder；
+  2. 第一次修订列出 rejected IDs 与允许的 `selected_ids`，只允许对应链接类型变化；
+  3. PRODUCT 修订必须删除集外商品名称、型号、规格、功能和适用性措辞，仅使用 clean
+     package 中批准候选的属性；
+  4. 另外两类 placeholder ID 和顺序必须原样保持，decisions 由 Markdown canonicalize；
+  5. 第二次仍使用集外 ID 时，从干净 package 做一次 final repair，不回灌失败正文；
+     再失败继续 fail-closed；
+  6. 新增 `section_candidate_selection_retries` 指标。
+- 测试：新增 3 个集外 candidate 测试；Sectional 非 Web 227 passed、1 deselected；
+  Legacy/W1b 非 Web 237 passed、2 deselected。尚未 push 本次新提交，尚未再次运行真实
+  Shadow。
+- 当前 active sectional root 只有 17 个 checkpoint/ledger-checkpoint，无完整终态文件。
+  下一次真实运行在推送后必须只用普通
+  `--resume-existing --ai-call-limit 36`；禁止再次 `--refresh-complete`。
+
 ## 2026-08-01 — 站点感知产品内链：通用引擎 + laserpointerhub 配置
 
 - 最近一次真实 Action #3 Shadow 在技术上成功：POST=1、`ai_runs 220→231`、22 个终态

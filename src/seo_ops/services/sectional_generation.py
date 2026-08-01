@@ -51,6 +51,10 @@ _ARTICLE_FRAME_REQUIREMENTS = {
 _ARTICLE_PLACEHOLDER = re.compile(r"\[\[ARTICLE:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]")
 _PRODUCT_PLACEHOLDER = re.compile(r"\[\[PRODUCT:([a-zA-Z0-9._-]+)\|([^\]\n]+)\]\]")
 _CITE_PLACEHOLDER = re.compile(r"\[\[CITE:([a-zA-Z0-9._-]+)\]\]")
+_UNAPPROVED_CANDIDATE_ERROR = re.compile(
+    r"(?P<link_type>article_links|product_links|external_citations) "
+    r"uses an unapproved candidate"
+)
 _CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _RAW_URL = re.compile(r"https?://", re.IGNORECASE)
 _RAW_MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\((?:https?://|/)[^)]+\)")
@@ -974,6 +978,88 @@ def _build_required_link_repair_prompt(
     return {"system": system, "user": user}
 
 
+def _build_unapproved_candidate_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+    *,
+    final: bool = False,
+) -> dict[str, str] | None:
+    """Build one bounded repair for placeholders outside the approved gate."""
+
+    match = _UNAPPROVED_CANDIDATE_ERROR.fullmatch(str(error))
+    if match is None:
+        return None
+    validated = validate_section_generation_package(package)
+    link_type = match.group("link_type")
+    markdown, _ = _split_response(
+        response_text,
+        SECTION_MARKDOWN_MARKER,
+        SECTION_DECISIONS_MARKER,
+    )
+    inventory = _placeholder_inventory(markdown)
+    gate = validated["link_gates"][link_type]
+    allowed_ids = list(gate["selected_ids"])
+    invalid_ids = [item for item in inventory[link_type] if item not in allowed_ids]
+    if not invalid_ids:
+        return None
+
+    if link_type == "product_links":
+        target_rule = (
+            "Use only PRODUCT candidates present in the clean section package. Remove "
+            "every name, model, specification, feature, suitability claim, and anchor "
+            "that belongs to an unapproved product. If the product gate is required, "
+            "include an approved PRODUCT placeholder and describe only attributes "
+            "actually supplied for that approved candidate."
+        )
+    elif link_type == "article_links":
+        target_rule = (
+            "Use only approved ARTICLE candidates. Do not retain a title, topic, anchor, "
+            "or summary that belongs to an unapproved article."
+        )
+    else:
+        target_rule = (
+            "Use only approved CITE evidence IDs. Remove an unapproved citation rather "
+            "than attaching an approved citation to a sentence it does not support."
+        )
+
+    state = gate["opportunity_state"]
+    if state == "none":
+        gate_rule = f"The {link_type} gate is none, so return zero placeholders of this type."
+    else:
+        gate_rule = (
+            f"Allowed IDs: {', '.join(allowed_ids) or '(none)'}. Keep between "
+            f"{gate['min_required']} and {gate['max_allowed']} placeholders of this type."
+        )
+
+    base = build_section_generation_prompt(validated)
+    label = "FINAL APPROVED CANDIDATE REPAIR" if final else "APPROVED CANDIDATE REPAIR"
+    system = (
+        base["system"] + f"\n{label}. The server rejected placeholder IDs outside the active gate. "
+        "Never widen the gate, invent an ID, or reuse a candidate from another section "
+        "or an earlier run. Preserve the exact H2, supported non-candidate facts, word "
+        "count, paragraph contract, and every placeholder of the other two link types "
+        "with the same IDs and order. The server will canonicalize decisions from the "
+        "final Markdown. " + target_rule
+    )
+    user = (
+        base["user"]
+        + f"\n\n{label}\n"
+        + f"Rejected link type: {link_type}. Rejected IDs: {', '.join(invalid_ids)}. "
+        + gate_rule
+        + " Return the complete two-block response."
+    )
+    if final:
+        user += (
+            " Rewrite from the clean section package above. Do not reuse product, "
+            "article, citation, anchor, specification, or recommendation wording from "
+            "the rejected response."
+        )
+    else:
+        user += "\n\nPREVIOUS RESPONSE\n" + response_text
+    return {"system": system, "user": user}
+
+
 def _build_technical_consistency_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -1032,6 +1118,13 @@ def _build_section_repair_prompt(
     )
     if required_link_prompt is not None:
         return required_link_prompt, "required_link"
+    candidate_prompt = _build_unapproved_candidate_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if candidate_prompt is not None:
+        return candidate_prompt, "candidate_selection"
     technical_prompt = _build_technical_consistency_repair_prompt(
         package,
         response_text,
@@ -1162,6 +1255,14 @@ def _build_final_section_repair_prompt(
         )
         if required_link is not None:
             return required_link, "required_link"
+    candidate_selection = _build_unapproved_candidate_repair_prompt(
+        package,
+        response_text,
+        error,
+        final=True,
+    )
+    if candidate_selection is not None:
+        return candidate_selection, "candidate_selection"
     authority_free = _build_authority_free_repair_prompt(
         package,
         response_text,
@@ -1266,6 +1367,52 @@ def _canonicalize_link_layout_repair_response(
         raise SectionGenerationError("link_layout repair changed placeholder inventory or order")
     inventory = _placeholder_inventory(repaired_markdown)
     decisions = _canonical_decisions_for_inventory(inventory, package)
+    return (
+        f"{SECTION_MARKDOWN_MARKER}\n{repaired_markdown}\n"
+        f"{SECTION_DECISIONS_MARKER}\n"
+        f"{json.dumps(decisions, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _canonicalize_candidate_selection_repair_response(
+    previous_response: str,
+    repaired_response: str,
+    package: dict[str, Any],
+) -> str:
+    """Allow only rejected link types to change during candidate repair."""
+
+    previous_markdown, _ = _split_response(
+        previous_response,
+        SECTION_MARKDOWN_MARKER,
+        SECTION_DECISIONS_MARKER,
+    )
+    repaired_markdown, _ = _split_response(
+        repaired_response,
+        SECTION_MARKDOWN_MARKER,
+        SECTION_DECISIONS_MARKER,
+    )
+    previous_inventory = _placeholder_inventory(previous_markdown)
+    repaired_inventory = _placeholder_inventory(repaired_markdown)
+    invalid_types = {
+        link_type
+        for link_type in _LINK_TYPES
+        if any(
+            candidate_id not in package["link_gates"][link_type]["selected_ids"]
+            for candidate_id in previous_inventory[link_type]
+        )
+    }
+    if not invalid_types:
+        raise SectionGenerationError(
+            "candidate_selection repair has no rejected placeholder to repair"
+        )
+    for link_type in _LINK_TYPES:
+        if link_type in invalid_types:
+            continue
+        if repaired_inventory[link_type] != previous_inventory[link_type]:
+            raise SectionGenerationError(
+                "candidate_selection repair changed unrelated placeholder inventory or order"
+            )
+    decisions = _canonical_decisions_for_inventory(repaired_inventory, package)
     return (
         f"{SECTION_MARKDOWN_MARKER}\n{repaired_markdown}\n"
         f"{SECTION_DECISIONS_MARKER}\n"
@@ -1786,6 +1933,7 @@ def run_section_generation_sequence(
     evidence_strength_retry_count = 0
     link_layout_retry_count = 0
     required_link_retry_count = 0
+    candidate_selection_retry_count = 0
     technical_consistency_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
@@ -1822,6 +1970,8 @@ def run_section_generation_sequence(
                     link_layout_retry_count += 1
                 elif repair_kind == "required_link":
                     required_link_retry_count += 1
+                elif repair_kind == "candidate_selection":
+                    candidate_selection_retry_count += 1
                 elif repair_kind == "technical_consistency":
                     technical_consistency_retry_count += 1
                 else:
@@ -1829,6 +1979,12 @@ def run_section_generation_sequence(
                 try:
                     if repair_kind == "link_layout":
                         repaired_response = _canonicalize_link_layout_repair_response(
+                            response,
+                            repaired_response,
+                            package,
+                        )
+                    elif repair_kind == "candidate_selection":
+                        repaired_response = _canonicalize_candidate_selection_repair_response(
                             response,
                             repaired_response,
                             package,
@@ -1855,6 +2011,8 @@ def run_section_generation_sequence(
                         link_layout_retry_count += 1
                     elif final_kind == "required_link":
                         required_link_retry_count += 1
+                    elif final_kind == "candidate_selection":
+                        candidate_selection_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
                     elif final_kind == "word_count_strict_trim":
@@ -1864,6 +2022,12 @@ def run_section_generation_sequence(
                     try:
                         if final_kind == "link_layout":
                             final_response = _canonicalize_link_layout_repair_response(
+                                repaired_response,
+                                final_response,
+                                package,
+                            )
+                        elif final_kind == "candidate_selection":
+                            final_response = _canonicalize_candidate_selection_repair_response(
                                 repaired_response,
                                 final_response,
                                 package,
@@ -1892,6 +2056,7 @@ def run_section_generation_sequence(
         "evidence_strength_retry_count": evidence_strength_retry_count,
         "link_layout_retry_count": link_layout_retry_count,
         "required_link_retry_count": required_link_retry_count,
+        "candidate_selection_retry_count": candidate_selection_retry_count,
         "technical_consistency_retry_count": technical_consistency_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
