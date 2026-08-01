@@ -114,17 +114,29 @@ def _normalized_heading(heading: str) -> str:
 def _neutralized_heading(heading: str) -> str:
     """Soften unsupported absolute outline language without changing its ID."""
     normalized = _normalized_heading(heading)
-    return re.sub(
+    neutralized = re.sub(
         r"\bthe\s+only\s+choice\b",
         "A Practical Choice",
         normalized,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"\bwhat\s+(OSHA|FDA|EPA|FTC|CDC|NIOSH)\s+says\s+about\s+(.+)$",
+        r"How to Verify \1 Requirements for \2",
+        neutralized,
         flags=re.IGNORECASE,
     )
 
 
 def _stable_heading_identity(heading: str) -> str:
     normalized = _normalized_heading(heading).casefold()
-    return re.sub(r"\ba\s+practical\s+choice\b", "the only choice", normalized)
+    normalized = re.sub(r"\ba\s+practical\s+choice\b", "the only choice", normalized)
+    return re.sub(
+        r"\bhow\s+to\s+verify\s+(osha|fda|epa|ftc|cdc|niosh)\s+"
+        r"requirements\s+for\s+(.+)$",
+        r"what \1 says about \2",
+        normalized,
+    )
 
 
 def _contains_cjk(value: str) -> bool:

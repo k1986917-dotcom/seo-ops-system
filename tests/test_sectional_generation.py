@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -795,6 +796,39 @@ def test_sequence_repairs_key_finding_authority_overstatement_once(tmp_path):
     assert result["word_count_retry_count"] == 0
     assert len(calls) == len(sections["section_order"]) + 1
     assert "EVIDENCE STRENGTH REPAIR" in calls[1]
+    assert "SERVER-DETECTED OFFENDING PASSAGE" in calls[1]
+    assert "This package has no source-verified quote evidence" in calls[1]
+    assert "OSHA recommends Class 3R" in calls[1]
+
+
+def test_sequence_reports_section_identity_when_evidence_repair_still_fails(tmp_path):
+    sections, shadow = _setup()
+    first_id = sections["section_order"][0]
+    first_heading = sections["sections"][0]["heading"]
+
+    def remain_unsupported(system, user):
+        package = _package_from_prompt(user)
+        return _response(package).replace(
+            "A clear marking process helps the team identify the intended location,",
+            "OSHA recommends Class 3R as the best choice for ceiling marking. "
+            "A clear marking process helps the team identify the intended location,",
+        )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=(
+            rf"section {first_id} \({re.escape(first_heading)}\) "
+            r"evidence_strength repair failed"
+        ),
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_unsupported,
+        )
 
 
 def test_section_authority_recommendation_requires_verified_quote_citation():
@@ -917,9 +951,9 @@ def test_final_claim_strength_gate_rejects_key_finding_regulatory_recommendation
     with pytest.raises(SectionGenerationError, match="S001"):
         validate_claim_evidence_strength(ledger, quote_manifest)
 
-    next(item for item in evidence if item["evidence_id"] == "ev_safety")[
-        "support_basis"
-    ] = "verified_quote"
+    next(item for item in evidence if item["evidence_id"] == "ev_safety")["support_basis"] = (
+        "verified_quote"
+    )
     assert validate_claim_evidence_strength(ledger, quote_manifest) == ledger
 
 

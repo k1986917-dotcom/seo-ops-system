@@ -86,12 +86,8 @@ _TECHNICAL_CHOICE_TERM = re.compile(
     r"\b(?:class\s*(?:1|2|2m|3r|3a|3b|4)|\d{3,4}\s*nm|laser\s+class)\b",
     re.IGNORECASE,
 )
-_EVIDENCE_OVERSTATEMENT_ERROR = (
-    "section contains authority or recommendation language unsupported by source-verified quote evidence"
-)
-_FRAME_OVERSTATEMENT_ERROR = (
-    "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
-)
+_EVIDENCE_OVERSTATEMENT_ERROR = "section contains authority or recommendation language unsupported by source-verified quote evidence"
+_FRAME_OVERSTATEMENT_ERROR = "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
 
 
 class SectionGenerationError(ContractValidationError):
@@ -501,7 +497,8 @@ def _validate_section_evidence_strength(
         citation_ids = _CITE_PLACEHOLDER.findall(body_block)
         if any(basis_by_id.get(item) == "verified_quote" for item in citation_ids):
             continue
-        raise SectionGenerationError(_EVIDENCE_OVERSTATEMENT_ERROR)
+        excerpt = " ".join(visible.split())[:500]
+        raise SectionGenerationError(f"{_EVIDENCE_OVERSTATEMENT_ERROR}: {excerpt}")
 
 
 def validate_claim_evidence_strength(
@@ -588,9 +585,26 @@ def _build_section_repair_prompt(
     )
     if word_count_prompt is not None:
         return word_count_prompt, "word_count"
-    if str(error) != _EVIDENCE_OVERSTATEMENT_ERROR:
+    error_text = str(error)
+    if not error_text.startswith(_EVIDENCE_OVERSTATEMENT_ERROR):
         return None
     base = build_section_generation_prompt(package)
+    offending = error_text.removeprefix(_EVIDENCE_OVERSTATEMENT_ERROR).lstrip(": ")
+    verified_ids = [
+        str(item.get("evidence_id") or item.get("candidate_id") or "")
+        for item in package.get("candidates", {}).get("evidence", [])
+        if isinstance(item, dict) and item.get("support_basis") == "verified_quote"
+    ]
+    verified_note = (
+        "This package has no source-verified quote evidence. Do not state or imply "
+        "that any named authority says, warns, requires, allows, recommends, approves, "
+        "or defines a rule. Replace those claims with neutral verification steps and "
+        "site-specific safety controls."
+        if not verified_ids
+        else "Only the listed source-verified evidence IDs may support a direct authority attribution: "
+        + ", ".join(verified_ids)
+        + "."
+    )
     repair_system = (
         base["system"] + "\nThis is the only repair attempt for unsupported authority, compliance, "
         "recommendation, or superlative language. Keep the exact approved H2, "
@@ -599,11 +613,16 @@ def _build_section_repair_prompt(
         "only each evidence candidate's support text. A key_finding may not be "
         "presented as an authority's exact recommendation or requirement. Preserve "
         "approved placeholder IDs where they remain relevant and keep decisions JSON "
-        "consistent with the final placeholders."
+        "consistent with the final placeholders. Do not merely add hedging words to "
+        "the same unsupported attribution; remove or recast the attribution itself."
     )
     repair_user = (
         base["user"]
         + "\n\nEVIDENCE STRENGTH REPAIR\n"
+        + verified_note
+        + "\n\nSERVER-DETECTED OFFENDING PASSAGE\n"
+        + offending
+        + "\n\n"
         + "Remove or qualify every unsupported recommendation, compliance claim, "
         + "authority attribution, and absolute phrase such as only/best/go-to. Do not "
         + "introduce any new fact, number, URL, product, law, or evidence ID. Return "
@@ -1179,13 +1198,21 @@ def run_section_generation_sequence(
                     exc,
                 )
                 if repair is None:
-                    raise
+                    raise SectionGenerationError(
+                        f"section {section_id} ({package['heading']}) failed: {exc}"
+                    ) from exc
                 repair_prompt, repair_kind = repair
                 repaired_response = generate_text(
                     repair_prompt["system"],
                     repair_prompt["user"],
                 )
-                output = parse_section_generation_response(repaired_response, package)
+                try:
+                    output = parse_section_generation_response(repaired_response, package)
+                except SectionGenerationError as repair_exc:
+                    raise SectionGenerationError(
+                        f"section {section_id} ({package['heading']}) "
+                        f"{repair_kind} repair failed: {repair_exc}"
+                    ) from repair_exc
                 if repair_kind == "word_count":
                     word_count_retry_count += 1
                 else:

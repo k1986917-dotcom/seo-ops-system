@@ -92,6 +92,24 @@ def test_only_choice_heading_is_neutralized_without_section_id_churn():
     assert stable_section_id(1, neutral) == stable_section_id(1, original)
 
 
+def test_authority_says_heading_is_neutralized_without_section_id_churn():
+    original = "The Critical Safety Line: What OSHA Says About Lasers on Construction Sites"
+    neutral = (
+        "The Critical Safety Line: How to Verify OSHA Requirements for Lasers on Construction Sites"
+    )
+    blueprint = build_contract_bundle(
+        topic="Ceiling Pointing Guide",
+        tier="Cluster Content",
+        intent="Explain worksite safety verification without unsupported attribution.",
+        outline=[original],
+    )["article_blueprint"]
+
+    section = blueprint["sections"][0]
+    assert section["heading"] == neutral
+    assert section["section_id"] == stable_section_id(1, original)
+    assert stable_section_id(1, neutral) == stable_section_id(1, original)
+
+
 def test_reader_stages_control_initial_product_link_policy():
     bundle = _bundle()
     sections = bundle["section_contracts"]["sections"]
@@ -280,6 +298,33 @@ H2: {original} (400 words)
     assert section["heading"] == ("Why Green (532nm) Is A Practical Choice for Ceiling Pointing")
     assert section["section_id"] == stable_section_id(1, original)
     assert section["brief_points"] == ["Compare visibility and power trade-offs using evidence"]
+
+
+def test_brief_authority_heading_is_neutralized_with_points_preserved():
+    original = "What OSHA Says About Lasers on Construction Sites"
+    brief = f"""## 3. Recommended Outline
+
+```
+H2: {original} (400 words)
+- Tell readers to verify current site and employer requirements
+```
+"""
+
+    bundle = build_contract_bundle_from_brief(
+        topic="Ceiling Pointing Guide",
+        tier="Cluster Content",
+        intent="Explain worksite safety verification.",
+        brief_text=brief,
+    )
+    section = bundle["section_contracts"]["sections"][0]
+
+    assert section["heading"] == (
+        "How to Verify OSHA Requirements for Lasers on Construction Sites"
+    )
+    assert section["section_id"] == stable_section_id(1, original)
+    assert section["brief_points"] == [
+        "Tell readers to verify current site and employer requirements"
+    ]
 
 
 def test_brief_with_only_deferred_frame_headings_is_rejected():

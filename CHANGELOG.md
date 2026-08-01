@@ -39,6 +39,13 @@
 
 ### Fixed
 
+- Legacy sectional headings that directly command unsupported authority
+  attribution, such as `What OSHA Says About ...`, are now softened to a
+  verification-oriented contract while preserving the original stable section
+  ID. Evidence-strength failures include the server-detected offending passage
+  and the single repair prompt explicitly distinguishes zero verified quotes
+  from verified evidence IDs. A second failure now reports the exact section
+  ID, heading, and repair kind instead of a generic pipeline error.
 - The controlled sectional shadow runner now supports an explicit
   `--resume-existing --refresh-complete` path after a reviewed complete shadow
   candidate has become stale under a newer code/contract revision. The runner

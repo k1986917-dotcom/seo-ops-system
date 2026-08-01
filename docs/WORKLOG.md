@@ -1,3 +1,36 @@
+## 2026-08-01 — Neutralize authority-directed H2 contracts
+
+### 第十次真实 refresh
+
+- `b4912c2` 下只执行一次 `--resume-existing --refresh-complete`。旧完整候选成功归档，
+  POST=1、无外层重试；active root 留下 17 个 checkpoint/ledger checkpoint。
+- 正式 pair、Action 和 Git 不变；`ai_runs 172→176`。新候选在正文阶段失败，没有生成
+  resolved delivery、assembly 或 comparison。
+- MCP 纠正本机报告：901 新 checkpoint 已成功保存；真实失败发生在 049。901 新摘要使
+  后续所有 package chain SHA 改变，未覆盖的旧文件不是 resumed。
+
+### 根因与修复
+
+- 监管证据门禁要求 authority attribution 必须有 `verified_quote`，但 Legacy H2 仍写
+  `What OSHA Says About...`，形成不可满足合同。
+- Outline 中 `What <authority> Says About <subject>` 现在中和为
+  `How to Verify <authority> Requirements for <subject>`；stable section identity 反向映射
+  到原 heading，因此 section ID 不变。
+- Evidence-strength validator 将首个违规段落的可见文本写入异常；唯一 repair prompt
+  直接携带 offending passage 和 verified evidence IDs。若 verified IDs 为空，明确禁止
+  任何 named-authority says/warns/requires/allows/recommends/approves 归因，只允许中性
+  verification steps 和 site-specific controls。
+- 第二次 parse 失败会返回包含 section ID、heading 和 repair kind 的错误，运营报告无需
+  根据 mtime 猜测真实停止点。
+
+### 真实只读验证
+
+- 6 个 section ID 保持不变。
+- 049 标题变为 `The Critical Safety Line: How to Verify OSHA Requirements for Lasers on
+  Construction Sites`；2d96 保持 `A Practical Choice` 中和标题。
+- 当前 6 个旧 body checkpoint 均会按 package SHA 或 heading 自动失效；无需人工删除。
+- 下一次运行必须是普通 `--resume-existing`，不能再次 refresh 已归档候选。
+
 ## 2026-08-01 — Refresh a reviewed complete shadow candidate safely
 
 ### 第九次调用结果

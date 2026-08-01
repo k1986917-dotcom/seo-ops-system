@@ -2,6 +2,38 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十次 refresh 已归档旧候选，049 语义修订仍失败
+
+- `b4912c2` 推送并由 MCP 独立核验后，本机只执行一次
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing --refresh-complete`；
+  runner 实际发送 1 个正式 POST，未外层重试。旧完成候选的
+  `resolved-delivery.json`、assembled pair、assembly report 和 comparison 已由 runner
+  事务归档到 `drafts/sectional-archive/.../20260801T044604Z-271094745-e960d376b609/`，
+  manifest SHA=`9b1187c26729966f685365340621ff81e0892dc75700a7a47f6a4224b6960d0d`，
+  5 个归档文件 SHA 全部匹配；active root 只剩 7 个 checkpoint + 10 个 ledger
+  checkpoint，无 `.tmp-*`、promotion manifest 或终态产物。
+- 正式 draft、claim ledger、w2-state、`.env`、Action 和 Git 均未变化；数据库只新增
+  4 条 `legacy_write_sectional_body` 审计，`ai_runs 172→176`，DB SHA 变为
+  `8f35e6cc6381bb5243dc3dde80d0f8d97ff445c6c10c06ea26267dc0fec40138`。
+- 本机报告把新落盘的 901 误判为“修订后仍失败”，并把未覆盖的后续旧 checkpoint
+  误判为 resumed。MCP 逐节重建确认：901 的新 checkpoint（489 词）已通过；其新摘要
+  改变了后续 package chain，049/4293/2d96/7bb0/b92c 的当前 package SHA 全部与旧
+  checkpoint 不匹配。真实停止点是 049 初稿 + 一次 evidence-strength 修订仍失败，
+  因此旧 049 文件没有被覆盖。
+- 根因是合同自身矛盾：证据分布为 0 verified quote / 4 unverified quote / 8 key
+  finding，门禁禁止无 verified quote 的 OSHA/FDA 权威归因，但原 H2 仍要求模型回答
+  “What OSHA Says…”。修复把 `What <authority> Says About <subject>` 中和为
+  `How to Verify <authority> Requirements for <subject>`，并保持原 stable section ID；
+  `the only choice` → `A Practical Choice` 的稳定 ID 映射继续保留。
+- Evidence-strength 错误现在携带服务器检测到的具体违规段落；唯一修订提示会明确列出
+  offending passage、当前 verified evidence IDs，并在 0 verified quote 时要求删除
+  权威归因本身、改写为现场核验和中性安全控制，而不是只加模糊限定词。第二次仍失败时，
+  错误包含 `section_id + heading + repair kind`，避免再次误判停止位置。
+- 真实只读重建确认 6 个 section ID 不变，049 和 2d96 标题均已中和，当前 6 个旧 body
+  checkpoint 都会由 package SHA/heading 校验自动失效。下一次 active root 已是 partial
+  状态，只能用普通 `--resume-existing`；不得再次使用 `--refresh-complete`，不得手工删除
+  checkpoint，也不得 promotion。
+
 ## 2026-08-01 — 第九次调用在 POST 前被 complete-artifact 守卫拒绝
 
 - `5bb0c50` 推送并由 MCP 独立核验后，本机只调用一次
