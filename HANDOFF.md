@@ -1,6 +1,31 @@
 # Handoff — 当前接手状态
 
-最后更新：2026-08-01（Europe/Berlin）
+最后更新：2026-08-02（Asia/Shanghai）
+
+## 2026-08-02 — b92 实跑暴露 post-format 字数 miss，已修复为 bounded final repair
+
+- `49d4c51` 推送后实跑一次普通 resume：901/049/429/2d/7bb resumed；b92 初始 marker 损坏 →
+  RESPONSE FORMAT REPAIR 修复了 marker，但重建正文仅 323 词（低于 350 下限）；final 选择器
+  没有为 `prior_kind=response_format` + word-count 错误提供分支，返回 None 后 fail-closed
+  （只消耗 2 次 AI）。`ai_runs 240→243`，正式 draft/claim ledger/w2-state/`.env`/Action/Git
+  全部不变，无终态产物、无 promotion manifest。
+- 本轮修复（尚未 push）：
+  1. `_build_final_section_repair_prompt` 增加通用 word-count 路由：任何 prior kind 下暴露
+     的 word-count 错误都交给标准 WORD COUNT REPAIR 作为 final repair（第三次 AI），
+     保持"一次 repair + 一次 final repair"的调用上限；
+  2. `_build_response_format_repair_prompt`（含 FINAL）在 system 中显式写入
+     `target_words.min-max` 与 2-5 段契约，降低重建内容再次 miss 字数的概率；
+  3. 修正 final 循环计数 bug：`final_kind == "word_count"` 此前误计入 evidence_strength，
+     现正确计入 word_count retries；
+  4. 纯 word_count 路径扩展为双向：过短时允许一次 final expand（与过长时的
+     deletion-only trim 对称）；旧测试 `test_sequence_limits_word_count_repair_to_one_attempt`
+     更新为新契约（两次 word-count 修订后仍失败才停止）。
+- 验证：`tests/test_sectional_generation.py` 83 passed；pipeline/context/rollout/legacy
+  adapter 相关 68 passed；全量 `pytest -q` 632 passed（adapter 类测试在沙箱内因 loopback
+  限制挂起，升级后通过）；Ruff、format、compileall、`git diff --check` 全部通过。
+- 下一步：push → 推送后核验 → 恰好一次普通 `--resume-existing --ai-call-limit 36` shadow →
+  停止并报告。b92 预期以 ≤3 次 AI 成功持久化；仍禁止 `--refresh-complete`、promotion 与
+  任何手工修改。
 
 ## 2026-08-01 — 7bb 已使用 B025 落盘；b92 marker 格式修订已补齐
 

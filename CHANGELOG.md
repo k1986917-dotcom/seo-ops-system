@@ -1,3 +1,17 @@
+## [Unreleased] — Route post-format word-count misses to a bounded final repair
+
+### Fixed
+
+- RESPONSE FORMAT REPAIR（含 FINAL）现在在 system prompt 中显式写入目标可见词数区间与
+  2-5 段契约，从 clean Section Package 重建时不再容易产出过短正文。
+- 格式修订已修复 marker 但正文 miss word-count 契约时，不再立即终止 Shadow：final repair
+  选择器把该错误路由到标准 WORD COUNT REPAIR（第三次 AI），最终仍需通过全部内容与 link
+  gate，仍保持一次 repair + 一次 final repair 的调用上限。
+- 纯 word-count 路径的 final 分支扩展为双向：正文过短时允许一次 final expand（与过长的
+  deletion-only trim 对称）；仍严格限制为最多两次 word-count 修订。
+- 修正 final 循环审计计数：`word_count` 类型的 final repair 现在计入
+  `section_word_count_retries`，不再误计入 evidence-strength retries。
+
 ## [Unreleased] — Retry malformed sectional response envelopes
 
 ### Fixed

@@ -1163,7 +1163,7 @@ def test_sequence_does_not_retry_non_length_generation_errors(tmp_path):
     assert calls == [sections["section_order"][0]]
 
 
-def test_sequence_limits_word_count_repair_to_one_attempt(tmp_path):
+def test_sequence_limits_word_count_repair_to_one_final_attempt(tmp_path):
     sections, shadow = _setup()
     first_id = sections["section_order"][0]
     baseline_package = build_section_generation_package(
@@ -1199,9 +1199,10 @@ def test_sequence_limits_word_count_repair_to_one_attempt(tmp_path):
             generate_text=remain_short,
         )
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert "WORD COUNT REPAIR" in calls[1]
-    assert "FINAL WORD COUNT TRIM" not in calls[1]
+    assert "WORD COUNT REPAIR" in calls[2]
+    assert "FINAL WORD COUNT TRIM" not in calls[2]
 
 
 def test_sequence_uses_one_final_deletion_only_trim_for_over_limit_section(tmp_path):
@@ -1813,6 +1814,114 @@ def test_sequence_stops_after_final_response_format_repair(tmp_path):
 
     select_calls = [item for item in calls if item[0] == "select"]
     assert len(select_calls) == 3
+
+
+def _short_response_within_markers(package):
+    """A parseable two-block response that misses the word-count contract."""
+    gates = package["link_gates"]
+    used = {key: [] for key in gates}
+    first = "The section explains the selection factors."
+    second = "Match the tool to the working distance and site procedures."
+    if gates["article_links"]["opportunity_state"] == "required":
+        candidate_id = gates["article_links"]["selected_ids"][0]
+        used["article_links"].append(candidate_id)
+        first += f" [[ARTICLE:{candidate_id}|detailed tool selection guidance]]"
+    if gates["product_links"]["opportunity_state"] == "required":
+        candidate_id = gates["product_links"]["selected_ids"][0]
+        used["product_links"].append(candidate_id)
+        second += f" [[PRODUCT:{candidate_id}|professional ceiling marking tool]]"
+    if gates["external_citations"]["opportunity_state"] == "required":
+        candidate_id = gates["external_citations"]["selected_ids"][0]
+        used["external_citations"].append(candidate_id)
+        second += f" [[CITE:{candidate_id}]]"
+    decisions = {}
+    for key, gate in gates.items():
+        ids = used[key]
+        if ids:
+            reason = "used_approved_candidate"
+        elif gate["opportunity_state"] == "none":
+            reason = gate["reason_code"]
+        else:
+            reason = "not_needed_for_this_section"
+        decisions[key] = {"used_ids": ids, "reason_code": reason}
+    return (
+        f"{SECTION_MARKDOWN_MARKER}\n## {package['heading']}\n\n{first}\n\n{second}\n"
+        f"{SECTION_DECISIONS_MARKER}\n{json.dumps(decisions, sort_keys=True)}"
+    )
+
+
+def test_sequence_routes_word_count_miss_after_format_repair_to_final_repair(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            if target_attempts == 1:
+                return response.replace(SECTION_MARKDOWN_MARKER, "", 1)
+            if target_attempts == 2:
+                return _short_response_within_markers(package)
+        return response
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["response_format_retry_count"] == 1
+    assert result["word_count_retry_count"] == 1
+    assert len(select_calls) == 3
+    assert "RESPONSE FORMAT REPAIR" in select_calls[1][1]
+    assert "45-130" in select_calls[1][1]
+    assert "WORD COUNT REPAIR" in select_calls[2][2]
+    assert "FINAL RESPONSE FORMAT REPAIR" not in select_calls[2][1]
+
+
+def test_sequence_stops_when_final_word_count_repair_still_misses(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def first_malformed(system, user):
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] == "select":
+            if len([item for item in calls if item[0] == "select"]) == 1:
+                return response.replace(SECTION_MARKDOWN_MARKER, "", 1)
+            return _short_response_within_markers(package)
+        return response
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=(
+            r"word_count repair failed: section word count \d+ is outside "
+            r"45-130"
+        ),
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=first_malformed,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 3
+    assert "RESPONSE FORMAT REPAIR" in select_calls[1][1]
+    assert "WORD COUNT REPAIR" in select_calls[2][2]
 
 
 def test_sequence_stops_after_one_required_link_retry(tmp_path):

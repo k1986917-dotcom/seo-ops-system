@@ -1120,6 +1120,7 @@ def _build_response_format_repair_prompt(
         return None
     validated = validate_section_generation_package(package)
     base = build_section_generation_prompt(validated)
+    target = validated["target_words"]
     label = "FINAL RESPONSE FORMAT REPAIR" if final else "RESPONSE FORMAT REPAIR"
     system = (
         base["system"] + f"\n{label}. The previous completion could not be parsed as the required "
@@ -1127,9 +1128,10 @@ def _build_response_format_repair_prompt(
         "instructions, use a code fence, add commentary, or mention this repair. Emit "
         f"{SECTION_MARKDOWN_MARKER} exactly once as the first output line and "
         f"{SECTION_DECISIONS_MARKER} exactly once after the complete section Markdown. "
-        "Return valid JSON after the decisions marker and no text after that JSON. All "
-        "content, word-count, paragraph, evidence, product, and link gates remain "
-        "unchanged and will be validated server-side."
+        "Return valid JSON after the decisions marker and no text after that JSON. "
+        f"Keep the body inside 2-5 coherent paragraphs and {target['min']}-{target['max']} "
+        "visible words. All content, word-count, paragraph, evidence, product, and "
+        "link gates remain unchanged and will be validated server-side."
     )
     user = (
         base["user"]
@@ -1332,6 +1334,13 @@ def _build_final_section_repair_prompt(
         )
         if strict_trim is not None:
             return strict_trim, "word_count_strict_trim"
+    word_count = _build_word_count_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if word_count is not None:
+        return word_count, "word_count"
     if prior_kind != "technical_consistency":
         technical = _build_technical_consistency_repair_prompt(
             package,
@@ -2130,7 +2139,7 @@ def run_section_generation_sequence(
                         response_format_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
-                    elif final_kind == "word_count_strict_trim":
+                    elif final_kind in ("word_count", "word_count_strict_trim"):
                         word_count_retry_count += 1
                     else:
                         evidence_strength_retry_count += 1

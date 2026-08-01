@@ -1,3 +1,31 @@
+## 2026-08-02 — Route post-format word-count misses to a bounded final repair
+
+- 推送 `49d4c51` 后执行一次普通 resume：901/049/429/2d/7bb resumed；b92 因新 7bb summary
+  失效而重生成，初始响应 marker 损坏 → RESPONSE FORMAT REPAIR 修复 marker 成功，但重建
+  正文 323 词（低于 350 下限）。`_build_final_section_repair_prompt` 的 word-count 分支
+  只在 `prior_kind == "word_count"` 时触发，`prior_kind == "response_format"` + word-count
+  错误无匹配 → 返回 None → fail-closed（2 次 AI，无终态产物）。POST=1，`ai_runs 240→243`，
+  正式产物与 Action 不变。
+- 修复（`src/seo_ops/services/sectional_generation.py`）：
+  1. final 选择器在 strict-trim 分支后增加通用 word-count 路由：
+     `_build_word_count_repair_prompt` 命中即作为 final repair（kind="word_count"），
+     覆盖 response_format → word_count 与 word_count → word_count（过短）两条路径；
+  2. RESPONSE FORMAT REPAIR / FINAL RESPONSE FORMAT REPAIR 的 system 显式写入
+     `target_words.min-max` 与 2-5 段契约；
+  3. final 循环计数增加 `final_kind in ("word_count", "word_count_strict_trim")` 分支，
+     修正 word_count final 误计入 evidence_strength 的 bug；
+  4. 纯 word_count 路径扩展为双向（过短 final expand / 过长 final trim）。
+- 测试：新增 `test_sequence_routes_word_count_miss_after_format_repair_to_final_repair`、
+  `test_sequence_stops_when_final_word_count_repair_still_misses`；更新
+  `test_sequence_limits_word_count_repair_to_one_attempt` 为
+  `test_sequence_limits_word_count_repair_to_one_final_attempt`（两次修订后仍失败才停止）。
+- 验证：`tests/test_sectional_generation.py` 83 passed；`test_sectional_pipeline.py` 7
+  passed、`test_sectional_context.py` 24 passed、`test_sectional_rollout.py` 14 passed、
+  `test_sectional_legacy_adapter.py` 23 passed（沙箱内因 loopback 限制挂起，升级后通过）；
+  全量 `pytest -q` 632 passed；Ruff、format、compileall、`git diff --check` 通过。
+- 尚未 push、尚未运行真实 Shadow。下一步：push 后只执行一次普通 resume，观察 b92 是否以
+  ≤3 次 AI 成功持久化；禁止 refresh/promotion/手工修改。
+
 ## 2026-08-01 — Add bounded response-marker repair after b92 failure
 
 - 推送 `9d7ce23` 后执行一次普通 resume：901/049/429/2d resumed；7bb 以 B025
