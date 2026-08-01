@@ -218,6 +218,71 @@ def _selected_candidates(
     return result
 
 
+def _unverified_support_is_unsafe_for_writing(candidate: dict[str, Any]) -> bool:
+    """Return whether model-facing support contains an unverified strong claim."""
+    basis = str(candidate.get("support_basis") or "key_finding")
+    if basis == "verified_quote":
+        return False
+    support = " ".join(str(candidate.get("support") or "").split())
+    if not support:
+        return True
+    if _contains_strong_evidence_claim(support):
+        return True
+    if _STRONG_RECOMMENDATION_TERM.search(support):
+        return True
+    if _SAFETY_ABSOLUTE_TERM.search(support):
+        return True
+    return bool(
+        _TECHNICAL_CHOICE_TERM.search(support)
+        and re.search(
+            r"\b(?:safe|safer|safest|recommended|compliant|acceptable|approved)\b",
+            support,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _writing_safe_evidence_context(
+    gate: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    section_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Filter unsafe evidence from writing context without relaxing gate minima."""
+    unsafe = [item for item in candidates if _unverified_support_is_unsafe_for_writing(item)]
+    unsafe_ids = {str(item.get("evidence_id") or item.get("candidate_id") or "") for item in unsafe}
+    safe = [
+        item
+        for item in candidates
+        if str(item.get("evidence_id") or item.get("candidate_id") or "") not in unsafe_ids
+    ]
+    filtered_gate = dict(gate)
+    filtered_gate["selected_ids"] = [
+        item for item in gate.get("selected_ids", []) if item not in unsafe_ids
+    ]
+    filtered_gate["candidate_count"] = len(filtered_gate["selected_ids"])
+    filtered_gate["max_allowed"] = min(
+        int(gate.get("max_allowed", 0)),
+        len(filtered_gate["selected_ids"]),
+    )
+    rejected = list(gate.get("rejected") or [])
+    rejected.extend(
+        {
+            "candidate_id": evidence_id,
+            "reason_codes": ["unverified_support_contains_strong_claim"],
+        }
+        for evidence_id in sorted(unsafe_ids)
+    )
+    filtered_gate["rejected"] = rejected
+    minimum = int(filtered_gate.get("min_required", 0))
+    if filtered_gate.get("opportunity_state") == "required" and len(safe) < minimum:
+        raise SectionGenerationError(
+            f"section {section_id} lacks enough writing-safe evidence after filtering "
+            f"unverified strong claims: required {minimum}, available {len(safe)}"
+        )
+    return filtered_gate, safe
+
+
 def build_section_generation_package(
     section_contracts: dict[str, Any],
     link_contracts: dict[str, Any],
@@ -279,6 +344,32 @@ def build_section_generation_package(
     )
     previous = _truncate(previous, 600)
 
+    article_candidates = _selected_candidates(
+        link["article_links"],
+        indexes["articles"],
+        kind="article",
+    )
+    product_candidates = _selected_candidates(
+        link["product_links"],
+        indexes["products"],
+        kind="product",
+        metadata_by_id={
+            item["candidate_id"]: item
+            for item in manifest_section.get("product_candidates", [])
+            if isinstance(item, dict) and isinstance(item.get("candidate_id"), str)
+        },
+    )
+    evidence_candidates = _selected_candidates(
+        link["external_citations"],
+        indexes["evidence"],
+        kind="evidence",
+    )
+    evidence_gate, evidence_candidates = _writing_safe_evidence_context(
+        link["external_citations"],
+        evidence_candidates,
+        section_id=clean_section_id,
+    )
+
     package = {
         "version": CONTRACT_VERSION,
         "topic": sections["topic"],
@@ -297,28 +388,15 @@ def build_section_generation_package(
         "previous_heading": section["previous_section"],
         "previous_summary": previous,
         "next_heading": section["next_section"],
-        "link_gates": {key: link[key] for key in _LINK_TYPES},
+        "link_gates": {
+            "article_links": dict(link["article_links"]),
+            "product_links": dict(link["product_links"]),
+            "external_citations": evidence_gate,
+        },
         "candidates": {
-            "articles": _selected_candidates(
-                link["article_links"],
-                indexes["articles"],
-                kind="article",
-            ),
-            "products": _selected_candidates(
-                link["product_links"],
-                indexes["products"],
-                kind="product",
-                metadata_by_id={
-                    item["candidate_id"]: item
-                    for item in manifest_section.get("product_candidates", [])
-                    if isinstance(item, dict) and isinstance(item.get("candidate_id"), str)
-                },
-            ),
-            "evidence": _selected_candidates(
-                link["external_citations"],
-                indexes["evidence"],
-                kind="evidence",
-            ),
+            "articles": article_candidates,
+            "products": product_candidates,
+            "evidence": evidence_candidates,
         },
     }
     package["context_char_counts"] = {

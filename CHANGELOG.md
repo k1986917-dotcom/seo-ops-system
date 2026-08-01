@@ -39,6 +39,13 @@
 
 ### Fixed
 
+- Unverified evidence support that already contains regulatory attribution,
+  recommendation/compliance conclusions, absolute safety language, or a
+  technical-class preference is now withheld from model-facing sectional
+  packages. The evidence remains in the audit registry, the package records a
+  deterministic rejection reason, and required citation minima remain strict;
+  generation fails before an AI call when too little writing-safe evidence
+  remains.
 - Legacy sectional headings that directly command unsupported authority
   attribution, such as `What OSHA Says About ...`, are now softened to a
   verification-oriented contract while preserving the original stable section

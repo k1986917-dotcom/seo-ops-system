@@ -18,6 +18,7 @@ from seo_ops.services.sectional_generation import (
     SECTION_DECISIONS_MARKER,
     SECTION_MARKDOWN_MARKER,
     SectionGenerationError,
+    _writing_safe_evidence_context,
     article_frame_checkpoint_path,
     build_article_frame_package,
     build_article_frame_prompt,
@@ -221,6 +222,157 @@ def test_generation_prompt_contains_protocol_but_not_full_registry():
     assert "set reason_code to used_approved_candidate" in prompt["system"]
     assert package["section_id"] in prompt["user"]
     assert "catalog_data_issues" not in prompt["user"]
+
+
+def test_writing_context_filters_unverified_strong_support_without_relaxing_gate():
+    gate = {
+        "candidate_count": 2,
+        "max_allowed": 2,
+        "min_required": 1,
+        "opportunity_state": "required",
+        "reason_code": "required_or_verification_evidence",
+        "rejected": [],
+        "selected_ids": ["ev_unsafe", "ev_safe"],
+    }
+    candidates = [
+        {
+            "candidate_id": "ev_unsafe",
+            "evidence_id": "ev_unsafe",
+            "support": "OSHA guidance states that employers must use Class 3R.",
+            "support_basis": "quote",
+        },
+        {
+            "candidate_id": "ev_safe",
+            "evidence_id": "ev_safe",
+            "support": "Verify the current worksite procedure before using the tool.",
+            "support_basis": "key_finding",
+        },
+    ]
+
+    filtered_gate, safe = _writing_safe_evidence_context(
+        gate,
+        candidates,
+        section_id="section-example",
+    )
+
+    assert [item["evidence_id"] for item in safe] == ["ev_safe"]
+    assert filtered_gate["selected_ids"] == ["ev_safe"]
+    assert filtered_gate["candidate_count"] == 1
+    assert filtered_gate["max_allowed"] == 1
+    assert filtered_gate["min_required"] == 1
+    assert filtered_gate["rejected"] == [
+        {
+            "candidate_id": "ev_unsafe",
+            "reason_codes": ["unverified_support_contains_strong_claim"],
+        }
+    ]
+    assert gate["selected_ids"] == ["ev_unsafe", "ev_safe"]
+
+
+def test_writing_context_keeps_source_verified_strong_support():
+    gate = {
+        "candidate_count": 1,
+        "max_allowed": 1,
+        "min_required": 1,
+        "opportunity_state": "required",
+        "reason_code": "required_or_verification_evidence",
+        "rejected": [],
+        "selected_ids": ["ev_verified"],
+    }
+    candidates = [
+        {
+            "candidate_id": "ev_verified",
+            "evidence_id": "ev_verified",
+            "support": "OSHA requires the documented control described in this quote.",
+            "support_basis": "verified_quote",
+        }
+    ]
+
+    filtered_gate, safe = _writing_safe_evidence_context(
+        gate,
+        candidates,
+        section_id="section-example",
+    )
+
+    assert safe == candidates
+    assert filtered_gate["selected_ids"] == ["ev_verified"]
+    assert filtered_gate["rejected"] == []
+
+
+def test_writing_context_fails_closed_when_required_safe_evidence_is_exhausted():
+    gate = {
+        "candidate_count": 1,
+        "max_allowed": 1,
+        "min_required": 1,
+        "opportunity_state": "required",
+        "reason_code": "required_or_verification_evidence",
+        "rejected": [],
+        "selected_ids": ["ev_unsafe"],
+    }
+    candidates = [
+        {
+            "candidate_id": "ev_unsafe",
+            "evidence_id": "ev_unsafe",
+            "support": "Class 2 is eye-safe and prevents retinal damage.",
+            "support_basis": "key_finding",
+        }
+    ]
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=(
+            r"section section-example lacks enough writing-safe evidence.*"
+            r"required 1, available 0"
+        ),
+    ):
+        _writing_safe_evidence_context(
+            gate,
+            candidates,
+            section_id="section-example",
+        )
+
+
+def test_generation_package_excludes_unsafe_unverified_support_from_prompt():
+    sections, shadow = _setup()
+    links = copy.deepcopy(shadow["section_link_contracts"])
+    manifest = copy.deepcopy(shadow["context_manifest"])
+    verify = next(item for item in sections["sections"] if item["reader_stage"] == "verify")
+    link = next(item for item in links["sections"] if item["section_id"] == verify["section_id"])
+    link["external_citations"].update(
+        {
+            "candidate_count": 2,
+            "max_allowed": 2,
+            "min_required": 1,
+            "opportunity_state": "required",
+            "selected_ids": ["ev_selection", "ev_safety"],
+        }
+    )
+    evidence = manifest["registry"]["evidence"]["candidates"]
+    unsafe = next(item for item in evidence if item["evidence_id"] == "ev_selection")
+    unsafe["support"] = "OSHA guidance states that employers must use Class 3R for this work."
+    unsafe["support_basis"] = "quote"
+    safe = next(item for item in evidence if item["evidence_id"] == "ev_safety")
+    safe["support"] = "Verify the current worksite procedure before using the tool."
+    safe["support_basis"] = "key_finding"
+
+    package = build_section_generation_package(
+        sections,
+        links,
+        manifest,
+        verify["section_id"],
+    )
+    prompt = build_section_generation_prompt(package)
+
+    assert [item["evidence_id"] for item in package["candidates"]["evidence"]] == ["ev_safety"]
+    gate = package["link_gates"]["external_citations"]
+    assert gate["selected_ids"] == ["ev_safety"]
+    assert gate["min_required"] == 1
+    assert gate["max_allowed"] == 1
+    assert gate["rejected"][-1] == {
+        "candidate_id": "ev_selection",
+        "reason_codes": ["unverified_support_contains_strong_claim"],
+    }
+    assert "OSHA guidance states" not in prompt["user"]
 
 
 def test_related_catalog_product_is_required_without_exact_use_case_claims():

@@ -2,6 +2,33 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十一次普通 resume：049 被危险未核验 support 反复诱导
+
+- `2851982` 推送并由 MCP 独立核验后，本机只执行一次普通
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing`；POST=1、无外层重试，
+  未使用 `--refresh-complete`，archive 目录仍只有上一轮那 1 份。
+- 正式 draft、claim ledger、w2-state、`.env`、Action 和 Git 均未变化；数据库只新增
+  4 条 `legacy_write_sectional_body` 审计，`ai_runs 176→180`，DB SHA 变为
+  `1fa9d1c3d744a4e7af496be0e799aa6931fb3358349b3fe55822ec259f3b4dbe`。
+- 901 在新合同下成功重生成并落盘为 439 词；049 使用新标题
+  `How to Verify OSHA Requirements...`，但初稿和唯一 evidence-strength 修订仍写出
+  `OSHA guidance states... Class 2 and Class 3R ... safer`，因此准确停止在
+  `section-04981e6fc7`。049 旧 checkpoint 未被覆盖；后四节未到达，不能算 resumed。
+- MCP 独立检查发现持续诱因不是 H2，而是写作包仍把两条危险 support 原样送给模型：
+  一条未核验 quote 写着 Class 2/3R 更适合施工空间，另一条 key finding 写着 Class 2
+  可防止视网膜损伤且是推荐等级。门禁虽然禁止模型采用这些结论，prompt 却同时把它们
+  定义成“唯一事实来源”，形成输入层矛盾。
+- 修复只改变模型可见写作上下文，不改 evidence ledger、candidate registry 或正式材料：
+  任何 `support_basis != verified_quote` 且 support 自身含监管归因、推荐/合规结论、绝对
+  安全措辞或技术等级偏好时，从 section package 和 external-citation selected IDs 中剔除，
+  并记录 `unverified_support_contains_strong_claim`。Required `min_required` 永不下调；过滤
+  后不足时在 AI 调用前 fail-closed。
+- 当前 Action 真实只读重建确认：049 模型包只剩 `ev_342a1c3c35f7`，危险 OSHA/Class 2
+  support 均不再出现；external citation 仍为 required min=1/max=1；049 新 package SHA
+  为 `056d8a5d82bebca6e7481a1cc53570d1b06de87308b9dec87aff03963ad9c26e`。
+- 下一步：提交并 push；独立核验后仍只运行一次普通 `--resume-existing`。不得 refresh、
+  手工删 checkpoint 或 promotion。
+
 ## 2026-08-01 — 第十次 refresh 已归档旧候选，049 语义修订仍失败
 
 - `b4912c2` 推送并由 MCP 独立核验后，本机只执行一次

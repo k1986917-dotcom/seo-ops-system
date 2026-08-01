@@ -1,3 +1,28 @@
+## 2026-08-01 — Filter unsafe unverified support before generation
+
+### 第十一次真实 resume
+
+- `2851982` 下只执行一次普通 `--resume-existing`，POST=1、无外层重试、archive 未变。
+- 901 成功重生成并落盘为 439 词；049 使用中和后的 H2，但初稿和一次语义修订仍写出
+  `OSHA guidance states...` 与 Class 2/3R 更安全的结论，准确停止在 049。
+- 正式 pair、Action 和 Git 不变；`ai_runs 176→180`，active root 仍为 17 个中间文件。
+
+### 根因
+
+- 049 的模型包仍包含两条不合格 support：未核验 quote 自带“Class 2/3R 更安全”的监管
+  风格结论，key finding 自带“prevents retinal damage / recommended class”。
+- 生成提示同时把 support 定义为唯一事实来源并禁止采用这些结论，造成输入合同矛盾；
+  单纯强化 repair 文案不能稳定消除模型模仿。
+
+### 修复与验证
+
+- 新增模型上下文过滤：只有 `verified_quote` 可携带强监管/推荐/安全结论；危险的普通 quote
+  或 key finding 仍保留在审计 registry，但从 writing package、selected IDs 中移除，并写
+  rejection reason。
+- Required citation minima 不会自动降低；安全候选不足时在 AI 调用前 fail-closed。
+- 当前 Action 只读验证：049 只剩 `ev_342a1c3c35f7`，required min=1 保持，两个危险 support
+  已完全从 prompt 消失；package SHA=`056d8a5d82bebca6e7481a1cc53570d1b06de87308b9dec87aff03963ad9c26e`。
+
 ## 2026-08-01 — Neutralize authority-directed H2 contracts
 
 ### 第十次真实 refresh
