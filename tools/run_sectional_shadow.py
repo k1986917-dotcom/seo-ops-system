@@ -8,6 +8,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import sqlite3
@@ -56,6 +57,15 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Resume only from known sectional checkpoint/intermediate files. "
             "Complete, promoted, or unknown artifact sets are refused."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-complete",
+        action="store_true",
+        help=(
+            "With --resume-existing, archive a reviewed complete shadow candidate "
+            "outside the active sectional root before starting a new contract run. "
+            "Promotion manifests, incomplete terminal sets, and unknown files are refused."
         ),
     )
     parser.add_argument(
@@ -148,9 +158,7 @@ def _paths(data_dir: Path, action_id: int, topic: str) -> dict[str, Path]:
         / "laserpointerhub"
     )
     draft_candidates = [
-        path
-        for path in (workspace / "drafts").glob(f"{slug}-*.md")
-        if path.is_file()
+        path for path in (workspace / "drafts").glob(f"{slug}-*.md") if path.is_file()
     ]
     if not draft_candidates:
         raise ShadowRunnerError("formal Legacy draft is missing")
@@ -178,11 +186,7 @@ def _formal_hashes(paths: dict[str, Path], env_file: Path) -> dict[str, str]:
 
 
 def _validate_resumable_root(root: Path, action_id: int) -> list[str]:
-    files = sorted(
-        str(path.relative_to(root))
-        for path in root.rglob("*")
-        if path.is_file()
-    )
+    files = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
     if not files:
         raise ShadowRunnerError("sectional root exists but contains no resumable files")
     forbidden = {
@@ -196,9 +200,7 @@ def _validate_resumable_root(root: Path, action_id: int) -> list[str]:
         raise ShadowRunnerError(
             "sectional root contains complete or promotion artifacts; refusing resume"
         )
-    checkpoint = re.compile(
-        r"checkpoints/(?:section-[a-f0-9]{10}|article-frame)\.json"
-    )
+    checkpoint = re.compile(r"checkpoints/(?:section-[a-f0-9]{10}|article-frame)\.json")
     ledger_checkpoint = re.compile(
         r"ledger-checkpoints/(?:section-[a-f0-9]{10}|"
         r"frame-(?:introduction|takeaways|conclusion|faq))\.json"
@@ -211,10 +213,133 @@ def _validate_resumable_root(root: Path, action_id: int) -> list[str]:
         and not ledger_checkpoint.fullmatch(item)
     ]
     if unknown:
-        raise ShadowRunnerError(
-            f"sectional root contains unknown resume artifacts: {unknown}"
-        )
+        raise ShadowRunnerError(f"sectional root contains unknown resume artifacts: {unknown}")
     return files
+
+
+def _complete_artifact_names(action_id: int) -> set[str]:
+    return {
+        "assembled-draft.md",
+        "assembled-claim-ledger.json",
+        "assembly-report.json",
+        f"shadow-comparison-action-{action_id}.json",
+    }
+
+
+def _archive_complete_candidate(
+    root: Path,
+    action_id: int,
+    git_head: str,
+) -> dict[str, Any]:
+    """Move one reviewed terminal candidate into a preserved sibling archive.
+
+    Checkpoints remain in the active root so the formal resume logic can decide
+    which packages are still reusable.  The old resolved delivery is archived
+    with the four terminal artifacts to prevent stale delivery data from being
+    mistaken for the next candidate if the new run stops before Phase 4.
+    """
+    files = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
+    file_set = set(files)
+    promotion = "promotion-manifest.json"
+    if promotion in file_set:
+        raise ShadowRunnerError("sectional root contains a promotion manifest; refusing refresh")
+
+    complete = _complete_artifact_names(action_id)
+    present_complete = complete.intersection(file_set)
+    if not present_complete:
+        raise ShadowRunnerError("--refresh-complete requires one complete shadow candidate")
+    if present_complete != complete:
+        missing = sorted(complete - present_complete)
+        raise ShadowRunnerError(
+            f"sectional root contains an incomplete terminal candidate: missing {missing}"
+        )
+
+    checkpoint = re.compile(r"checkpoints/(?:section-[a-f0-9]{10}|article-frame)\.json")
+    ledger_checkpoint = re.compile(
+        r"ledger-checkpoints/(?:section-[a-f0-9]{10}|"
+        r"frame-(?:introduction|takeaways|conclusion|faq))\.json"
+    )
+    allowed_terminal = complete | {"resolved-delivery.json"}
+    unknown = [
+        item
+        for item in files
+        if item not in allowed_terminal
+        and not checkpoint.fullmatch(item)
+        and not ledger_checkpoint.fullmatch(item)
+    ]
+    if unknown:
+        raise ShadowRunnerError(f"sectional root contains unknown refresh artifacts: {unknown}")
+
+    archive_names = sorted(item for item in allowed_terminal if item in file_set)
+    comparison = root / f"shadow-comparison-action-{action_id}.json"
+    comparison_sha = _sha256(comparison)[:12]
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    nonce = f"{time.time_ns() % 1_000_000_000:09d}"
+    archive_id = f"{stamp}-{nonce}-{comparison_sha}"
+    archive_parent = root.parent.parent / "sectional-archive" / root.name
+    archive_parent.mkdir(parents=True, exist_ok=True)
+    temp_archive = archive_parent / f".tmp-{archive_id}"
+    final_archive = archive_parent / archive_id
+    temp_archive.mkdir()
+
+    hashes = {name: _sha256(root / name) for name in archive_names}
+    moved: list[str] = []
+    try:
+        for name in archive_names:
+            source = root / name
+            destination = temp_archive / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(source, destination)
+            moved.append(name)
+
+        for name, expected_sha in hashes.items():
+            if _sha256(temp_archive / name) != expected_sha:
+                raise ShadowRunnerError(f"archived artifact hash mismatch before commit: {name}")
+
+        manifest = {
+            "version": 1,
+            "action_id": action_id,
+            "archived_at_utc": f"{stamp[:-1]}.{nonce}Z",
+            "source_root": str(root),
+            "git_head": git_head,
+            "artifacts": hashes,
+        }
+        manifest_path = temp_archive / "archive-manifest.json"
+        with manifest_path.open("w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_archive, final_archive)
+    except Exception as exc:
+        rollback_root = final_archive if final_archive.exists() else temp_archive
+        rollback_errors: list[str] = []
+        for name in reversed(moved):
+            archived = rollback_root / name
+            if archived.exists():
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.replace(archived, destination)
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"{name}: {rollback_exc}")
+        if rollback_errors:
+            raise ShadowRunnerError(
+                "failed to archive complete shadow candidate and rollback was incomplete; "
+                f"recovery files preserved at {rollback_root}: {rollback_errors}"
+            ) from exc
+        shutil.rmtree(rollback_root, ignore_errors=True)
+        raise ShadowRunnerError(
+            f"failed to archive complete shadow candidate; active files restored: {exc}"
+        ) from exc
+
+    return {
+        "archive_id": archive_id,
+        "archive_path": str(final_archive),
+        "git_head": git_head,
+        "artifacts": hashes,
+        "manifest_sha256": _sha256(final_archive / "archive-manifest.json"),
+    }
 
 
 def _port_is_free(host: str, port: int) -> bool:
@@ -244,9 +369,7 @@ def _wait_for_health(port: int, process: subprocess.Popen[str], timeout: int) ->
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise ShadowRunnerError(
-                f"server exited before health check: {process.returncode}"
-            )
+            raise ShadowRunnerError(f"server exited before health check: {process.returncode}")
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/api/health",
@@ -328,12 +451,17 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     paths = _paths(settings.data_dir, args.action_id, action_before["target_ref"])
     root = paths["sectional_root"]
     partial_artifacts_before: list[str] = []
+    archived_complete_candidate: dict[str, Any] | None = None
+    refresh_complete = bool(getattr(args, "refresh_complete", False))
+    if refresh_complete and not args.resume_existing:
+        raise ShadowRunnerError("--refresh-complete requires --resume-existing")
     if root.exists():
         if not args.resume_existing:
             raise ShadowRunnerError(
                 "sectional root already exists; use --resume-existing only after review"
             )
-        partial_artifacts_before = _validate_resumable_root(root, args.action_id)
+        if not refresh_complete:
+            partial_artifacts_before = _validate_resumable_root(root, args.action_id)
     elif args.resume_existing:
         raise ShadowRunnerError("--resume-existing requires an existing sectional root")
     if not _port_is_free("127.0.0.1", args.port):
@@ -342,9 +470,7 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     formal_before = _formal_hashes(paths, env_file)
     db_sha_before = _sha256(settings.database_path)
     ai_runs_before = _ai_run_count(settings.database_path)
-    log_file = args.log_file or Path(
-        f"/tmp/seo-sectional-shadow-action-{args.action_id}.log"
-    )
+    log_file = args.log_file or Path(f"/tmp/seo-sectional-shadow-action-{args.action_id}.log")
     log_file.unlink(missing_ok=True)
     process: subprocess.Popen[str] | None = None
     http_result: dict[str, Any] = {"post_attempts": 0}
@@ -352,6 +478,13 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     health: dict[str, Any] = {}
     with log_file.open("w", encoding="utf-8") as log_handle:
         try:
+            if refresh_complete:
+                archived_complete_candidate = _archive_complete_candidate(
+                    root,
+                    args.action_id,
+                    git_before["head"],
+                )
+                partial_artifacts_before = _validate_resumable_root(root, args.action_id)
             process = subprocess.Popen(
                 [sys.executable, "-m", "seo_ops"],
                 cwd=repo,
@@ -434,6 +567,8 @@ def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         },
         "sectional_root": str(root),
         "resume_existing": args.resume_existing,
+        "refresh_complete": refresh_complete,
+        "archived_complete_candidate": archived_complete_candidate,
         "partial_artifacts_before": partial_artifacts_before,
         "artifacts": artifacts,
         "artifacts_complete": artifacts_complete,

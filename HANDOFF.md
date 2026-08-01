@@ -2,6 +2,30 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第九次调用在 POST 前被 complete-artifact 守卫拒绝
+
+- `5bb0c50` 推送并由 MCP 独立核验后，本机只调用一次
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing`。Runner 在启动服务前
+  发现 active sectional root 仍含上轮的 `assembled-draft.md`、
+  `assembled-claim-ledger.json`、`assembly-report.json` 和
+  `shadow-comparison-action-3.json`，按原设计拒绝继续。
+- 本轮真实结果为 `http.post_attempts=0`，没有启动服务、没有发送正式 POST、没有新增
+  ai_runs；正式四个 SHA、Action、数据库、Git 和 22 个 sectional 文件全部未变。
+  本机报告结尾“只发送了一个正式 POST”是固定模板残留，不能覆盖 runner JSON 的 0。
+- 原守卫防止误覆盖一个完成候选，本身正确；缺口是没有正式机制在新代码合同下保留旧
+  完成候选并开始新一轮。禁止手工删除或移动 active root 文件。
+- 新 runner 参数 `--refresh-complete` 必须和 `--resume-existing` 一起使用。它在 active
+  root 外的 sibling `sectional-archive/<slug>/<timestamp>-<comparison-sha>/` 中事务归档：
+  `resolved-delivery.json` 加四个终态产物，并写 `archive-manifest.json`，记录 Action、
+  Git HEAD 和每个文件 SHA。所有 checkpoint/ledger checkpoint 保留在 active root，
+  由正式 package SHA 逻辑决定复用或重生成。
+- Promotion manifest 仍一律拒绝；终态集合不完整、存在未知文件或归档中途失败均 fail
+  closed。归档失败会把已移动文件恢复到 active root。真实 Action 当前 22 文件集合已
+  只读确认完全符合新入口条件，没有 promotion manifest 或未知文件。若归档失败后的
+  回滚本身也失败，未恢复文件会保留在 `.tmp-*` 恢复目录并报告路径，绝不会清理丢失。
+- 下一步：提交并 push runner 修复；独立核验后，本机只运行一次
+  `--resume-existing --refresh-complete`。不得手工整理文件，也不得 promotion。
+
 ## 2026-08-01 — 第八次 shadow 结构成功，但语义验收拒绝 promotion
 
 - 基线 `a2b19e88c92483e46d273e5f9053c2b22e1ced80` 下，Action #3 在非沙箱主机

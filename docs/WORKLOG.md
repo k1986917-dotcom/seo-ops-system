@@ -1,3 +1,31 @@
+## 2026-08-01 — Refresh a reviewed complete shadow candidate safely
+
+### 第九次调用结果
+
+- 在 `5bb0c50` 上执行一次 `--resume-existing`，runner 在入口发现上轮四个完整候选
+  产物，按设计拒绝：`sectional root contains complete or promotion artifacts`。
+- `http.post_attempts=0`，服务未启动，`ai_runs=172`、数据库、正式 Legacy pair、Action、
+  Git 和 22 个 active sectional 文件均未改变。
+- 报告末尾“发送一个 POST”是模板残留；审计事实以 runner JSON 的 0 为准。
+
+### 修复
+
+- 新增显式 `--refresh-complete`，且必须与 `--resume-existing` 同时使用。
+- 只有完整的四件终态集合、无 promotion manifest、无未知文件时才允许 refresh。
+- `resolved-delivery.json` 和四个终态产物被事务移动到 active root 外的
+  `drafts/sectional-archive/<slug>/<timestamp>-<comparison-sha>/`。
+- Archive manifest 记录 Action ID、Git HEAD、UTC 时间和所有归档文件 SHA；active root
+  中只保留 checkpoints/ledger checkpoints，由 package SHA 正常决定复用。
+- 归档任何一步失败，已移动文件全部恢复；不完整终态、promotion manifest 或未知文件
+  均在移动前拒绝。若回滚本身也失败，残留恢复文件保留在 `.tmp-*` 目录并报告路径。
+
+### 验证
+
+- Runner 专项覆盖：正常归档、promotion manifest 拒绝、不完整终态拒绝、第二个文件
+  移动失败时事务回滚。
+- 真实 Action 只读检查：当前 22 文件正好是 17 个 checkpoint/ledger、1 个 resolved
+  delivery 和 4 个完整终态；无 promotion manifest、无未知文件，满足 refresh 前提。
+
 ## 2026-08-01 — Quote-backed regulatory claim gate
 
 ### 第八次真实 shadow 与人工拒绝

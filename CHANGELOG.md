@@ -39,6 +39,16 @@
 
 ### Fixed
 
+- The controlled sectional shadow runner now supports an explicit
+  `--resume-existing --refresh-complete` path after a reviewed complete shadow
+  candidate has become stale under a newer code/contract revision. The runner
+  transactionally moves the old resolved delivery and four terminal artifacts into
+  a SHA-recorded sibling archive, while preserving checkpoints for normal
+  package-SHA reuse decisions. Promotion manifests, incomplete terminal sets,
+  unknown files, and archive failures still fail closed; an interrupted archive
+  restores every moved active file. If that rollback itself is incomplete, the
+  remaining recovery files are preserved and their path is reported instead of
+  being deleted.
 - Sectional shadow generation now preserves whether evidence support came from
   a source-verified quote, an unverified quote field, or only a synthesized
   research key finding. Concepts
