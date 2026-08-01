@@ -23,9 +23,16 @@
 - 验证：`tests/test_sectional_generation.py` 83 passed；pipeline/context/rollout/legacy
   adapter 相关 68 passed；全量 `pytest -q` 632 passed（adapter 类测试在沙箱内因 loopback
   限制挂起，升级后通过）；Ruff、format、compileall、`git diff --check` 全部通过。
-- 下一步：push → 推送后核验 → 恰好一次普通 `--resume-existing --ai-call-limit 36` shadow →
-  停止并报告。b92 预期以 ≤3 次 AI 成功持久化；仍禁止 `--refresh-complete`、promotion 与
-  任何手工修改。
+- 实跑结果（`fe5eb9d` 推送后恰好一次普通 resume，POST=1，`ai_runs 243→255`）：
+  **shadow 首次全程成功**。901/049/429/2d/7bb resumed；b92 一次生成即通过（453 words，
+  no product）；frame 生成 1 次；10 个 ledger 全部重新生成。终态产物齐全
+  （assembled-draft/claim-ledger/assembly-report/resolved-delivery/comparison），
+  `artifacts_complete=true`，comparison `eligible_for_single_action_promotion`、blockers=[]。
+  全篇仅 1 个产品链接 B025（7bb），B017USB/B016/B023/B019/B030/B01.6 均为 0；安全/Class 3R
+  章节零产品；无未解析 placeholder、无空链接。正式 draft/claim/w2-state/`.env`/Action/Git
+  全部不变，无 promotion manifest。
+- 下一步：停止，等待老师通过 MCP 独立审查终态产物；在审查结论前禁止 promotion/refresh/
+  二次运行。
 
 ## 2026-08-01 — 7bb 已使用 B025 落盘；b92 marker 格式修订已补齐
 

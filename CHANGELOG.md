@@ -11,6 +11,8 @@
   deletion-only trim 对称）；仍严格限制为最多两次 word-count 修订。
 - 修正 final 循环审计计数：`word_count` 类型的 final repair 现在计入
   `section_word_count_retries`，不再误计入 evidence-strength retries。
+- 真实 Action #3 普通 resume 首次全程成功（POST=1、12 次 AI）：b92 一次生成即通过，六个
+  正文 + frame + 10 个 ledger 全部落盘，终态产物齐全；全篇仅 B025 一个产品链接。
 
 ## [Unreleased] — Retry malformed sectional response envelopes
 

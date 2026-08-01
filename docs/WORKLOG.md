@@ -23,8 +23,17 @@
   passed、`test_sectional_context.py` 24 passed、`test_sectional_rollout.py` 14 passed、
   `test_sectional_legacy_adapter.py` 23 passed（沙箱内因 loopback 限制挂起，升级后通过）；
   全量 `pytest -q` 632 passed；Ruff、format、compileall、`git diff --check` 通过。
-- 尚未 push、尚未运行真实 Shadow。下一步：push 后只执行一次普通 resume，观察 b92 是否以
-  ≤3 次 AI 成功持久化；禁止 refresh/promotion/手工修改。
+- 实跑：push `fe5eb9d` 后只执行一次普通 `--resume-existing --ai-call-limit 36`，POST=1，
+  `ai_runs 243→255`（+12），result=success。901/049/429/2d/7bb resumed；b92 首次生成即通过
+  （453 words、4 paragraphs、package `dedd8144…`、无 product）；frame 生成 1 次；10 个
+  ledger 全部重新生成（各 1 次）。终态产物齐全，`artifacts_complete=true`，comparison
+  `eligible_for_single_action_promotion`、blockers=[]、new 3523 words/38 claims/8 links、
+  old 2343/22/0。assembled draft 全篇仅 1 个产品链接（B025，7bb 段），B017USB/B016/B023/
+  B019/B030/B01.6 均为 0，安全与 Class 3R 章节零产品，无未解析 placeholder/空链接。
+  正式 draft/claim/w2-state/`.env`/Action/Git 不变，无 promotion manifest。本轮无任何
+  repair（retry_count=0），即 b92 的 marker/word-count 修复路径未被本轮真实调用，但新增
+  路由与计数测试已覆盖该失败模式。
+- 后续：停止，等待老师 MCP 独立审查终态产物；审查前禁止 promotion/refresh/二次运行。
 
 ## 2026-08-01 — Add bounded response-marker repair after b92 failure
 
