@@ -32,6 +32,7 @@ from seo_ops.services.sectional_generation import (
     run_section_generation_sequence,
     section_checkpoint_path,
     validate_article_frame_output,
+    validate_claim_evidence_strength,
 )
 from seo_ops.services.sectional_writing import (
     build_contract_bundle,
@@ -201,6 +202,10 @@ def test_generation_package_is_compact_scoped_and_deterministic():
     assert "registry" not in package
     assert all("url" not in item for item in package["candidates"]["products"])
     assert all("url" not in item for item in package["candidates"]["articles"])
+    assert all(
+        item["support_basis"] == "key_finding" and "concepts" not in item
+        for item in package["candidates"]["evidence"]
+    )
     assert package["context_char_counts"]["products"] < 3000
 
 
@@ -760,6 +765,164 @@ def test_sequence_limits_word_count_repair_to_one_attempt(tmp_path):
     assert "WORD COUNT REPAIR" in calls[1]
 
 
+def test_sequence_repairs_key_finding_authority_overstatement_once(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def generate(system, user):
+        package = _package_from_prompt(user)
+        calls.append(user)
+        safe = _response(package)
+        if len(calls) == 1:
+            return safe.replace(
+                "A clear marking process helps the team identify the intended location,",
+                "OSHA recommends Class 3R as the best choice for ceiling marking. "
+                "A clear marking process helps the team identify the intended location,",
+            )
+        return safe
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    assert result["complete"] is True
+    assert result["evidence_strength_retry_count"] == 1
+    assert result["word_count_retry_count"] == 0
+    assert len(calls) == len(sections["section_order"]) + 1
+    assert "EVIDENCE STRENGTH REPAIR" in calls[1]
+
+
+def test_section_authority_recommendation_requires_verified_quote_citation():
+    sections, shadow = _setup()
+    verify = next(item for item in sections["sections"] if item["reader_stage"] == "verify")
+    package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        verify["section_id"],
+    )
+    response = _response(package).replace(
+        "Professionals should match the tool to the working distance,",
+        "OSHA recommends Class 3R as the best choice for this work. "
+        "Professionals should match the tool to the working distance,",
+    )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="source-verified quote evidence",
+    ):
+        parse_section_generation_response(response, package)
+
+    unverified_manifest = copy.deepcopy(shadow["context_manifest"])
+    for candidate in unverified_manifest["registry"]["evidence"]["candidates"]:
+        candidate["support_basis"] = "quote"
+    unverified_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        unverified_manifest,
+        verify["section_id"],
+    )
+    unverified_response = _response(unverified_package).replace(
+        "Professionals should match the tool to the working distance,",
+        "OSHA recommends Class 3R as the best choice for this work. "
+        "Professionals should match the tool to the working distance,",
+    )
+    with pytest.raises(
+        SectionGenerationError,
+        match="source-verified quote evidence",
+    ):
+        parse_section_generation_response(unverified_response, unverified_package)
+
+    verified_manifest = copy.deepcopy(shadow["context_manifest"])
+    for candidate in verified_manifest["registry"]["evidence"]["candidates"]:
+        candidate["support_basis"] = "verified_quote"
+    verified_package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        verified_manifest,
+        verify["section_id"],
+    )
+    verified_response = _response(verified_package).replace(
+        "Professionals should match the tool to the working distance,",
+        "OSHA recommends Class 3R as the best choice for this work. "
+        "Professionals should match the tool to the working distance,",
+    )
+    assert parse_section_generation_response(verified_response, verified_package)
+
+
+@pytest.mark.parametrize(
+    "unsupported_sentence",
+    [
+        "The FDA warns that Class 3R is acceptable for this work.",
+        "Class 2 is eye-safe and prevents retinal damage during accidental exposure.",
+    ],
+)
+def test_key_finding_cannot_support_authority_or_absolute_safety_language(
+    unsupported_sentence,
+):
+    package = _package_for_stage("select")
+    response = _response(package).replace(
+        "A clear marking process helps the team identify the intended location,",
+        unsupported_sentence
+        + " A clear marking process helps the team identify the intended location,",
+    )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="source-verified quote evidence",
+    ):
+        parse_section_generation_response(response, package)
+
+
+def test_authority_words_in_exact_h2_do_not_trigger_body_evidence_gate():
+    sections, shadow = _setup()
+    first = sections["sections"][0]
+    first["heading"] = "What OSHA Says About Worksite Marking"
+    first["must_answer"] = [first["heading"]]
+    package = build_section_generation_package(
+        sections,
+        shadow["section_link_contracts"],
+        shadow["context_manifest"],
+        first["section_id"],
+    )
+
+    assert parse_section_generation_response(_response(package), package)
+
+
+def test_final_claim_strength_gate_rejects_key_finding_regulatory_recommendation():
+    _, shadow = _setup()
+    ledger = {
+        "version": 1,
+        "claims": [
+            {
+                "sentence_id": "S001",
+                "claim_type": "regulatory",
+                "claim_text": "OSHA recommends Class 3R as the best choice.",
+                "evidence_ids": ["ev_safety"],
+            }
+        ],
+    }
+
+    with pytest.raises(SectionGenerationError, match="S001"):
+        validate_claim_evidence_strength(ledger, shadow["context_manifest"])
+
+    quote_manifest = copy.deepcopy(shadow["context_manifest"])
+    evidence = quote_manifest["registry"]["evidence"]["candidates"]
+    next(item for item in evidence if item["evidence_id"] == "ev_safety")["support_basis"] = "quote"
+    with pytest.raises(SectionGenerationError, match="S001"):
+        validate_claim_evidence_strength(ledger, quote_manifest)
+
+    next(item for item in evidence if item["evidence_id"] == "ev_safety")[
+        "support_basis"
+    ] = "verified_quote"
+    assert validate_claim_evidence_strength(ledger, quote_manifest) == ledger
+
+
 def _completed_section_run():
     sections, shadow = _setup()
     outputs = []
@@ -995,6 +1158,33 @@ def test_article_frame_generation_writes_checkpoint_once(tmp_path):
     assert result["resumed"] is False
     assert len(calls) == 1
     assert article_frame_checkpoint_path(tmp_path, "marking-guide").exists()
+
+
+def test_article_frame_repairs_unsupported_recommendation_once(tmp_path):
+    section_run = _completed_section_run()
+    calls = []
+
+    def generate(system, user):
+        calls.append(user)
+        if len(calls) == 1:
+            return _frame_response().replace(
+                "Professional ceiling marking depends on a clear method,",
+                "OSHA recommends Class 3R as the best choice. "
+                "Professional ceiling marking depends on a clear method,",
+            )
+        return _frame_response()
+
+    result = run_article_frame_generation(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_run=section_run,
+        generate_text=generate,
+    )
+
+    assert result["generated"] is True
+    assert result["evidence_strength_repaired"] is True
+    assert len(calls) == 2
+    assert "FRAME EVIDENCE STRENGTH REPAIR" in calls[1]
 
 
 @pytest.mark.parametrize(

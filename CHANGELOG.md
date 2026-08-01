@@ -39,6 +39,17 @@
 
 ### Fixed
 
+- Sectional shadow generation now preserves whether evidence support came from
+  a source-verified quote, an unverified quote field, or only a synthesized
+  research key finding. Concepts
+  remain available for retrieval ranking but are no longer exposed to the
+  writer as factual support. Authority attributions, regulatory/compliance
+  recommendations, absolute safety claims, and unsupported superlatives now
+  require source-verified quote evidence; otherwise the affected section or article
+  frame gets at most one constrained neutral-language repair and then fails
+  closed. The merged claim ledger is checked again before assembly. Legacy
+  headings containing “the only choice” are softened to “A Practical Choice”
+  without changing their stable section IDs.
 - Section generation now permits exactly one constrained AI repair when an
   otherwise parseable section misses only its word-count contract. The retry
   must preserve the approved H2, factual meaning, placeholder IDs, link

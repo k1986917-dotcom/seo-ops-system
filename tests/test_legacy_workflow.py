@@ -746,6 +746,23 @@ class TestMaterialPackEntityCoverage:
         assert ents[0]["source_tag"] == "required"
         assert ents[0]["evidence"] == "https://example.com/beam"
 
+    def test_parse_quote_verified_requires_explicit_yes(self, tmp_path):
+        from data_sources.modules.write_pre_check import parse_pack_entities
+
+        pack = self._pack(tmp_path, """\
+- **[required] Verified OSHA wording**
+  - Source: https://www.osha.gov/example
+  - Quote: "Verified wording from the source"
+  - Quote verified: yes
+- **[search] Unverified wording**
+  - Source: https://example.com/unverified
+  - Quote: "Text supplied upstream"
+""")
+        ents = parse_pack_entities(pack)
+
+        assert ents[0]["source_quote_verified"] is True
+        assert ents[1]["source_quote_verified"] is False
+
     def test_unsourced_entries_are_not_required(self, tmp_path):
         from data_sources.modules.write_pre_check import parse_pack_entities
         pack = self._pack(tmp_path, """\

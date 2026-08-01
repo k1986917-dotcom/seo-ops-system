@@ -1,3 +1,43 @@
+## 2026-08-01 — Quote-backed regulatory claim gate
+
+### 第八次真实 shadow 与人工拒绝
+
+- `a2b19e8` 下 Action #3 一次性 resume shadow 成功：POST=1，`ai_runs 157→172`，
+  22 个 sectional 产物完整，正式 Legacy pair 和 Action 未变，未 promotion。
+- 结构指标通过：正文 3000–4200 范围、H2 350–500、链接预算与 URL 唯一性通过，
+  comparison blockers=[]，机器推荐 `eligible_for_single_action_promotion`。
+- 人工内容审查发现机器门禁漏检：空 quote 的 key findings 被写成 OSHA/FDA 的明确推荐、
+  合规或允许结论，并出现 “the only choice”“safest default” 和绝对眼安全措辞。
+  因此拒绝 promotion；机器 eligible 不能替代最终语义验收。
+
+### 修复
+
+- Evidence cards 新增 `support_basis=verified_quote|quote|key_finding`。只有上游明确写入
+  `quote_verified=true` 的来源才属于 verified quote；普通 `source_quote` 不能自动
+  视为官网逐字核验。新 R3 hand-off 直接保留来源；
+  旧 Action 在 shadow 内存中从原 evidence ledger 恢复，缺失 ledger 时保守回退为
+  key_finding，不改变历史文件或原有 tier 校验顺序。
+- 检索 concepts 继续用于候选排序，但不再发送给正文模型作为事实；正文只可使用
+  evidence `support`。key finding 不能被写成权威的原话、推荐、要求、批准、合规或
+  允许结论。
+- Section、article frame 和最终 merged claim ledger 增加三层 evidence-strength gate；
+  正文/frame 最多一次中和式 AI 修订，第二次仍失败即停止。绝对安全措辞也必须由 exact
+  verified quote 支撑。
+- Brief H2 的 `the only choice` 中和为 `A Practical Choice`，stable ID 仍映射到旧身份，
+  保持 Action #3 的 6 个 checkpoint 文件名不变。
+- Pipeline result 新增正文 word-count/evidence-strength 修订次数和 frame 修订标志，便于
+  真实 runner 审计。
+
+### 真实只读验证
+
+- 6 个 section ID 保持不变；所有旧 checkpoint 因 support provenance/heading package
+  SHA 改变而由正式 resume 逻辑自动失效。
+- 当前 assembled claim ledger 被新门禁以
+  `authority or recommendation language unsupported by source-verified quote evidence: S005`
+  明确拒绝。
+- 当前证据分布：0 条 verified quote、4 条 unverified quote、8 条 key finding。
+  未修改任何正式或 sectional 产物。
+
 ## 2026-08-01 — Section word-count 单次受控修订
 
 ### 第七次真实 shadow

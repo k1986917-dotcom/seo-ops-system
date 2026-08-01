@@ -286,10 +286,14 @@ _PACK_ENTRY_RE = re.compile(
 _PACK_SOURCE_RE = re.compile(r'^\s*-\s*Source:\s*(?P<url>.+?)\s*$')
 _PACK_KEYFINDING_RE = re.compile(r'^\s*-\s*Key finding:\s*(?P<text>.+?)\s*$')
 _PACK_QUOTE_RE = re.compile(r'^\s*-\s*Quote:\s*"(?P<text>.+)"\s*$')
+_PACK_QUOTE_VERIFIED_RE = re.compile(
+    r'^\s*-\s*Quote verified:\s*(?P<value>yes|true|1|no|false|0)\s*$',
+    re.IGNORECASE,
+)
 _PACK_SUMMARY_RE = re.compile(r'^\s*-\s*Summary:\s*(?P<text>.+?)\s*$')
 
 
-def parse_pack_entities(pack_path: Path) -> list[dict[str, str]]:
+def parse_pack_entities(pack_path: Path) -> list[dict[str, object]]:
     """Walk a material pack and extract candidate entities with evidence.
 
     Each entry in the A/C/E/G sections typically looks like::
@@ -305,13 +309,14 @@ def parse_pack_entities(pack_path: Path) -> list[dict[str, str]]:
 
     Returns a list of dicts with keys:
         entity, evidence, source_tag, source_section, source_quote,
+        source_quote_verified,
         source_key_finding, source_summary
     """
     if not pack_path or not pack_path.exists():
         return []
     lines = pack_path.read_text(encoding="utf-8").splitlines()
-    out: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
+    out: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
     for line in lines:
         m_entry = _PACK_ENTRY_RE.match(line)
         if m_entry:
@@ -323,6 +328,7 @@ def parse_pack_entities(pack_path: Path) -> list[dict[str, str]]:
                 "source_tag": m_entry.group("tag"),
                 "source_section": m_entry.group("tag_section") or "",
                 "source_quote": "",
+                "source_quote_verified": False,
                 "source_key_finding": "",
                 "source_summary": "",
             }
@@ -340,6 +346,12 @@ def parse_pack_entities(pack_path: Path) -> list[dict[str, str]]:
         m_q = _PACK_QUOTE_RE.match(line)
         if m_q and not current.get("source_quote"):
             current["source_quote"] = m_q.group("text").strip()
+            continue
+        m_qv = _PACK_QUOTE_VERIFIED_RE.match(line)
+        if m_qv:
+            current["source_quote_verified"] = (
+                m_qv.group("value").casefold() in {"yes", "true", "1"}
+            )
             continue
         m_sum = _PACK_SUMMARY_RE.match(line)
         if m_sum and not current.get("source_summary"):

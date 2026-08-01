@@ -61,6 +61,37 @@ _COMMON_ABBREVIATION = re.compile(
     re.IGNORECASE,
 )
 _INITIALISM = re.compile(r"(?:[A-Za-z]\.){2,}$")
+_AUTHORITY_TERM = re.compile(
+    r"\b(?:OSHA|FDA|EPA|FTC|CDC|NIOSH|regulator(?:y|s)?|law|legal)\b",
+    re.IGNORECASE,
+)
+_STRONG_RECOMMENDATION_TERM = re.compile(
+    r"\b(?:recommend(?:ed|s|ation)?|compliant|compliance|approved|acceptable|"
+    r"requires?|must|should\s+stick|only\s+choice|go-to\s+choice|best\s+choice|"
+    r"best\s+balance|safest\s+default|practical\s+sweet\s+spot)\b",
+    re.IGNORECASE,
+)
+_AUTHORITY_ATTRIBUTION_TERM = re.compile(
+    r"\b(?:says?|states?|warns?|advises?|guidance|according\s+to|"
+    r"considers?|treats?|defines?|prohibits?|permits?|allows?)\b",
+    re.IGNORECASE,
+)
+_SAFETY_ABSOLUTE_TERM = re.compile(
+    r"\b(?:eye[- ]safe|safe\s+for\s+accidental\s+eye\s+exposure|"
+    r"prevents?\s+retinal\s+damage|cannot\s+cause\s+eye\s+injury|"
+    r"no\s+risk\s+of\s+eye\s+injury)\b",
+    re.IGNORECASE,
+)
+_TECHNICAL_CHOICE_TERM = re.compile(
+    r"\b(?:class\s*(?:1|2|2m|3r|3a|3b|4)|\d{3,4}\s*nm|laser\s+class)\b",
+    re.IGNORECASE,
+)
+_EVIDENCE_OVERSTATEMENT_ERROR = (
+    "section contains authority or recommendation language unsupported by source-verified quote evidence"
+)
+_FRAME_OVERSTATEMENT_ERROR = (
+    "article frame contains authority, compliance, safety, or superlative language unsupported by source-verified quote evidence"
+)
 
 
 class SectionGenerationError(ContractValidationError):
@@ -183,7 +214,7 @@ def _selected_candidates(
                     "candidate_id": candidate_id,
                     "evidence_id": candidate.get("evidence_id", candidate_id),
                     "support": _truncate(candidate.get("support", ""), 700),
-                    "concepts": candidate.get("concepts", [])[:8],
+                    "support_basis": candidate.get("support_basis", "key_finding"),
                     "claim_types": candidate.get("claim_types", [])[:6],
                     "source_url": candidate.get("url", ""),
                 }
@@ -368,6 +399,7 @@ def build_section_generation_prompt(package: dict[str, Any]) -> dict[str, str]:
 Use only the supplied section contract, evidence, article candidates, and product candidates.
 Do not invent URLs, product IDs, article IDs, evidence IDs, specifications, statistics, laws, or claims.
 Do not output raw URLs, Markdown links, HTML links, an H1, or a second H2.
+For evidence candidates, support is the only factual source text. claim_types and all other fields are metadata, not facts. support_basis=verified_quote means the quote was explicitly verified against its source. support_basis=quote means quotation text exists but has not been source-verified. support_basis=key_finding means the support is a synthesized research note. Only verified_quote may support an authority attribution, regulatory recommendation or requirement, compliance/approval/acceptable-use conclusion, absolute safety claim, or superlative such as only/best/go-to/safest.
 Product candidates include a fit_level. A strong or approved_constraint candidate may be described only with the supplied attributes. A contextual candidate has limited section overlap. A related_catalog candidate is related to the article topic but is not an exact use-case match: it may be recommended as a related catalog option, but never claim it was designed for, proven for, compliant with, or specifically suitable for the exact section use case.
 Use approved placeholders only:
 [[ARTICLE:candidate_id|natural English anchor text]]
@@ -412,6 +444,94 @@ Return exactly two blocks and no other text:
     return {"system": system, "user": user}
 
 
+def _contains_strong_evidence_claim(text: str) -> bool:
+    clean = " ".join(str(text or "").split())
+    if not clean:
+        return False
+    absolute = re.search(
+        r"\b(?:only\s+choice|go-to\s+choice|best\s+choice|best\s+balance|"
+        r"safest\s+default|practical\s+sweet\s+spot)\b",
+        clean,
+        re.IGNORECASE,
+    )
+    if absolute:
+        return True
+    if _AUTHORITY_TERM.search(clean) and _STRONG_RECOMMENDATION_TERM.search(clean):
+        return True
+    if _AUTHORITY_TERM.search(clean) and _AUTHORITY_ATTRIBUTION_TERM.search(clean):
+        return True
+    if _SAFETY_ABSOLUTE_TERM.search(clean):
+        return True
+    if _TECHNICAL_CHOICE_TERM.search(clean) and re.search(
+        r"\b(?:recommended|compliant|acceptable|approved|should\s+stick)\b",
+        clean,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _evidence_support_basis(package: dict[str, Any]) -> dict[str, str]:
+    evidence = package.get("candidates", {}).get("evidence", [])
+    if not isinstance(evidence, list):
+        return {}
+    return {
+        str(item.get("evidence_id") or item.get("candidate_id") or ""): str(
+            item.get("support_basis") or "key_finding"
+        )
+        for item in evidence
+        if isinstance(item, dict)
+    }
+
+
+def _validate_section_evidence_strength(
+    markdown: str,
+    package: dict[str, Any],
+) -> None:
+    basis_by_id = _evidence_support_basis(package)
+    for block in re.split(r"\n\s*\n", markdown):
+        body_block = "\n".join(
+            line for line in block.splitlines() if not line.lstrip().startswith("#")
+        )
+        visible = _ARTICLE_PLACEHOLDER.sub(lambda match: match.group(2), body_block)
+        visible = _PRODUCT_PLACEHOLDER.sub(lambda match: match.group(2), visible)
+        visible = _CITE_PLACEHOLDER.sub("", visible)
+        if not _contains_strong_evidence_claim(visible):
+            continue
+        citation_ids = _CITE_PLACEHOLDER.findall(body_block)
+        if any(basis_by_id.get(item) == "verified_quote" for item in citation_ids):
+            continue
+        raise SectionGenerationError(_EVIDENCE_OVERSTATEMENT_ERROR)
+
+
+def validate_claim_evidence_strength(
+    claim_ledger: dict[str, Any],
+    context_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Fail closed on strong recommendations backed only by synthesized notes."""
+    if not isinstance(claim_ledger, dict):
+        raise SectionGenerationError("claim ledger must be an object")
+    registry = validate_candidate_registry(context_manifest.get("registry"))
+    basis_by_id = {
+        str(item.get("evidence_id") or item.get("candidate_id") or ""): str(
+            item.get("support_basis") or "key_finding"
+        )
+        for item in registry["evidence"]["candidates"]
+    }
+    for claim in claim_ledger.get("claims", []):
+        if not isinstance(claim, dict):
+            continue
+        text = str(claim.get("claim_text") or "")
+        if not _contains_strong_evidence_claim(text):
+            continue
+        evidence_ids = claim.get("evidence_ids") or []
+        if any(basis_by_id.get(str(item)) == "verified_quote" for item in evidence_ids):
+            continue
+        sentence_id = str(claim.get("sentence_id") or "unknown")
+        raise SectionGenerationError(f"{_EVIDENCE_OVERSTATEMENT_ERROR}: {sentence_id}")
+    return claim_ledger
+
+
 _SECTION_WORD_COUNT_ERROR = re.compile(
     r"^section word count (?P<count>\d+) is outside "
     r"(?P<minimum>\d+)-(?P<maximum>\d+)$"
@@ -454,6 +574,43 @@ def _build_word_count_repair_prompt(
         + response_text
     )
     return {"system": repair_system, "user": repair_user}
+
+
+def _build_section_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> tuple[dict[str, str], str] | None:
+    word_count_prompt = _build_word_count_repair_prompt(
+        package,
+        response_text,
+        error,
+    )
+    if word_count_prompt is not None:
+        return word_count_prompt, "word_count"
+    if str(error) != _EVIDENCE_OVERSTATEMENT_ERROR:
+        return None
+    base = build_section_generation_prompt(package)
+    repair_system = (
+        base["system"] + "\nThis is the only repair attempt for unsupported authority, compliance, "
+        "recommendation, or superlative language. Keep the exact approved H2, "
+        "answer the same reader question, and stay inside the same word-count and "
+        "paragraph contracts. Rewrite the overstatement as neutral analysis using "
+        "only each evidence candidate's support text. A key_finding may not be "
+        "presented as an authority's exact recommendation or requirement. Preserve "
+        "approved placeholder IDs where they remain relevant and keep decisions JSON "
+        "consistent with the final placeholders."
+    )
+    repair_user = (
+        base["user"]
+        + "\n\nEVIDENCE STRENGTH REPAIR\n"
+        + "Remove or qualify every unsupported recommendation, compliance claim, "
+        + "authority attribution, and absolute phrase such as only/best/go-to. Do not "
+        + "introduce any new fact, number, URL, product, law, or evidence ID. Return "
+        + "the complete two-block response again.\n\nPREVIOUS RESPONSE\n"
+        + response_text
+    )
+    return {"system": repair_system, "user": repair_user}, "evidence_strength"
 
 
 def _split_response(text: str, first: str, second: str) -> tuple[str, str]:
@@ -761,6 +918,7 @@ def parse_section_generation_response(
         raise SectionGenerationError(
             f"section must contain 2-5 coherent paragraphs (got {paragraph_count})"
         )
+    _validate_section_evidence_strength(markdown, validated_package)
     visible = _visible_markdown(markdown)
     word_count = len(_WORD.findall(visible))
     target = validated_package["target_words"]
@@ -999,6 +1157,7 @@ def run_section_generation_sequence(
     generated_count = 0
     resumed_count = 0
     word_count_retry_count = 0
+    evidence_strength_retry_count = 0
     for section_id in sections["section_order"]:
         package = build_section_generation_package(
             sections,
@@ -1014,19 +1173,23 @@ def run_section_generation_sequence(
             try:
                 output = parse_section_generation_response(response, package)
             except SectionGenerationError as exc:
-                repair_prompt = _build_word_count_repair_prompt(
+                repair = _build_section_repair_prompt(
                     package,
                     response,
                     exc,
                 )
-                if repair_prompt is None:
+                if repair is None:
                     raise
+                repair_prompt, repair_kind = repair
                 repaired_response = generate_text(
                     repair_prompt["system"],
                     repair_prompt["user"],
                 )
                 output = parse_section_generation_response(repaired_response, package)
-                word_count_retry_count += 1
+                if repair_kind == "word_count":
+                    word_count_retry_count += 1
+                else:
+                    evidence_strength_retry_count += 1
             persist_section_checkpoint(workspace, slug, package, output)
             generated_count += 1
         else:
@@ -1042,6 +1205,7 @@ def run_section_generation_sequence(
         "generated_count": generated_count,
         "resumed_count": resumed_count,
         "word_count_retry_count": word_count_retry_count,
+        "evidence_strength_retry_count": evidence_strength_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),
     }
 
@@ -1115,6 +1279,7 @@ def build_article_frame_prompt(package: dict[str, Any]) -> dict[str, str]:
     package = validate_article_frame_package(package)
     system = """Create the short framing components for an English article whose body sections are already complete.
 Use only the supplied section summaries. Do not introduce new specifications, statistics, legal claims, products, URLs, links, or citations.
+Summarize trade-offs neutrally. Do not state that an authority recommends, approves, accepts, or deems a product/class compliant. Do not use absolute phrases such as only choice, go-to choice, best choice, safest default, or practical sweet spot.
 Return exactly four blocks and no other text:
 ===INTRODUCTION===
 <80-180 words, one or two paragraphs, direct answer first>
@@ -1131,6 +1296,36 @@ Return exactly four blocks and no other text:
         sort_keys=True,
     )
     return {"system": system, "user": user}
+
+
+def _validate_article_frame_evidence_language(value: str) -> None:
+    for part in re.split(r"(?<=[.!?])\s+|\n+", value):
+        if _contains_strong_evidence_claim(part):
+            raise SectionGenerationError(_FRAME_OVERSTATEMENT_ERROR)
+
+
+def _build_article_frame_repair_prompt(
+    package: dict[str, Any],
+    response_text: str,
+    error: SectionGenerationError,
+) -> dict[str, str] | None:
+    if str(error) != _FRAME_OVERSTATEMENT_ERROR:
+        return None
+    base = build_article_frame_prompt(package)
+    return {
+        "system": (
+            base["system"] + "\nThis is the only repair attempt. Preserve the four-block protocol, "
+            "word/count limits, questions, and useful reader guidance, but rewrite "
+            "authority attributions, compliance claims, recommendations, and "
+            "superlatives as neutral trade-off language. Do not add facts."
+        ),
+        "user": (
+            base["user"]
+            + "\n\nFRAME EVIDENCE STRENGTH REPAIR\n"
+            + "Remove unsupported recommended/compliant/only/best/go-to wording and "
+            "return the complete four-block response again.\n\nPREVIOUS RESPONSE\n" + response_text
+        ),
+    }
 
 
 def _between(text: str, start: str, end: str | None) -> str:
@@ -1170,6 +1365,7 @@ def parse_article_frame_response(
         raise SectionGenerationError("article frame must be English")
     if _RAW_URL.search(combined) or _RAW_MARKDOWN_LINK.search(combined):
         raise SectionGenerationError("article frame must not contain links")
+    _validate_article_frame_evidence_language(combined)
     requirements = package["requirements"]
     intro_words = len(_WORD.findall(intro))
     conclusion_words = len(_WORD.findall(conclusion))
@@ -1273,6 +1469,7 @@ def validate_article_frame_output(
         or _HTML_LINK.search(combined)
     ):
         raise SectionGenerationError("article frame output must not contain links")
+    _validate_article_frame_evidence_language(combined)
     requirements = validated_package["requirements"]
     intro_words = len(_WORD.findall(introduction))
     conclusion_words = len(_WORD.findall(conclusion))
@@ -1384,9 +1581,31 @@ def run_article_frame_generation(
     package = build_article_frame_package(section_run)
     output = load_article_frame_checkpoint(workspace, slug, package) if resume else None
     if output is not None:
-        return {"output": output, "generated": False, "resumed": True}
+        return {
+            "output": output,
+            "generated": False,
+            "resumed": True,
+            "evidence_strength_repaired": False,
+        }
     prompt = build_article_frame_prompt(package)
     response = generate_text(prompt["system"], prompt["user"])
-    output = parse_article_frame_response(response, package)
+    try:
+        output = parse_article_frame_response(response, package)
+        repaired = False
+    except SectionGenerationError as exc:
+        repair_prompt = _build_article_frame_repair_prompt(package, response, exc)
+        if repair_prompt is None:
+            raise
+        repaired_response = generate_text(
+            repair_prompt["system"],
+            repair_prompt["user"],
+        )
+        output = parse_article_frame_response(repaired_response, package)
+        repaired = True
     persist_article_frame_checkpoint(workspace, slug, package, output)
-    return {"output": output, "generated": True, "resumed": False}
+    return {
+        "output": output,
+        "generated": True,
+        "resumed": False,
+        "evidence_strength_repaired": repaired,
+    }

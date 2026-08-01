@@ -2,6 +2,36 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第八次 shadow 结构成功，但语义验收拒绝 promotion
+
+- 基线 `a2b19e88c92483e46d273e5f9053c2b22e1ced80` 下，Action #3 在非沙箱主机
+  只执行一次 `--resume-existing`：POST=1、未外层重试，结果 `success`，新增
+  `assembled-draft.md`、`assembled-claim-ledger.json`、`assembly-report.json` 和
+  `shadow-comparison-action-3.json`。正式 draft、claim ledger、w2-state、`.env`、
+  Action 和 Git 均未变化；`ai_runs 157→172`，promotion manifest 不存在，rollout
+  最终 off。
+- 自动结构门禁通过：comparison blockers=[]，推荐值为
+  `eligible_for_single_action_promotion`；新稿约 3380 词、41 claims、12 个链接，
+  全部 URL 唯一。该值只是机器结构资格，不是最终推广批准。
+- MCP 人工语义验收拒绝 promotion。正文把空 quote 的合成 key finding 写成
+  “OSHA/FDA 推荐或允许 Class 3R”“Class 2 是 safest default”“532nm 是 the only
+  choice”等权威归因、合规结论和绝对安全措辞。当前 12 条证据有 4 条 quote 文本、
+  8 条只有 key finding，但 0 条带 `quote_verified=true`；旧 assembled claim ledger
+  至少 8 条高风险 claim
+  只依赖空 quote 的研究摘要。正式候选不得推广。
+- 修复将 `support_basis=verified_quote|quote|key_finding` 从 evidence ledger 恢复到旧 Action 的
+  内存 cards，不改源文件；检索 concepts 不再进入写作事实上下文。权威归因、监管/
+  合规推荐、绝对安全和 only/best/go-to 等绝对措辞必须有 verified-quote evidence，
+  否则正文或 frame 只允许一次受控中和改写；合并后的 claim ledger 在 assembly 前
+  再次 fail-closed。
+- Legacy brief 中 `the only choice` 会变为 `A Practical Choice`，但 stable section ID
+  映射保持不变。真实只读验证确认 6 个 section ID 未变，旧 checkpoint 因新的 package
+  SHA 全部自动失效；三档证据门禁把旧成功候选的首个 blocker 提前捕获为 S005。
+  不得手工删除 checkpoint。
+- 下一步：完成测试、提交并 push；push 独立核验后，再运行一次单独 shadow。即使下一次
+  机器 comparison 仍显示 eligible，也必须再次逐条验收正文、claim ledger、assembly 和
+  comparison，禁止自动 promotion。
+
 ## 2026-08-01 — 第七次 shadow：章节仅差 4 词时受控修订
 
 - `8922636` 推送后，Action #3 在非沙箱主机只执行一次

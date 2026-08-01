@@ -5,10 +5,14 @@ from dataclasses import replace
 
 import pytest
 
-from seo_ops.services.legacy_workflow import stage_sectional_shadow_existing_pair
+from seo_ops.services.legacy_workflow import (
+    _evidence_card,
+    stage_sectional_shadow_existing_pair,
+)
 from seo_ops.services.sectional_assembly import validate_assembly_metadata
 from seo_ops.services.sectional_legacy_adapter import (
     SectionalLegacyAdapterError,
+    _with_evidence_support_basis,
     build_legacy_assembly_metadata,
     run_existing_legacy_sectional_shadow,
     run_legacy_sectional_rollout,
@@ -44,6 +48,84 @@ SEO Keywords: professional ceiling marking tools, worksite marking
 
 Legacy body.
 """
+
+
+def test_existing_cards_recover_quote_basis_from_evidence_ledger(tmp_path):
+    research = tmp_path / "research"
+    research.mkdir()
+    (research / "evidence-ledger-guide.json").write_text(
+        json.dumps(
+            {
+                "evidence": [
+                    {
+                        "evidence_id": "ev_verified",
+                        "quote": "Verified source text.",
+                        "quote_verified": True,
+                    },
+                    {"evidence_id": "ev_quote", "quote": "Unverified quote text."},
+                    {"evidence_id": "ev_note", "quote": "", "key_finding": "Note."},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cards = {
+        "all_cards": [
+            {"evidence_id": "ev_verified", "support": "Verified source text."},
+            {"evidence_id": "ev_quote", "support": "Unverified quote text."},
+            {"evidence_id": "ev_note", "support": "Note."},
+        ],
+        "sections": [
+            {
+                "cards": [
+                    {"evidence_id": "ev_quote", "support": "Exact source text."},
+                    {"evidence_id": "ev_unknown", "support": "Unknown."},
+                ]
+            }
+        ],
+    }
+
+    annotated = _with_evidence_support_basis(tmp_path, "guide", cards)
+
+    assert [item["support_basis"] for item in annotated["all_cards"]] == [
+        "verified_quote",
+        "quote",
+        "key_finding",
+    ]
+    assert [item["support_basis"] for item in annotated["sections"][0]["cards"]] == [
+        "quote",
+        "key_finding",
+    ]
+    assert "support_basis" not in cards["all_cards"][0]
+
+
+def test_new_evidence_cards_distinguish_verified_unverified_and_key_finding():
+    verified = _evidence_card(
+        {
+            "evidence_id": "ev_verified",
+            "source_url": "https://source.example/verified",
+            "quote": "Verified text.",
+            "quote_verified": True,
+        }
+    )
+    unverified = _evidence_card(
+        {
+            "evidence_id": "ev_quote",
+            "source_url": "https://source.example/quote",
+            "quote": "Unverified text.",
+        }
+    )
+    finding = _evidence_card(
+        {
+            "evidence_id": "ev_note",
+            "source_url": "https://source.example/note",
+            "key_finding": "Synthesized note.",
+        }
+    )
+
+    assert verified["support_basis"] == "verified_quote"
+    assert unverified["support_basis"] == "quote"
+    assert finding["support_basis"] == "key_finding"
 
 
 def test_build_metadata_from_legacy_frontmatter():

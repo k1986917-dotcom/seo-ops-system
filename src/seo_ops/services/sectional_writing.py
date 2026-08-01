@@ -111,6 +111,22 @@ def _normalized_heading(heading: str) -> str:
     return _text(value, "heading")
 
 
+def _neutralized_heading(heading: str) -> str:
+    """Soften unsupported absolute outline language without changing its ID."""
+    normalized = _normalized_heading(heading)
+    return re.sub(
+        r"\bthe\s+only\s+choice\b",
+        "A Practical Choice",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+
+
+def _stable_heading_identity(heading: str) -> str:
+    normalized = _normalized_heading(heading).casefold()
+    return re.sub(r"\ba\s+practical\s+choice\b", "the only choice", normalized)
+
+
 def _contains_cjk(value: str) -> bool:
     return bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", value))
 
@@ -133,7 +149,7 @@ def stable_section_id(position: int, heading: str) -> str:
     """Return a stable section ID that survives harmless outline reordering."""
     if isinstance(position, bool) or not isinstance(position, int) or position < 1:
         raise ContractValidationError("position must be an integer >= 1")
-    normalized = _normalized_heading(heading).casefold()
+    normalized = _stable_heading_identity(heading)
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:10]
     return f"section-{digest}"
 
@@ -190,7 +206,7 @@ def build_article_blueprint(
     sections: list[dict[str, Any]] = []
     seen_headings: set[str] = set()
     for position, raw_heading in enumerate(outline, start=1):
-        heading = _normalized_heading(raw_heading)
+        heading = _neutralized_heading(raw_heading)
         heading_key = heading.casefold()
         if heading_key in seen_headings:
             raise ContractValidationError(f"duplicate outline heading: {heading}")
@@ -442,7 +458,7 @@ def build_contract_bundle_from_brief(
         guidance=guidance,
         content_language=content_language,
     )
-    by_heading = {item["heading"]: item for item in body_specs}
+    by_heading = {_neutralized_heading(item["heading"]): item for item in body_specs}
     for section in bundle["section_contracts"]["sections"]:
         spec = by_heading[section["heading"]]
         bullets = spec["bullets"]
@@ -466,8 +482,16 @@ def build_contract_bundle_from_brief(
                 "min": max(1, round(target_words * 0.75)),
                 "max": round(target_words * 1.25),
             }
-        if approved_product_constraints and section["heading"] in (approved_product_constraints):
-            section["product_constraints"] = approved_product_constraints[section["heading"]]
+        if approved_product_constraints:
+            constraint_key = (
+                section["heading"]
+                if section["heading"] in approved_product_constraints
+                else spec["heading"]
+                if spec["heading"] in approved_product_constraints
+                else ""
+            )
+            if constraint_key:
+                section["product_constraints"] = approved_product_constraints[constraint_key]
     validate_section_contracts(
         bundle["section_contracts"],
         bundle["article_blueprint"],

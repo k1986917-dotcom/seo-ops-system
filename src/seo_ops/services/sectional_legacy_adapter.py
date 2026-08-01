@@ -269,6 +269,54 @@ def _load_json(path: Path, field: str) -> dict[str, Any]:
     return value
 
 
+def _with_evidence_support_basis(
+    workspace: Path,
+    slug: str,
+    cards: dict[str, Any],
+) -> dict[str, Any]:
+    """Annotate persisted legacy cards without mutating their source files.
+
+    Older R3 hand-offs predate ``support_basis``.  The original evidence ledger
+    still records whether a card came from an exact quote or only a synthesized
+    key finding, so shadow generation can recover that distinction in memory.
+    Unknown/missing entries are treated conservatively as key findings.
+    """
+    evidence_ledger_path = Path(workspace) / "research" / f"evidence-ledger-{slug}.json"
+    evidence_ledger = (
+        _load_json(evidence_ledger_path, "evidence ledger")
+        if evidence_ledger_path.exists()
+        else {"evidence": []}
+    )
+    basis_by_id = {
+        str(item.get("evidence_id") or ""): (
+            "verified_quote"
+            if str(item.get("quote") or "").strip()
+            and item.get("quote_verified") is True
+            else "quote"
+            if str(item.get("quote") or "").strip()
+            else "key_finding"
+        )
+        for item in evidence_ledger.get("evidence", [])
+        if isinstance(item, dict) and item.get("evidence_id")
+    }
+    annotated = json.loads(json.dumps(cards, ensure_ascii=False))
+
+    def annotate(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            evidence_id = str(item.get("evidence_id") or "")
+            item["support_basis"] = basis_by_id.get(evidence_id, "key_finding")
+
+    annotate(annotated.get("all_cards"))
+    for section in annotated.get("sections", []):
+        if isinstance(section, dict):
+            annotate(section.get("cards"))
+    return annotated
+
+
 def _latest_formal_draft(workspace: Path, slug: str) -> Path:
     candidates = [
         path for path in (Path(workspace) / "drafts").glob(f"{slug}-*.md") if path.is_file()
@@ -405,6 +453,11 @@ async def run_existing_legacy_sectional_shadow(
             "evidence cards",
         ),
     }
+    contracts["cards"] = _with_evidence_support_basis(
+        workspace,
+        slug,
+        contracts["cards"],
+    )
     brief = contracts["brief"]
     tier, tier_source = _resolve_existing_pair_tier(
         workspace=workspace,

@@ -146,6 +146,52 @@ def test_evidence_registry_accepts_markdown_wrapped_source_url():
     )
 
 
+def test_evidence_registry_preserves_quote_vs_key_finding_basis():
+    cards = {
+        "all_cards": [
+            {
+                "evidence_id": "ev_verified",
+                "source_url": "https://source.example/verified",
+                "support": "Verified exact source language.",
+                "support_basis": "verified_quote",
+                "concepts": ["source"],
+                "claim_types": ["regulatory"],
+                "required": False,
+            },
+            {
+                "evidence_id": "ev_quote",
+                "source_url": "https://source.example/quote",
+                "support": "Exact source language.",
+                "support_basis": "quote",
+                "concepts": ["source"],
+                "claim_types": ["regulatory"],
+                "required": False,
+            },
+            {
+                "evidence_id": "ev_note",
+                "source_url": "https://source.example/note",
+                "support": "Synthesized research note.",
+                "concepts": ["research"],
+                "claim_types": ["guidance"],
+                "required": False,
+            },
+        ]
+    }
+    registry = build_candidate_registry(
+        internal_links_map=INTERNAL_LINKS,
+        product_report=LASER_PRODUCTS,
+        evidence_cards=cards,
+    )
+
+    by_id = {
+        item["evidence_id"]: item
+        for item in registry["evidence"]["candidates"]
+    }
+    assert by_id["ev_verified"]["support_basis"] == "verified_quote"
+    assert by_id["ev_quote"]["support_basis"] == "quote"
+    assert by_id["ev_note"]["support_basis"] == "key_finding"
+
+
 def test_common_site_topic_words_cannot_create_false_article_opportunity():
     links = """# Internal Links
 

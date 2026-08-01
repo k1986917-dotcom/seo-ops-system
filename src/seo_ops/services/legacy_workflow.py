@@ -767,6 +767,7 @@ def _write_evidence_ledger(
             "evidence_id": ev_id,
             "source_url": source_url,
             "quote": quote,
+            "quote_verified": ent.get("source_quote_verified") is True,
             "key_finding": key_finding,
             "canonical_concepts": concepts,
             "claim_types": claim_types,
@@ -1202,11 +1203,20 @@ def _brief_outline(brief_text: str, topic: str) -> list[str]:
 
 def _evidence_card(entry: dict[str, Any]) -> dict[str, Any]:
     """Keep exact IDs and short source text; never summarize away evidence."""
-    support = str(entry.get("quote") or entry.get("key_finding") or "").strip()
+    quote = str(entry.get("quote") or "").strip()
+    support = quote or str(entry.get("key_finding") or "").strip()
+    support_basis = (
+        "verified_quote"
+        if quote and entry.get("quote_verified") is True
+        else "quote"
+        if quote
+        else "key_finding"
+    )
     return {
         "evidence_id": str(entry.get("evidence_id") or ""),
         "source_url": str(entry.get("source_url") or ""),
         "support": support[:_EVIDENCE_CARD_TEXT_LIMIT],
+        "support_basis": support_basis,
         "concepts": list(entry.get("canonical_concepts") or []),
         "claim_types": list(entry.get("claim_types") or []),
         "required": bool(entry.get("required")),

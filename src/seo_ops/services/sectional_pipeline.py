@@ -33,6 +33,7 @@ from seo_ops.services.sectional_delivery import (
 from seo_ops.services.sectional_generation import (
     run_article_frame_generation,
     run_section_generation_sequence,
+    validate_claim_evidence_strength,
 )
 from seo_ops.services.sectional_writing import (
     ContractValidationError,
@@ -196,6 +197,10 @@ def run_sectional_shadow_candidate(
             shadow["context_manifest"],
             ledger_run,
         )
+        validate_claim_evidence_strength(
+            claim_ledger,
+            shadow["context_manifest"],
+        )
         from seo_ops.services.sectional_assembly import assemble_sectional_article
 
         assembly = assemble_sectional_article(delivery, clean_metadata, claim_ledger)
@@ -223,8 +228,11 @@ def run_sectional_shadow_candidate(
         "section_count": len(section_run["section_order"]),
         "generated_sections": section_run["generated_count"],
         "resumed_sections": section_run["resumed_count"],
+        "section_word_count_retries": section_run["word_count_retry_count"],
         "frame_generated": bool(frame_run["generated"]),
         "frame_resumed": bool(frame_run["resumed"]),
+        "section_evidence_strength_retries": section_run["evidence_strength_retry_count"],
+        "frame_evidence_strength_repaired": bool(frame_run["evidence_strength_repaired"]),
         "generated_ledgers": ledger_run["generated_count"],
         "resumed_ledgers": ledger_run["resumed_count"],
         "run_metrics": counters,
@@ -252,6 +260,8 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         "section_count",
         "generated_sections",
         "resumed_sections",
+        "section_word_count_retries",
+        "section_evidence_strength_retries",
         "generated_ledgers",
         "resumed_ledgers",
         "max_ai_calls",
@@ -265,6 +275,10 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         assembly["delivery"]["section_order"]
     ):
         raise SectionalPipelineError("pipeline ledger counts do not reconcile")
+    if not isinstance(result.get("frame_evidence_strength_repaired"), bool):
+        raise SectionalPipelineError(
+            "pipeline result frame_evidence_strength_repaired is invalid"
+        )
     counters = result.get("run_metrics")
     if not isinstance(counters, dict):
         raise SectionalPipelineError("pipeline run_metrics are missing")

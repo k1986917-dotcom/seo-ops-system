@@ -439,10 +439,17 @@ def parse_evidence_registry(evidence_cards: dict[str, Any]) -> dict[str, Any]:
         evidence_id = _clean_text(raw.get("evidence_id"))
         url = _extract_url(_clean_text(raw.get("source_url")))
         support = _clean_text(raw.get("support"))
+        support_basis = _clean_text(raw.get("support_basis")) or "key_finding"
         if not evidence_id or evidence_id in seen or not support or not _valid_url(url):
             rejected.append({
                 "identity": evidence_id or url,
                 "reason_code": "invalid_or_duplicate_evidence_card",
+            })
+            continue
+        if support_basis not in {"verified_quote", "quote", "key_finding"}:
+            rejected.append({
+                "identity": evidence_id,
+                "reason_code": "invalid_evidence_support_basis",
             })
             continue
         seen.add(evidence_id)
@@ -455,6 +462,7 @@ def parse_evidence_registry(evidence_cards: dict[str, Any]) -> dict[str, Any]:
             "evidence_id": evidence_id,
             "url": _canonical_url(url),
             "support": support,
+            "support_basis": support_basis,
             "concepts": concepts,
             "claim_types": claim_types,
             "required": bool(raw.get("required")),

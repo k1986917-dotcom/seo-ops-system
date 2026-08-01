@@ -76,6 +76,22 @@ def test_section_ids_survive_outline_reordering():
     assert first_ids == reordered_ids
 
 
+def test_only_choice_heading_is_neutralized_without_section_id_churn():
+    original = "Why Green (532nm) Is the Only Choice for Ceiling Pointing"
+    neutral = "Why Green (532nm) Is A Practical Choice for Ceiling Pointing"
+    blueprint = build_contract_bundle(
+        topic="Ceiling Pointing Guide",
+        tier="Cluster Content",
+        intent="Explain wavelength trade-offs without unsupported absolutes.",
+        outline=[original],
+    )["article_blueprint"]
+
+    section = blueprint["sections"][0]
+    assert section["heading"] == neutral
+    assert section["section_id"] == stable_section_id(1, original)
+    assert stable_section_id(1, neutral) == stable_section_id(1, original)
+
+
 def test_reader_stages_control_initial_product_link_policy():
     bundle = _bundle()
     sections = bundle["section_contracts"]["sections"]
@@ -241,6 +257,29 @@ def test_numbered_bold_legacy_outline_rebuilds_english_h2_contracts():
         }
     ]
     assert sections[1]["brief_points"] == ["Compare the options with evidence"]
+
+
+def test_brief_only_choice_heading_is_neutralized_with_points_preserved():
+    original = "Why Green (532nm) Is the Only Choice for Ceiling Pointing"
+    brief = f"""## 3. Recommended Outline
+
+```
+H2: {original} (400 words)
+- Compare visibility and power trade-offs using evidence
+```
+"""
+
+    bundle = build_contract_bundle_from_brief(
+        topic="Ceiling Pointing Guide",
+        tier="Cluster Content",
+        intent="Explain wavelength trade-offs.",
+        brief_text=brief,
+    )
+    section = bundle["section_contracts"]["sections"][0]
+
+    assert section["heading"] == ("Why Green (532nm) Is A Practical Choice for Ceiling Pointing")
+    assert section["section_id"] == stable_section_id(1, original)
+    assert section["brief_points"] == ["Compare visibility and power trade-offs using evidence"]
 
 
 def test_brief_with_only_deferred_frame_headings_is_rejected():
