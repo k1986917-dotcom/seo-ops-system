@@ -254,6 +254,11 @@ def _separated_internal_link_response(package):
     return response.replace(collision, separated)
 
 
+def _replace_response_decisions(response, decisions):
+    markdown = response.split(SECTION_DECISIONS_MARKER, 1)[0]
+    return markdown + SECTION_DECISIONS_MARKER + "\n" + json.dumps(decisions, sort_keys=True)
+
+
 def _package_from_prompt(user_prompt: str):
     payload = user_prompt.split("SECTION PACKAGE\n", 1)[1]
     return json.JSONDecoder().raw_decode(payload)[0]
@@ -1348,7 +1353,22 @@ def test_sequence_repairs_same_sentence_internal_link_collision(tmp_path):
             target_attempts += 1
             if target_attempts == 1:
                 return _same_sentence_internal_link_collision_response(package)
-            return _separated_internal_link_response(package)
+            repaired = _separated_internal_link_response(package)
+            wrong = {
+                "article_links": {
+                    "used_ids": [],
+                    "reason_code": "not_needed_for_this_section",
+                },
+                "product_links": {
+                    "used_ids": [],
+                    "reason_code": "not_needed_for_this_section",
+                },
+                "external_citations": {
+                    "used_ids": [],
+                    "reason_code": "not_needed_for_this_section",
+                },
+            }
+            return _replace_response_decisions(repaired, wrong)
         return _response(package)
 
     result = run_section_generation_sequence(
@@ -1367,6 +1387,58 @@ def test_sequence_repairs_same_sentence_internal_link_collision(tmp_path):
     assert len(select_calls) == 2
     assert "INTERNAL LINK LAYOUT REPAIR" in select_calls[1][1]
     assert "PREVIOUS RESPONSE" in select_calls[1][2]
+    select_output = next(
+        item for item in result["outputs"] if item["section_id"] == sections["section_order"][1]
+    )
+    assert select_output["decisions"] == {
+        link_type: {
+            "used_ids": select_output["used_ids"][link_type],
+            "reason_code": (
+                "used_approved_candidate"
+                if select_output["used_ids"][link_type]
+                else "not_needed_for_this_section"
+            ),
+        }
+        for link_type in ("article_links", "product_links", "external_citations")
+    }
+
+
+def test_link_layout_repair_rejects_changed_placeholder_inventory(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def change_inventory(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] != "select":
+            return _response(package)
+        target_attempts += 1
+        if target_attempts == 1:
+            return _same_sentence_internal_link_collision_response(package)
+        repaired = _separated_internal_link_response(package)
+        article_id = package["link_gates"]["article_links"]["selected_ids"][0]
+        return repaired.replace(
+            f"[[ARTICLE:{article_id}|detailed tool selection guidance]]",
+            "detailed tool selection guidance",
+        )
+
+    with pytest.raises(
+        SectionGenerationError,
+        match="link_layout repair failed: link_layout repair changed placeholder inventory or order",
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=change_inventory,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 2
 
 
 def test_sequence_stops_after_one_link_layout_retry(tmp_path):

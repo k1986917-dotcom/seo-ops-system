@@ -1066,6 +1066,69 @@ def _placeholder_inventory(markdown: str) -> dict[str, list[str]]:
     }
 
 
+def _placeholder_token_sequence(markdown: str) -> list[str]:
+    matches: list[tuple[int, str]] = []
+    for pattern in (_ARTICLE_PLACEHOLDER, _PRODUCT_PLACEHOLDER, _CITE_PLACEHOLDER):
+        matches.extend((match.start(), match.group(0)) for match in pattern.finditer(markdown))
+    return [token for _, token in sorted(matches)]
+
+
+def _canonical_decisions_for_inventory(
+    inventory: dict[str, list[str]],
+    package: dict[str, Any],
+) -> dict[str, Any]:
+    decisions: dict[str, Any] = {}
+    for link_type in _LINK_TYPES:
+        gate = package["link_gates"][link_type]
+        used_ids = list(inventory[link_type])
+        if used_ids:
+            reason = "used_approved_candidate"
+        elif gate["opportunity_state"] == "none":
+            reason = gate["reason_code"]
+        else:
+            reason = "not_needed_for_this_section"
+        decisions[link_type] = {
+            "used_ids": used_ids,
+            "reason_code": reason,
+        }
+    return _validate_decisions(decisions, inventory, package)
+
+
+def _canonicalize_link_layout_repair_response(
+    previous_response: str,
+    repaired_response: str,
+    package: dict[str, Any],
+) -> str:
+    """Keep formatting-only repairs from rewriting redundant decisions JSON.
+
+    The repaired Markdown is accepted only when every exact placeholder token,
+    including anchor text and global order, matches the response that triggered
+    the layout repair.  The server then regenerates decisions from that immutable
+    placeholder inventory and still validates all package gates fail-closed.
+    """
+    previous_markdown, _ = _split_response(
+        previous_response,
+        SECTION_MARKDOWN_MARKER,
+        SECTION_DECISIONS_MARKER,
+    )
+    repaired_markdown, _ = _split_response(
+        repaired_response,
+        SECTION_MARKDOWN_MARKER,
+        SECTION_DECISIONS_MARKER,
+    )
+    if _placeholder_token_sequence(previous_markdown) != _placeholder_token_sequence(
+        repaired_markdown
+    ):
+        raise SectionGenerationError("link_layout repair changed placeholder inventory or order")
+    inventory = _placeholder_inventory(repaired_markdown)
+    decisions = _canonical_decisions_for_inventory(inventory, package)
+    return (
+        f"{SECTION_MARKDOWN_MARKER}\n{repaired_markdown}\n"
+        f"{SECTION_DECISIONS_MARKER}\n"
+        f"{json.dumps(decisions, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
 def parse_section_placeholders(markdown: str) -> dict[str, list[dict[str, str]]]:
     """Return validated placeholder records without exposing registry URLs.
 
@@ -1613,6 +1676,12 @@ def run_section_generation_sequence(
                 else:
                     evidence_strength_retry_count += 1
                 try:
+                    if repair_kind == "link_layout":
+                        repaired_response = _canonicalize_link_layout_repair_response(
+                            response,
+                            repaired_response,
+                            package,
+                        )
                     output = parse_section_generation_response(repaired_response, package)
                 except SectionGenerationError as repair_exc:
                     final_repair = _build_final_section_repair_prompt(
@@ -1640,6 +1709,12 @@ def run_section_generation_sequence(
                     else:
                         evidence_strength_retry_count += 1
                     try:
+                        if final_kind == "link_layout":
+                            final_response = _canonicalize_link_layout_repair_response(
+                                repaired_response,
+                                final_response,
+                                package,
+                            )
                         output = parse_section_generation_response(final_response, package)
                     except SectionGenerationError as final_exc:
                         raise SectionGenerationError(

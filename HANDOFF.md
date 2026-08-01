@@ -2,6 +2,40 @@
 
 最后更新：2026-08-01（Europe/Paris）
 
+## 2026-08-01 — 第十七次普通 resume：字数已通过，429 停在 decisions 抄写不一致
+
+- `b537776` 已由本机推送并核验本地/远端一致；随后只执行一次普通
+  `tools/run_sectional_shadow.py --action-id 3 --resume-existing --ai-call-limit 36`，
+  POST=1、无外层重试、未 refresh、未 promotion。
+- 901、049 合法恢复；429 本轮不再触发 502/500 字数门禁，证明 final word trim 修复已
+  生效。新首错推进为同段多内链；模型执行一次 link-layout repair 后，Markdown 已进入
+  decisions 校验，但返回的 `article_links.used_ids` 与正文 placeholders 不一致，报
+  `link_layout repair failed: article_links decisions do not match section placeholders`。
+  429 未持久化，后三节未到达；active 仍为 17 个 checkpoints，archive=2，无终态文件。
+- 正式 draft、claim ledger、w2-state、`.env`、Action 与 Git 均未变化；
+  `ai_runs 208→210`，DB SHA 变为
+  `52af26a637cfc8ba203c490fafd8a47465ecb587ec075f617f737f3625bcd4be`。
+- MCP 独立确认根因是 parser 顺序：同段多内链在 decisions JSON 解析之前即抛错；随后本应
+  只改排版的 AI repair 被要求同时重写冗余 decisions JSON。模型可以正确拆段，却在
+  `used_ids` 抄写上制造新的失败。
+- 本次修复不放宽任何链接门禁：
+  1. link-layout repair 后，服务端比较修订前后完整 placeholder token 序列；ARTICLE、
+     PRODUCT、CITE 的 ID、anchor、数量和全局顺序必须逐字一致；
+  2. 只有 token 序列完全不变时，服务端才根据修订后 Markdown inventory 生成规范
+     decisions，并继续执行原有 allowed/min/max/required/prohibited 校验；
+  3. 模型返回的错误或无效 decisions 不再阻断纯排版修复，因为该 JSON 只是 Markdown
+     placeholders 的冗余表示；
+  4. 任何 placeholder 被增删、替换、改 anchor 或重排，仍立即以
+     `link_layout repair changed placeholder inventory or order` 停止；不会被规范化掩盖；
+  5. 该逻辑同时适用于直接 link-layout repair 和 evidence repair 后新暴露的 final
+     link-layout repair；同类修订次数上限不变。
+- 验证：link-layout 专项 4/4 passed；sectional 非 Web 204/204 passed；Legacy/W1b 非 Web
+  237/237 passed；Ruff、format、compileall、`git diff --check` passed。Web template 的
+  `/etc/mime.types` Landlock 限制继续排除。
+- 当前真实基线：Action #3=`w1b_pre_check/in_progress`，`ai_runs=210`，active=17，archive=2，
+  promotion manifest 不存在，正式四个 SHA 未变。提交并推送后下一步只运行一次普通
+  `--resume-existing --ai-call-limit 36`；不得 refresh、第二次 runner 或 promotion。
+
 ## 2026-08-01 — 第十六次 refresh-complete：归档成功，429 停在 502/500 字数门禁
 
 - `53852b2` 已由本机推送并核验本地/远端一致；随后只执行一次经审查允许的

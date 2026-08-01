@@ -39,6 +39,14 @@
 
 ### Fixed
 
+- Formatting-only sectional link-layout recovery now treats Markdown
+  placeholders as the authoritative inventory and decisions JSON as redundant
+  metadata. A repaired response is accepted only when every exact ARTICLE,
+  PRODUCT, and CITE token—including anchor text and global order—matches the
+  response that triggered the layout repair. The server then regenerates and
+  validates canonical decisions from that immutable inventory. A model may no
+  longer fail an otherwise valid paragraph split by miscopying `used_ids`, while
+  any added, removed, reordered, or changed placeholder still fails closed.
 - Sectional word-count recovery now distinguishes normal content adjustment from
   a final deletion-only trim. The first repair receives an exact add/delete
   budget instead of a vague expand/trim instruction. If an over-limit response

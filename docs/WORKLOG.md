@@ -1,3 +1,29 @@
+## 2026-08-01 — Canonicalize decisions after formatting-only link repair
+
+### 第十七次真实普通 resume
+
+- `b537776` 推送后只执行一次普通 resume，POST=1、无外层重试、未 refresh/promotion。
+- 429 已不再触发 502/500 字数失败；首错推进到 link-layout repair 后的
+  `article_links decisions do not match section placeholders`。正式 pair 与 Action 不变；
+  `ai_runs 208→210`，DB SHA=`52af26a6...`，active=17，archive=2。
+
+### 根因与修复
+
+- Layout validator 在 decisions 解析前停止，因此 repair 的真实任务仅是拆段；旧实现却要求
+  模型同时重新抄写 decisions JSON，导致 Markdown 修好后被冗余 JSON 抄写错误阻断。
+- 新逻辑比较修订前后每个完整 placeholder token，包含类型、ID、anchor 和全局顺序。
+  完全一致时由服务端从 Markdown inventory 生成 canonical decisions，并继续执行全部
+  gate 校验。
+- 模型若增删、替换、改 anchor 或重排 placeholder，仍 fail-closed；规范化仅消除冗余
+  decisions 的抄写漂移，不改变链接选择或门禁。
+
+### 验证与下一步
+
+- Link-layout 专项 4/4 passed；sectional 非 Web 204/204 passed；Legacy/W1b 非 Web
+  237/237 passed；静态检查全部通过。
+- 当前 ai_runs=210、active=17、archive=2、promotion manifest=false、正式四个 SHA 未变。
+  推送后只运行一次普通 resume；不得 refresh-complete。
+
 ## 2026-08-01 — Add deletion-only final word-count trim
 
 ### 第十六次真实 refresh-complete
