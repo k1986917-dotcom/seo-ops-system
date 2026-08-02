@@ -194,6 +194,7 @@ def build_shadow_comparison(
     topic: str,
     old_draft: str,
     old_claim_ledger: dict[str, Any],
+    old_claim_sha256: str,
     new_assembly: dict[str, Any],
     run_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -204,6 +205,8 @@ def build_shadow_comparison(
         raise SectionalRolloutError("old_draft must be non-empty")
     if not isinstance(old_claim_ledger, dict):
         raise SectionalRolloutError("old_claim_ledger must be an object")
+    if not isinstance(old_claim_sha256, str) or not _SHA256.fullmatch(old_claim_sha256):
+        raise SectionalRolloutError("old_claim_sha256 must be a 64-hex SHA-256")
     old_sha = hashlib.sha256(old_draft.encode("utf-8")).hexdigest()
     if old_claim_ledger.get("draft_sha256") != old_sha:
         raise SectionalRolloutError("old claim ledger does not match the old draft")
@@ -236,6 +239,7 @@ def build_shadow_comparison(
     metrics["completion_tokens"] = completion_tokens
     metrics["completion_tokens_known"] = completion_tokens is not None
     old_metrics = _draft_metrics(old_draft, old_claim_ledger)
+    old_metrics["claim_ledger_sha256"] = old_claim_sha256
     new_metrics = _draft_metrics(assembly["draft_markdown"], assembly["claim_ledger"])
     new_metrics["binding_counts"] = {
         kind: sum(1 for item in assembly["delivery"]["bindings"] if item["kind"] == kind)
@@ -510,6 +514,11 @@ def _operator_override_allowed(
         raise SectionalRolloutError(
             "operator override may only override exactly ['excessive_ai_retries']"
         )
+    old_metrics = report.get("old") or {}
+    if "claim_ledger_sha256" not in old_metrics:
+        raise SectionalRolloutError(
+            "operator override requires the formal claim anchor in the comparison"
+        )
     audit = validated_assembly.get("audit") or {}
     if audit.get("passed") is not True:
         raise SectionalRolloutError("operator override requires assembly audit passed")
@@ -613,10 +622,25 @@ def promote_sectional_assembly(
         raise SectionalRolloutError("formal draft and claim ledger must already exist")
     old_draft = draft_path.read_bytes()
     old_claim = claim_path.read_bytes()
+    old_metrics = report.get("old") or {}
+    if (
+        old_metrics.get("draft_sha256") is not None
+        and _sha_bytes(old_draft) != old_metrics["draft_sha256"]
+    ):
+        raise SectionalRolloutError("formal draft no longer matches the shadow comparison")
+    if (
+        old_metrics.get("claim_ledger_sha256") is not None
+        and _sha_bytes(old_claim) != old_metrics["claim_ledger_sha256"]
+    ):
+        raise SectionalRolloutError("formal claim ledger no longer matches the shadow comparison")
+    if operator_review_used and "claim_ledger_sha256" not in old_metrics:
+        raise SectionalRolloutError(
+            "operator override requires the formal claim anchor in the comparison"
+        )
     if _sha_bytes(old_draft) != expected_draft_sha256:
-        raise SectionalRolloutError("formal draft changed after shadow comparison")
+        raise SectionalRolloutError("formal draft changed after operator confirmation")
     if _sha_bytes(old_claim) != expected_claim_sha256:
-        raise SectionalRolloutError("formal claim ledger changed after shadow comparison")
+        raise SectionalRolloutError("formal claim ledger changed after operator confirmation")
     root = _next_promotion_root(workspace, clean_slug, action_id)
     root.mkdir(parents=True, exist_ok=False)
     backup_draft = root / "legacy-draft.md"

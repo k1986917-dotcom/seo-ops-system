@@ -2,6 +2,16 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
+## 2026-08-02 — 正式 claim ledger SHA 锚点已补齐；等待授权 refresh + preflight
+
+- 老师发现 operator override 的正式 pair 完整性缺口：comparison 未锚定 claim ledger
+  文件 SHA。已修复（见 WORKLOG）：comparison.old.claim_ledger_sha256（字节级）、服务层
+  双层校验、CLI preflight 精确锚点与 `--refresh-comparison-anchor` 受控刷新模式。
+- 验证：专项 64 passed；全量 pytest 通过；Ruff/format/compileall/`git diff --check` 通过。
+- 下一步：push 后按授权命令对当前 comparison（`26a3e3d7…`）执行一次
+  `--refresh-comparison-anchor`，再运行一次只读 preflight，然后停止等待老师审核。
+  禁止 --execute / 改 .env / 切 action 模式 / 运行 Shadow。
+
 ## 2026-08-02 — Operator-reviewed promotion override 已实现并通过测试（未执行）
 
 - 老师确认候选内容达标、`excessive_ai_retries` 为唯一 blocker（过程指标）。自动 promotion

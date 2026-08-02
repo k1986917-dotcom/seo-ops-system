@@ -33,6 +33,19 @@
   用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
   `git diff --check` 全部通过。
 
+## [Unreleased] — Anchor reviewed promotion to the formal claim ledger hash
+
+### Fixed
+
+- Shadow comparison 现在在 `old.claim_ledger_sha256` 记录正式 claim ledger 的精确文件
+  字节 SHA-256（由生产调用从原始 bytes 计算），不再仅依赖 ledger 内部 `draft_sha256`
+  字段间接校验。
+- `promote_sectional_assembly()` 在创建任何 promotion 产物前自行校验正式 draft/claim
+  与 comparison.old 锚点一致，再校验调用者确认的 expected SHA；operator-reviewed
+  promotion 拒绝缺少 claim 锚点的旧 comparison（普通历史 comparison 仍可读取）。
+- 受控 CLI 增加 `--refresh-comparison-anchor`：原子重建仅 shadow-comparison 文件，
+  添加 claim 锚点；与 `--execute` 互斥，必须提供正式 draft/claim 双 SHA 确认。
+
 ## [Unreleased] — Operator-reviewed promotion override for retry-only blocker
 
 ### Added

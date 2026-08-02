@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from seo_ops.services.sectional_rollout import (
+    load_shadow_comparison,
+    persist_shadow_comparison,
+)
 from tools import promote_sectional_reviewed as cli
 
 
@@ -45,6 +50,9 @@ def _build_workspace(settings):
         topic=topic,
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=hashlib.sha256(
+            (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+        ).hexdigest(),
         new_assembly=assembly,
         run_metrics={"retry_count": 3},
     )
@@ -197,3 +205,166 @@ def test_execute_promotes_with_review_manifest(tmp_path, settings, monkeypatch, 
     from seo_ops.services.sectional_rollout import validate_promotion_manifest
 
     validate_promotion_manifest(manifest)
+
+
+def _strip_claim_anchor_and_persist(workspace, slug, report):
+    from seo_ops.services import sectional_rollout as rollout
+
+    legacy = dict(report)
+    legacy["old"] = {
+        key: value for key, value in report["old"].items() if key != "claim_ledger_sha256"
+    }
+    unsigned = dict(legacy)
+    unsigned.pop("report_sha256", None)
+    legacy["report_sha256"] = rollout._digest(unsigned)
+    persist_shadow_comparison(workspace, slug, legacy)
+    return legacy
+
+
+def test_preflight_reports_exact_formal_pair_anchors(tmp_path, settings, monkeypatch, capsys):
+    workspace, slug, assembly, report, draft_path, claim_path = _build_workspace(settings)
+    settings = dataclasses.replace(
+        settings, sectional_writing_mode="action", sectional_action_allowlist=(3,)
+    )
+    assert _run_preflight(settings, monkeypatch) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["formal_pair_matches_comparison"] is True
+    assert payload["comparison_old_draft_sha256"] == report["old"]["draft_sha256"]
+    assert payload["comparison_old_claim_sha256"] == report["old"]["claim_ledger_sha256"]
+    assert payload["comparison_old_claim_sha256"] == cli._sha256(claim_path)
+
+
+def test_refresh_rejects_missing_or_wrong_formal_sha_confirmations(tmp_path, settings, monkeypatch):
+    workspace, slug, assembly, report, draft_path, claim_path = _build_workspace(settings)
+    report = _strip_claim_anchor_and_persist(workspace, slug, report)
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_load_local_env", lambda: None)
+    with pytest.raises(SystemExit, match="--confirm-formal-draft-sha"):
+        cli.main(
+            [
+                "--action-id",
+                "3",
+                "--refresh-comparison-anchor",
+                "--confirm-formal-claim-sha",
+                cli._sha256(claim_path),
+            ]
+        )
+    with pytest.raises(SystemExit, match="does not match"):
+        cli.main(
+            [
+                "--action-id",
+                "3",
+                "--refresh-comparison-anchor",
+                "--confirm-formal-draft-sha",
+                "0" * 64,
+                "--confirm-formal-claim-sha",
+                cli._sha256(claim_path),
+            ]
+        )
+
+
+def test_refresh_only_rewrites_comparison_and_preserves_metrics(
+    tmp_path, settings, monkeypatch, capsys
+):
+    workspace, slug, assembly, report, draft_path, claim_path = _build_workspace(settings)
+    old_report = _strip_claim_anchor_and_persist(workspace, slug, report)
+    comparison_path = workspace / "drafts" / "sectional" / slug / "shadow-comparison-action-3.json"
+    before_draft = draft_path.read_bytes()
+    before_claim = claim_path.read_bytes()
+    before_assembly = (
+        workspace / "drafts" / "sectional" / slug / "assembly-report.json"
+    ).read_bytes()
+    before_comparison = comparison_path.read_bytes()
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_load_local_env", lambda: None)
+
+    assert (
+        cli.main(
+            [
+                "--action-id",
+                "3",
+                "--refresh-comparison-anchor",
+                "--confirm-formal-draft-sha",
+                cli._sha256(draft_path),
+                "--confirm-formal-claim-sha",
+                cli._sha256(claim_path),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "comparison_anchor_refresh"
+    assert payload["old_comparison_report_sha256"] == old_report["report_sha256"]
+    assert payload["new_comparison_report_sha256"] != old_report["report_sha256"]
+    assert payload["old_claim_ledger_sha256"] == cli._sha256(claim_path)
+    assert payload["blockers"] == ["excessive_ai_retries"]
+    assert payload["recommendation"] == "keep_legacy"
+    assert payload["assembly_sha256"] == assembly["assembly_sha256"]
+
+    assert draft_path.read_bytes() == before_draft
+    assert claim_path.read_bytes() == before_claim
+    assert (
+        workspace / "drafts" / "sectional" / slug / "assembly-report.json"
+    ).read_bytes() == before_assembly
+    assert comparison_path.read_bytes() != before_comparison
+
+    refreshed = load_shadow_comparison(workspace, slug, 3)
+    assert refreshed["old"]["claim_ledger_sha256"] == cli._sha256(claim_path)
+    assert refreshed["old"]["draft_sha256"] == old_report["old"]["draft_sha256"]
+    assert refreshed["new"] == old_report["new"]
+    assert refreshed["run_metrics"] == old_report["run_metrics"]
+    assert refreshed["assembly_sha256"] == old_report["assembly_sha256"]
+    assert refreshed["blockers"] == ["excessive_ai_retries"]
+    assert refreshed["recommendation"] == "keep_legacy"
+    assert not list((workspace / "drafts" / "sectional" / slug).glob("promotion-manifest.json"))
+
+
+def test_refresh_then_preflight_passes_formal_pair_anchor_check(
+    tmp_path, settings, monkeypatch, capsys
+):
+    workspace, slug, assembly, report, draft_path, claim_path = _build_workspace(settings)
+    _strip_claim_anchor_and_persist(workspace, slug, report)
+    settings = dataclasses.replace(
+        settings, sectional_writing_mode="action", sectional_action_allowlist=(3,)
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_load_local_env", lambda: None)
+    assert (
+        cli.main(
+            [
+                "--action-id",
+                "3",
+                "--refresh-comparison-anchor",
+                "--confirm-formal-draft-sha",
+                cli._sha256(draft_path),
+                "--confirm-formal-claim-sha",
+                cli._sha256(claim_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert _run_preflight(settings, monkeypatch) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["formal_pair_matches_comparison"] is True
+    assert payload["comparison_old_claim_sha256"] == cli._sha256(claim_path)
+    assert payload["operator_override_eligible"] is True
+
+
+def test_refresh_anchor_rejects_combined_with_execute(tmp_path, settings, monkeypatch):
+    workspace, slug, assembly, report, draft_path, claim_path = _build_workspace(settings)
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "_load_local_env", lambda: None)
+    with pytest.raises(SystemExit, match="cannot be combined with --execute"):
+        cli.main(
+            [
+                "--action-id",
+                "3",
+                "--refresh-comparison-anchor",
+                "--execute",
+                "--confirm-formal-draft-sha",
+                cli._sha256(draft_path),
+                "--confirm-formal-claim-sha",
+                cli._sha256(claim_path),
+            ]
+        )

@@ -1,3 +1,30 @@
+## 2026-08-02 — Comparison 增加正式 claim ledger 字节 SHA 锚点
+
+- 老师审核发现缺口：comparison 只锚定 old.draft_sha256，claim ledger 仅靠内部
+  draft_sha256 字段间接校验，内容被改但字段保留时可绕过 preflight。
+- 修复：
+  1. `build_shadow_comparison()` 新增必填 `old_claim_sha256`（64-hex，由正式 claim 原始
+     bytes 计算），报告 `old.claim_ledger_sha256`；生产调用
+     `sectional_legacy_adapter.py` 直接传 `hashlib.sha256(old_claim_bytes).hexdigest()`；
+  2. `promote_sectional_assembly()` 服务层双层校验：先对 comparison.old 锚点
+     （draft/claim 各自独立错误信息），再对调用者 expected SHA
+     （"changed after operator confirmation"）；operator override 遇到缺少
+     claim 锚点的旧 comparison 一律 fail-closed；普通旧 comparison 仍可读取；
+  3. CLI preflight 精确比较两个锚点 + 第三项结构检查（claim_json.draft_sha256 ==
+     当前 draft SHA），输出 comparison_old_draft_sha256 / comparison_old_claim_sha256 /
+     formal_pair_matches_comparison；
+  4. CLI 新增 `--refresh-comparison-anchor`：与 --execute 互斥，需
+     --confirm-formal-draft-sha/--confirm-formal-claim-sha；校验旧锚点与命令行 SHA、
+     claim 内部引用后，用旧 run_metrics/当前 assembly/当前 formal pair 重建 comparison
+     并原子写入；不跑 Shadow、不调用 AI、不改 assembly/正式 pair/checkpoint。
+- 测试：+9（claim 锚点记录、claim 内容篡改但 draft_sha256 保留时 override 拒绝、调用者
+  传篡改后 SHA 仍拒绝、draft 篡改传新 SHA 仍拒绝、旧 comparison 可读但 override 拒绝、
+  preflight 精确锚点、refresh 缺/错确认 SHA 拒绝、refresh 仅改 comparison 且指标不变、
+  refresh 后 preflight 通过、refresh 与 execute 互斥、eligible 旧路径不变）。
+  专项 64 passed；全量 pytest 通过；Ruff/format/compileall/`git diff --check` 通过。
+- 待执行：push 后对当前 comparison 运行一次授权 refresh（旧 report SHA
+  `26a3e3d7…`），再运行一次只读 preflight；禁止 --execute。
+
 ## 2026-08-02 — Operator-reviewed promotion override（仅 excessive_ai_retries）
 
 - 老师 MCP 审查确认：候选内容达标，唯一 blocker `excessive_ai_retries` 是过程指标。

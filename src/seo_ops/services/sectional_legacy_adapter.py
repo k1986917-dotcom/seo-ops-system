@@ -309,8 +309,7 @@ def _with_evidence_support_basis(
     basis_by_id = {
         str(item.get("evidence_id") or ""): (
             "verified_quote"
-            if str(item.get("quote") or "").strip()
-            and item.get("quote_verified") is True
+            if str(item.get("quote") or "").strip() and item.get("quote_verified") is True
             else "quote"
             if str(item.get("quote") or "").strip()
             else "key_finding"
@@ -643,6 +642,7 @@ async def run_legacy_sectional_rollout(
         topic=topic,
         old_draft=old_draft,
         old_claim_ledger=old_claim,
+        old_claim_sha256=hashlib.sha256(old_claim_bytes).hexdigest(),
         new_assembly=pipeline["assembly"],
         run_metrics=pipeline["run_metrics"],
     )

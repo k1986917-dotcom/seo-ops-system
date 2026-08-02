@@ -23,6 +23,12 @@ def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _claim_sha(old_ledger) -> str:
+    return hashlib.sha256(
+        (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+    ).hexdigest()
+
+
 def _delivery():
     from tests.test_sectional_assembly import _build_delivery
 
@@ -112,6 +118,7 @@ def test_shadow_comparison_is_deterministic_and_persists(tmp_path):
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
         run_metrics={"ai_calls": 8, "prompt_chars": 24000},
     )
@@ -127,6 +134,7 @@ def test_shadow_comparison_is_deterministic_and_persists(tmp_path):
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
         run_metrics={"ai_calls": 8, "prompt_chars": 24000},
     )
@@ -153,6 +161,7 @@ def test_shadow_comparison_marks_observed_completion_tokens():
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
         run_metrics={"completion_tokens": 321},
     )
@@ -172,6 +181,7 @@ def test_comparison_rejects_old_ledger_mismatch_and_detects_regression():
             topic=assembly["topic"],
             old_draft=old_draft,
             old_claim_ledger=broken,
+            old_claim_sha256=_claim_sha(broken),
             new_assembly=assembly,
         )
 
@@ -190,6 +200,7 @@ def test_comparison_rejects_old_ledger_mismatch_and_detects_regression():
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_with_claim,
+        old_claim_sha256=_claim_sha(old_with_claim),
         new_assembly=assembly,
     )
     assert report["recommendation"] == "keep_legacy"
@@ -204,6 +215,7 @@ def test_comparison_blocks_empty_responses_and_excessive_retries():
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
         run_metrics={"empty_response_count": 1, "retry_count": 3},
     )
@@ -220,6 +232,7 @@ def test_promotion_requires_allowlist_approved_comparison_and_unchanged_pair(tmp
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -246,7 +259,7 @@ def test_promotion_requires_allowlist_approved_comparison_and_unchanged_pair(tmp
         )
 
     draft_path.write_text(old_draft + "changed", encoding="utf-8")
-    with pytest.raises(SectionalRolloutError, match="draft changed"):
+    with pytest.raises(SectionalRolloutError, match="no longer matches the shadow comparison"):
         promote_sectional_assembly(
             workspace=tmp_path,
             slug="ceiling-marking",
@@ -269,6 +282,7 @@ def test_promotion_and_rollback_restore_exact_legacy_bytes(tmp_path):
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -320,6 +334,7 @@ def test_promotion_restores_pair_when_second_replace_fails(tmp_path, monkeypatch
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -365,6 +380,7 @@ def test_promotion_restores_pair_when_final_manifest_write_fails(tmp_path, monke
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -416,6 +432,7 @@ def test_manifest_rejects_paths_outside_workspace(tmp_path):
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -463,6 +480,7 @@ def test_rollback_stops_when_promoted_files_drift(tmp_path):
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -510,6 +528,7 @@ def test_rollback_restores_promoted_pair_when_manifest_write_fails(tmp_path, mon
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     draft_path = tmp_path / "drafts" / "ceiling-marking.md"
@@ -573,6 +592,7 @@ def _retry_only_report():
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
         run_metrics={"retry_count": 3},
     )
@@ -691,6 +711,7 @@ def test_eligible_comparison_keeps_legacy_promotion_path(tmp_path):
         topic=assembly["topic"],
         old_draft=old_draft,
         old_claim_ledger=old_ledger,
+        old_claim_sha256=_claim_sha(old_ledger),
         new_assembly=assembly,
     )
     assert eligible["recommendation"] == "eligible_for_single_action_promotion"
@@ -801,7 +822,7 @@ def test_operator_override_rejected_when_action_id_mismatches(tmp_path):
 
 def test_operator_override_rejected_when_formal_pair_changed(tmp_path):
     assembly, old_draft, old_ledger, report = _retry_only_report()
-    with pytest.raises(SectionalRolloutError, match="formal draft changed"):
+    with pytest.raises(SectionalRolloutError, match="no longer matches the shadow comparison"):
         _promote_with(
             tmp_path,
             report,
@@ -851,3 +872,119 @@ def test_operator_override_restores_pair_when_formal_replace_fails(tmp_path, mon
     assert claim_path.read_bytes() == old_claim_bytes
     promotions = tmp_path / "drafts" / "sectional" / "ceiling-marking" / "promotions"
     assert not promotions.exists() or not any(promotions.glob("action-3/*"))
+
+
+# ---------------------------------------------------------------------------
+# Formal claim ledger SHA anchor in comparisons and reviewed promotion
+# ---------------------------------------------------------------------------
+
+
+def test_comparison_records_exact_claim_ledger_byte_sha():
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    assert report["old"]["claim_ledger_sha256"] == _claim_sha(old_ledger)
+    import re
+
+    assert re.fullmatch(r"[a-f0-9]{64}", report["old"]["claim_ledger_sha256"])
+
+
+def _write_formal_pair(tmp_path, old_draft, old_ledger_bytes):
+    draft_path = tmp_path / "drafts" / "ceiling-marking.md"
+    claim_path = tmp_path / "research" / "claim-ledger-ceiling-marking.json"
+    draft_path.parent.mkdir(parents=True)
+    claim_path.parent.mkdir(parents=True)
+    draft_path.write_bytes(old_draft.encode("utf-8"))
+    claim_path.write_bytes(old_ledger_bytes)
+    return draft_path, claim_path
+
+
+def test_operator_override_rejected_when_claim_changed_but_draft_anchor_stays(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    original_claim_bytes = (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+    tampered = copy.deepcopy(old_ledger)
+    tampered["claims"] = [
+        {"sentence_id": "S999", "claim_text": "injected", "claim_type": "general"}
+    ]
+    tampered_claim_bytes = (json.dumps(tampered, sort_keys=True) + "\n").encode("utf-8")
+    assert _sha(tampered_claim_bytes) != _sha(original_claim_bytes)
+    assert tampered["draft_sha256"] == old_ledger["draft_sha256"]
+
+    draft_path, claim_path = _write_formal_pair(tmp_path, old_draft, tampered_claim_bytes)
+    with pytest.raises(
+        SectionalRolloutError,
+        match="formal claim ledger no longer matches the shadow comparison",
+    ):
+        promote_sectional_assembly(
+            workspace=tmp_path,
+            slug="ceiling-marking",
+            action_id=3,
+            policy=build_rollout_policy("action", [3]),
+            comparison=report,
+            assembly=assembly,
+            formal_draft_path=draft_path,
+            formal_claim_path=claim_path,
+            expected_draft_sha256=_sha(old_draft.encode("utf-8")),
+            expected_claim_sha256=_sha(tampered_claim_bytes),
+            operator_review=_review_for(report, assembly),
+        )
+
+
+def test_operator_override_rejected_when_draft_changed_even_with_updated_expected_sha(
+    tmp_path,
+):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    modified_draft_bytes = (old_draft + "changed").encode("utf-8")
+    original_claim_bytes = (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+    draft_path, claim_path = _write_formal_pair(tmp_path, old_draft, original_claim_bytes)
+    draft_path.write_bytes(modified_draft_bytes)
+    with pytest.raises(
+        SectionalRolloutError,
+        match="formal draft no longer matches the shadow comparison",
+    ):
+        promote_sectional_assembly(
+            workspace=tmp_path,
+            slug="ceiling-marking",
+            action_id=3,
+            policy=build_rollout_policy("action", [3]),
+            comparison=report,
+            assembly=assembly,
+            formal_draft_path=draft_path,
+            formal_claim_path=claim_path,
+            expected_draft_sha256=_sha(modified_draft_bytes),
+            expected_claim_sha256=_sha(original_claim_bytes),
+            operator_review=_review_for(report, assembly),
+        )
+
+
+def test_old_comparison_without_claim_anchor_reads_but_override_rejected(tmp_path):
+    from seo_ops.services import sectional_rollout as rollout
+
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    legacy = dict(report)
+    legacy["old"] = {
+        key: value for key, value in report["old"].items() if key != "claim_ledger_sha256"
+    }
+    unsigned = dict(legacy)
+    unsigned.pop("report_sha256", None)
+    legacy["report_sha256"] = rollout._digest(unsigned)
+    readable = rollout.validate_shadow_comparison(legacy)
+    assert "claim_ledger_sha256" not in readable["old"]
+
+    original_claim_bytes = (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+    draft_path, claim_path = _write_formal_pair(tmp_path, old_draft, original_claim_bytes)
+    with pytest.raises(
+        SectionalRolloutError,
+        match="operator override requires the formal claim anchor",
+    ):
+        promote_sectional_assembly(
+            workspace=tmp_path,
+            slug="ceiling-marking",
+            action_id=3,
+            policy=build_rollout_policy("action", [3]),
+            comparison=readable,
+            assembly=assembly,
+            formal_draft_path=draft_path,
+            formal_claim_path=claim_path,
+            expected_draft_sha256=_sha(old_draft.encode("utf-8")),
+            expected_claim_sha256=_sha(original_claim_bytes),
+            operator_review=_review_for(readable, assembly),
+        )
