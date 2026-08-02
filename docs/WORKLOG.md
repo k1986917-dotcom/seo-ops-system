@@ -1,3 +1,18 @@
+## 2026-08-02 — H2 偏差纳入 response-format envelope 修复
+
+- 推送 `843a1c1` 后实跑一次 `--refresh-complete`：旧终态候选原子归档（archive 3→4），
+  901/049 resumed；429 按新规则重生成时初始响应未以精确 approved H2 开头，报
+  `section must start with the exact approved H2`；该错误不在任何 repair 集合内 →
+  1 次 AI 后 fail-closed。POST=1，`ai_runs 255→256`，正式产物/Action/Git 不变。
+- 修复：把两个 H2 结构错误（首行非精确 H2、正文出现第二个 H1/H2）加入
+  `_RESPONSE_FORMAT_ERRORS`，复用 RESPONSE FORMAT REPAIR / FINAL RESPONSE FORMAT REPAIR
+  （从 clean Section Package 重建完整两块响应，prompt 已含 exact H2 形状要求）；
+  仍保持一次 repair + 一次 final repair 上限，计数计入 `section_response_format_retries`。
+- 测试：新增 `test_sequence_repairs_wrong_h2_first_line_via_response_format_repair`、
+  `test_sequence_stops_after_final_response_format_repair_for_wrong_h2`。验证：Sectional
+  相关 128 passed；全量 `pytest -q` 通过；Ruff、format、compileall、`git diff --check`
+  通过。尚未 push、尚未运行真实 Shadow。
+
 ## 2026-08-02 — 修复安装入口在仓库外启动失败
 
 ### 完成

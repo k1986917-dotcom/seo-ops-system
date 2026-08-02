@@ -33,6 +33,15 @@
   用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
   `git diff --check` 全部通过。
 
+## [Unreleased] — Repair sections whose heading deviates from the approved H2
+
+### Fixed
+
+- Section 首行不是精确批准的 `## <H2>`，或正文中出现第二个 H1/H2 时，不再立即终止整个
+  Shadow：两类错误并入 response-format envelope 修复，从干净 Section Package 重建完整
+  两块响应；仍保持一次 repair + 一次 final repair 的调用上限，并计入
+  `section_response_format_retries`。
+
 ## [Unreleased] — Route post-format word-count misses to a bounded final repair
 
 ### Fixed

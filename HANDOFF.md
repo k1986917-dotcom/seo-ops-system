@@ -2,6 +2,19 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
+## 2026-08-02 — H2 偏差已纳入 response-format 修复；等待下一轮真实 Shadow
+
+- `843a1c1` 推送后实跑：`--refresh-complete` 原子归档旧终态候选（archive 3→4），
+  901/049 resumed；429 重生成时初始响应 H2 非精确批准标题 → `section must start with
+  the exact approved H2`，无 repair 路由 → 1 次 AI 后 fail-closed（`ai_runs 255→256`）。
+- 修复：`_RESPONSE_FORMAT_ERRORS` 增加两个 H2 结构错误（首行 H2 偏差、正文多余 H1/H2），
+  复用有界的 RESPONSE/FINAL RESPONSE FORMAT REPAIR 从干净 package 重建，计数继续计入
+  `section_response_format_retries`。Sectional 相关 128 passed、全量 pytest 通过。
+- 已同时提交老师留下的入口点修复（`89930a1`，安装入口项目根引导 + 回归测试）。
+- 下一步：push 后恰好一次普通 resume（active root 现为 17 个 checkpoint/ledger，无终态
+  候选，不需要 `--refresh-complete`）；预期 429 经 format repair 或直接通过后继续 2d/7bb/
+  b92 → frame/ledger/assembly；仍禁止 promotion，等待老师 MCP 内容审查。
+
 ## 2026-08-02 — 修复从项目目录外启动的安装入口
 
 - 发现完整测试在项目目录内通过，但从 `/tmp` 导入 `seo_ops.web.app` 时因

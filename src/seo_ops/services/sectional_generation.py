@@ -59,6 +59,8 @@ _RESPONSE_FORMAT_ERRORS = {
     "generator response markers are missing or duplicated",
     "unexpected text before the first response marker",
     "generator response blocks must not be empty",
+    "section must start with the exact approved H2",
+    "section must not contain another H1 or H2",
 }
 _CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _RAW_URL = re.compile(r"https?://", re.IGNORECASE)

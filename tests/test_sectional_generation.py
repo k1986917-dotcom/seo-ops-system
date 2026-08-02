@@ -1744,6 +1744,75 @@ def test_sequence_repairs_missing_response_markers_once(tmp_path):
     assert "PREVIOUS RESPONSE" not in select_calls[1][2]
 
 
+def test_sequence_repairs_wrong_h2_first_line_via_response_format_repair(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            if target_attempts == 1:
+                return response.replace(
+                    f"## {package['heading']}",
+                    "## A Completely Different Heading",
+                    1,
+                )
+        return response
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["response_format_retry_count"] == 1
+    assert len(select_calls) == 2
+    assert "RESPONSE FORMAT REPAIR" in select_calls[1][1]
+
+
+def test_sequence_stops_after_final_response_format_repair_for_wrong_h2(tmp_path):
+    sections, shadow = _setup()
+    calls = []
+
+    def remain_wrong_h2(system, user):
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        response = _response(package)
+        if package["reader_stage"] == "select":
+            return response.replace(
+                f"## {package['heading']}",
+                "## A Completely Different Heading",
+                1,
+            )
+        return response
+
+    with pytest.raises(
+        SectionGenerationError,
+        match=r"response_format repair failed: section must start with the exact approved H2",
+    ):
+        run_section_generation_sequence(
+            workspace=tmp_path,
+            slug="marking-guide",
+            section_contracts=sections,
+            link_contracts=shadow["section_link_contracts"],
+            context_manifest=shadow["context_manifest"],
+            generate_text=remain_wrong_h2,
+        )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert len(select_calls) == 3
+
+
 def test_sequence_uses_final_response_format_repair_once(tmp_path):
     sections, shadow = _setup()
     calls = []
