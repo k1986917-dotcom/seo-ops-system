@@ -2,6 +2,20 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
+## 2026-08-02 — FINAL CONTENT REBUILD 已解决链接/字数振荡；等待下一轮真实 Shadow
+
+- `26ace16`（H2 修复）推送后实跑：429 越过 H2 门禁，但因新 provenance 规则旧 429 内容
+  作废（未核验直接引语 ev_342a1c3c35f7）需重生成；模型在 required_link ↔ word_count
+  间振荡，最终 `word_count repair failed: article_links does not meet min_required`
+  fail-closed（`ai_runs 256→259`）。
+- 修复（尚未 push）：新增 FINAL CONTENT REBUILD——首次 repair 后若暴露 word-count 或
+  required-link 错误（与首次 kind 不同），final 从干净 package 重建并显式列出全部 gate；
+  保留 strict trim 等既有 final。新增 `section_content_rebuild_retries` 指标。
+- 验证：Sectional 相关 114 passed；全量 pytest 通过；Ruff/format/compileall/
+  `git diff --check` 通过。
+- 下一步：push 后恰好一次普通 resume；预期 429 经 content rebuild（或直接）通过后继续
+  2d/7bb/b92 → frame/ledger/assembly；仍禁止 promotion，等待老师 MCP 内容审查。
+
 ## 2026-08-02 — H2 偏差已纳入 response-format 修复；等待下一轮真实 Shadow
 
 - `843a1c1` 推送后实跑：`--refresh-complete` 原子归档旧终态候选（archive 3→4），

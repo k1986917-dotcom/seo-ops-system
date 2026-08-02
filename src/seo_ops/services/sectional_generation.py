@@ -1697,6 +1697,50 @@ def _build_authority_free_repair_prompt(
     return {"system": system, "user": user}
 
 
+def _build_final_content_rebuild_prompt(
+    package: dict[str, Any],
+) -> dict[str, str]:
+    """One final constraint-complete rebuild for content-gate oscillation.
+
+    Used when a first repair fixed its own gate but the response then violated a
+    different content gate (for example required links versus word count).  The
+    rebuild lists every active gate explicitly so the final attempt cannot carry
+    over an inconsistent intermediate state.
+    """
+    validated = validate_section_generation_package(package)
+    base = build_section_generation_prompt(validated)
+    target = validated["target_words"]
+    gate_lines = []
+    for link_type in _LINK_TYPES:
+        gate = validated["link_gates"][link_type]
+        gate_lines.append(
+            f"- {link_type}: state={gate['opportunity_state']}; "
+            f"allowed={', '.join(gate['selected_ids']) or '(none)'}; "
+            f"min={gate['min_required']}; max={gate['max_allowed']}"
+        )
+    system = (
+        base["system"]
+        + "\nFINAL CONTENT REBUILD. The previous repairs could not satisfy every active "
+        "gate at once. Rebuild the complete two-block response from the clean SECTION "
+        "PACKAGE only. Do not reuse prose, placeholder choices, or decisions from any "
+        "rejected response. The first content line must be exactly the approved H2. "
+        "Keep the body inside 2-5 coherent paragraphs and the visible word count inside "
+        f"{target['min']}-{target['max']}. Never present unverified evidence as a direct "
+        "quote; paraphrase only supported meaning and keep a relevant approved citation. "
+        "Never invent a fact, product, candidate ID, specification, URL, or evidence ID. "
+        "The server will derive decisions from the final Markdown and validate every gate."
+    )
+    user = (
+        base["user"]
+        + "\n\nFINAL CONTENT REBUILD\n"
+        + "Build a fresh complete two-block response. Obey these gates exactly:\n"
+        + "\n".join(gate_lines)
+        + f"\nKeep the visible word count inside {target['min']}-{target['max']} "
+        + "in 2-5 coherent paragraphs. Do not refer to any rejected response."
+    )
+    return {"system": system, "user": user}
+
+
 def _build_final_section_repair_prompt(
     package: dict[str, Any],
     response_text: str,
@@ -1721,13 +1765,10 @@ def _build_final_section_repair_prompt(
         )
         if strict_trim is not None:
             return strict_trim, "word_count_strict_trim"
-    word_count = _build_word_count_repair_prompt(
-        package,
-        response_text,
-        error,
-    )
-    if word_count is not None:
-        return word_count, "word_count"
+    if _SECTION_WORD_COUNT_ERROR.fullmatch(str(error)) is not None:
+        return _build_final_content_rebuild_prompt(package), "content_rebuild"
+    if _REQUIRED_LINK_ERROR.fullmatch(str(error)) is not None and prior_kind != "required_link":
+        return _build_final_content_rebuild_prompt(package), "content_rebuild"
     if prior_kind != "technical_consistency":
         technical = _build_technical_consistency_repair_prompt(
             package,
@@ -2454,6 +2495,7 @@ def run_section_generation_sequence(
     required_link_retry_count = 0
     candidate_selection_retry_count = 0
     response_format_retry_count = 0
+    content_rebuild_retry_count = 0
     technical_consistency_retry_count = 0
     content_provenance_retry_count = 0
     for section_id in sections["section_order"]:
@@ -2540,6 +2582,8 @@ def run_section_generation_sequence(
                         candidate_selection_retry_count += 1
                     elif final_kind == "response_format":
                         response_format_retry_count += 1
+                    elif final_kind == "content_rebuild":
+                        content_rebuild_retry_count += 1
                     elif final_kind == "technical_consistency":
                         technical_consistency_retry_count += 1
                     elif final_kind == "content_provenance":
@@ -2588,6 +2632,7 @@ def run_section_generation_sequence(
         "required_link_retry_count": required_link_retry_count,
         "candidate_selection_retry_count": candidate_selection_retry_count,
         "response_format_retry_count": response_format_retry_count,
+        "content_rebuild_retry_count": content_rebuild_retry_count,
         "technical_consistency_retry_count": technical_consistency_retry_count,
         "content_provenance_retry_count": content_provenance_retry_count,
         "complete": len(outputs) == len(sections["section_order"]),

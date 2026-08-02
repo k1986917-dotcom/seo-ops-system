@@ -239,6 +239,7 @@ def run_sectional_shadow_candidate(
         "section_required_link_retries": section_run["required_link_retry_count"],
         "section_candidate_selection_retries": section_run["candidate_selection_retry_count"],
         "section_response_format_retries": section_run["response_format_retry_count"],
+        "section_content_rebuild_retries": section_run["content_rebuild_retry_count"],
         "section_technical_consistency_retries": section_run["technical_consistency_retry_count"],
         "section_content_provenance_retries": section_run["content_provenance_retry_count"],
         "frame_generated": bool(frame_run["generated"]),
@@ -320,6 +321,13 @@ def validate_sectional_pipeline_result(result: Any) -> dict[str, Any]:
         or response_format_retry_count < 0
     ):
         raise SectionalPipelineError("pipeline result section_response_format_retries is invalid")
+    content_rebuild_retry_count = result.get("section_content_rebuild_retries")
+    if content_rebuild_retry_count is not None and (
+        not isinstance(content_rebuild_retry_count, int)
+        or isinstance(content_rebuild_retry_count, bool)
+        or content_rebuild_retry_count < 0
+    ):
+        raise SectionalPipelineError("pipeline result section_content_rebuild_retries is invalid")
     technical_retry_count = result.get("section_technical_consistency_retries")
     if technical_retry_count is not None and (
         not isinstance(technical_retry_count, int)

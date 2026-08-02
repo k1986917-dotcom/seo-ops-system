@@ -33,6 +33,17 @@
   用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
   `git diff --check` 全部通过。
 
+## [Unreleased] — Final content rebuild for link/word-count oscillation
+
+### Fixed
+
+- 当某 section 的首次 repair 修复自身问题后暴露出另一类内容 gate 错误（如 required
+  link 与 word count 交替失败）时，final 修复现在从干净 Section Package 重建完整两块
+  响应，并显式列出全部 gate（H2、字数区间、段落数、三类链接 state/allowed/min/max、
+  禁止未核验直接引语与虚构事实），避免模型在相互冲突的中间状态间振荡。
+- Pipeline 新增 `section_content_rebuild_retries` 审计指标。既有 final 路径（response
+  format、candidate rebuild、deletion-only word-count trim、content provenance）保持不变。
+
 ## [Unreleased] — Repair sections whose heading deviates from the approved H2
 
 ### Fixed

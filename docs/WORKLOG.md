@@ -1,3 +1,21 @@
+## 2026-08-02 — 新增 FINAL CONTENT REBUILD 解决 required_link ↔ word_count 振荡
+
+- 推送 `26ace16`（H2 修复）后实跑一次普通 resume：429 已越过 H2 门禁，但新 provenance
+  规则使旧 429 checkpoint 作废（`section publishes unverified evidence as a direct
+  quote: ev_342a1c3c35f7`，package SHA 相同但 output 校验失败）→ 重生成时在
+  required_link ↔ word_count 间振荡，最终 `word_count repair failed: article_links
+  does not meet min_required` fail-closed。POST=1，`ai_runs 256→259`，正式产物不变。
+- 修复：新增 `_build_final_content_rebuild_prompt`（kind=`content_rebuild`）——当首次
+  repair 后暴露 word-count 或 required-link 错误（且与首次 kind 不同）时，final 修复改为
+  从干净 package 重建完整两块响应，显式列出全部 gate（H2、字数区间、2-5 段、三类链接
+  state/allowed/min/max、禁止未核验直接引语、禁止虚构事实）。保留 word_count→too-long
+  的 deletion-only strict trim 与 response_format/candidate/content_provenance 既有 final。
+- 新增 `section_content_rebuild_retries` 审计指标（pipeline result + 校验）。
+- 测试：更新 3 个受影响的既有测试（final 现为 FINAL CONTENT REBUILD），新增
+  `test_sequence_final_content_rebuild_resolves_required_link_word_count_oscillation`
+  精确复现真实失败链。验证：Sectional 相关 114 passed；全量 `pytest -q` 通过；Ruff、
+  format、compileall、`git diff --check` 通过。尚未 push、尚未运行真实 Shadow。
+
 ## 2026-08-02 — H2 偏差纳入 response-format envelope 修复
 
 - 推送 `843a1c1` 后实跑一次 `--refresh-complete`：旧终态候选原子归档（archive 3→4），

@@ -1201,7 +1201,7 @@ def test_sequence_limits_word_count_repair_to_one_final_attempt(tmp_path):
 
     assert len(calls) == 3
     assert "WORD COUNT REPAIR" in calls[1]
-    assert "WORD COUNT REPAIR" in calls[2]
+    assert "FINAL CONTENT REBUILD" in calls[2]
     assert "FINAL WORD COUNT TRIM" not in calls[2]
 
 
@@ -1919,7 +1919,7 @@ def _short_response_within_markers(package):
     )
 
 
-def test_sequence_routes_word_count_miss_after_format_repair_to_final_repair(tmp_path):
+def test_sequence_routes_word_count_miss_after_format_repair_to_final_rebuild(tmp_path):
     sections, shadow = _setup()
     calls = []
     target_attempts = 0
@@ -1949,11 +1949,12 @@ def test_sequence_routes_word_count_miss_after_format_repair_to_final_repair(tmp
     select_calls = [item for item in calls if item[0] == "select"]
     assert result["complete"] is True
     assert result["response_format_retry_count"] == 1
-    assert result["word_count_retry_count"] == 1
+    assert result["word_count_retry_count"] == 0
+    assert result["content_rebuild_retry_count"] == 1
     assert len(select_calls) == 3
     assert "RESPONSE FORMAT REPAIR" in select_calls[1][1]
     assert "45-130" in select_calls[1][1]
-    assert "WORD COUNT REPAIR" in select_calls[2][2]
+    assert "FINAL CONTENT REBUILD" in select_calls[2][1]
     assert "FINAL RESPONSE FORMAT REPAIR" not in select_calls[2][1]
 
 
@@ -1974,7 +1975,7 @@ def test_sequence_stops_when_final_word_count_repair_still_misses(tmp_path):
     with pytest.raises(
         SectionGenerationError,
         match=(
-            r"word_count repair failed: section word count \d+ is outside "
+            r"content_rebuild repair failed: section word count \d+ is outside "
             r"45-130"
         ),
     ):
@@ -1990,7 +1991,46 @@ def test_sequence_stops_when_final_word_count_repair_still_misses(tmp_path):
     select_calls = [item for item in calls if item[0] == "select"]
     assert len(select_calls) == 3
     assert "RESPONSE FORMAT REPAIR" in select_calls[1][1]
-    assert "WORD COUNT REPAIR" in select_calls[2][2]
+    assert "FINAL CONTENT REBUILD" in select_calls[2][1]
+
+
+def test_sequence_final_content_rebuild_resolves_required_link_word_count_oscillation(
+    tmp_path,
+):
+    sections, shadow = _setup()
+    calls = []
+    target_attempts = 0
+
+    def generate(system, user):
+        nonlocal target_attempts
+        package = _package_from_prompt(user)
+        calls.append((package["reader_stage"], system, user))
+        if package["reader_stage"] == "select":
+            target_attempts += 1
+            if target_attempts == 1:
+                return _response(package, omit_required={"article_links"})
+            if target_attempts == 2:
+                return _short_response_within_markers(package)
+        return _response(package)
+
+    result = run_section_generation_sequence(
+        workspace=tmp_path,
+        slug="marking-guide",
+        section_contracts=sections,
+        link_contracts=shadow["section_link_contracts"],
+        context_manifest=shadow["context_manifest"],
+        generate_text=generate,
+    )
+
+    select_calls = [item for item in calls if item[0] == "select"]
+    assert result["complete"] is True
+    assert result["required_link_retry_count"] == 1
+    assert result["content_rebuild_retry_count"] == 1
+    assert len(select_calls) == 3
+    assert "REQUIRED LINK REPAIR" in select_calls[1][1]
+    assert "FINAL CONTENT REBUILD" in select_calls[2][1]
+    assert "article_links: state=required" in select_calls[2][2]
+    assert "45-130" in select_calls[2][2]
 
 
 def test_sequence_stops_after_one_required_link_retry(tmp_path):
