@@ -15,14 +15,19 @@ import hashlib
 import json
 import re
 import sqlite3
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from seo_ops.__main__ import _load_local_env
-from seo_ops.config import get_settings
-from seo_ops.services.sectional_assembly import load_sectional_assembly
-from seo_ops.services.sectional_rollout import (
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from seo_ops.__main__ import _load_local_env  # noqa: E402
+from seo_ops.config import get_settings  # noqa: E402
+from seo_ops.services.sectional_assembly import load_sectional_assembly  # noqa: E402
+from seo_ops.services.sectional_rollout import (  # noqa: E402
     build_rollout_policy,
     load_shadow_comparison,
     operator_override_eligibility,
