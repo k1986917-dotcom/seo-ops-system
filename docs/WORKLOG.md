@@ -1,3 +1,32 @@
+## 2026-08-02 — Operator-reviewed promotion override（仅 excessive_ai_retries）
+
+- 老师 MCP 审查确认：候选内容达标，唯一 blocker `excessive_ai_retries` 是过程指标。
+  自动 promotion 必须继续拒绝，但增加显式、可审计的人工审核覆盖入口。
+- 实现（`src/seo_ops/services/sectional_rollout.py`）：
+  1. `validate_operator_review`：review 对象六字段精确校验（approved 严格 true、
+     action_id 正整且匹配、reviewer/reason 非空、reason ≥20 字符、comparison/assembly
+     SHA 严格匹配）；
+  2. `_operator_override_allowed`：仅当 `blockers == ["excessive_ai_retries"]`（精确有序
+     列表比较，非子集）、recommendation=keep_legacy、assembly audit passed 且
+     blockers==[]、binding_counts.product==product_provenance_count、policy 为 action
+     模式且 allowlist 恰好等于当前 Action 时放行；
+  3. `promote_sectional_assembly(..., operator_review=None)`：默认 fail-closed 不变；
+     eligible 走原路径；keep_legacy 无 review 拒绝；review 完整匹配才允许；
+  4. manifest 增加 operator_override/operator_reviewer/operator_reason/
+     operator_reviewed_comparison_sha256/operator_reviewed_assembly_sha256/
+     overridden_blockers，全部纳入 manifest SHA 计算与 `validate_promotion_manifest`
+     校验；
+  5. `operator_override_eligibility` 只读 preflight。
+- 新增受控 CLI `tools/promote_sectional_reviewed.py`：默认 preflight 零写入；`--execute`
+  必须同时提供 `--confirm-comparison-sha` 与 `--confirm-assembly-sha`；只从 settings/
+  DB 派生当前正式 workspace，不接受任意路径。
+- 测试：`tests/test_sectional_rollout.py` +13（13 项验收要求全覆盖，含正式 pair 变化拒绝、
+  中途写入失败回滚）；`tests/test_promote_sectional_reviewed.py` +4（preflight 只读、
+  off 模式不eligible、缺确认参数停止、execute 完整 manifest 校验）。
+  验证：要求的三个测试文件 51 passed；全量 pytest 通过；Ruff/format/compileall/
+  `git diff --check` 通过。未运行 Shadow、未调用 AI、未执行 --execute、未创建 manifest、
+  未修改任何正式/生成产物。
+
 ## 2026-08-02 — 新规则下 Shadow 端到端成功：终态候选完成并通过内容 QA
 
 - 推送 `d5c5818`（FINAL CONTENT REBUILD）后执行一次普通 resume，POST=1，

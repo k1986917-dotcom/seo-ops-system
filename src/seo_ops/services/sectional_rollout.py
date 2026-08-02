@@ -29,6 +29,24 @@ _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _WORD = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\((https?://[^)]+)\)")
 
+OPERATOR_OVERRIDE_BLOCKER = "excessive_ai_retries"
+_OPERATOR_REVIEW_KEYS = {
+    "approved",
+    "action_id",
+    "reviewer",
+    "reason",
+    "comparison_sha256",
+    "assembly_sha256",
+}
+_OPERATOR_MANIFEST_FIELDS = {
+    "operator_override",
+    "operator_reviewer",
+    "operator_reason",
+    "operator_reviewed_comparison_sha256",
+    "operator_reviewed_assembly_sha256",
+    "overridden_blockers",
+}
+
 
 class SectionalRolloutError(ValueError):
     """Raised when rollout state is invalid or unsafe."""
@@ -428,6 +446,124 @@ def _replace_pair_transactionally(
             second_temp.unlink(missing_ok=True)
 
 
+def validate_operator_review(
+    review: Any,
+    *,
+    action_id: int,
+    comparison: dict[str, Any],
+    assembly: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate one explicit operator review object for a promotion override.
+
+    Every field is mandatory and strictly checked.  The returned normalized
+    object is written into the promotion manifest and covered by its SHA.
+    """
+    if not isinstance(review, dict):
+        raise SectionalRolloutError("operator review must be an object")
+    if set(review) != _OPERATOR_REVIEW_KEYS:
+        raise SectionalRolloutError("operator review shape is invalid")
+    if review.get("approved") is not True:
+        raise SectionalRolloutError("operator review approved must be exactly true")
+    review_action = review.get("action_id")
+    if not isinstance(review_action, int) or isinstance(review_action, bool) or review_action <= 0:
+        raise SectionalRolloutError("operator review action_id must be a positive integer")
+    if review_action != action_id:
+        raise SectionalRolloutError("operator review action_id does not match the promotion Action")
+    reviewer = review.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer.strip():
+        raise SectionalRolloutError("operator reviewer must be a non-empty string")
+    reason = review.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise SectionalRolloutError("operator reason must be a non-empty string")
+    if len(reason.strip()) < 20:
+        raise SectionalRolloutError("operator reason must be at least 20 characters")
+    comparison_sha = review.get("comparison_sha256")
+    if not isinstance(comparison_sha, str) or not _SHA256.fullmatch(comparison_sha):
+        raise SectionalRolloutError("operator review comparison_sha256 is invalid")
+    if comparison_sha != comparison["report_sha256"]:
+        raise SectionalRolloutError("operator review comparison SHA does not match the comparison")
+    assembly_sha = review.get("assembly_sha256")
+    if not isinstance(assembly_sha, str) or not _SHA256.fullmatch(assembly_sha):
+        raise SectionalRolloutError("operator review assembly_sha256 is invalid")
+    if assembly_sha != assembly["assembly_sha256"]:
+        raise SectionalRolloutError("operator review assembly SHA does not match the assembly")
+    return {
+        "approved": True,
+        "action_id": review_action,
+        "reviewer": reviewer.strip(),
+        "reason": reason.strip(),
+        "comparison_sha256": comparison_sha,
+        "assembly_sha256": assembly_sha,
+    }
+
+
+def _operator_override_allowed(
+    report: dict[str, Any],
+    validated_assembly: dict[str, Any],
+    policy: dict[str, Any],
+    action_id: int,
+) -> None:
+    """Raise unless every strict operator-override condition holds."""
+    if report["recommendation"] != "keep_legacy":
+        raise SectionalRolloutError("operator override only applies to keep_legacy comparisons")
+    if report["blockers"] != [OPERATOR_OVERRIDE_BLOCKER]:
+        raise SectionalRolloutError(
+            "operator override may only override exactly ['excessive_ai_retries']"
+        )
+    audit = validated_assembly.get("audit") or {}
+    if audit.get("passed") is not True:
+        raise SectionalRolloutError("operator override requires assembly audit passed")
+    if audit.get("blockers"):
+        raise SectionalRolloutError("operator override requires zero assembly gate blockers")
+    new_metrics = report.get("new") or {}
+    if new_metrics.get("binding_counts", {}).get("product") != new_metrics.get(
+        "product_provenance_count"
+    ):
+        raise SectionalRolloutError(
+            "operator override requires product provenance coverage in the comparison"
+        )
+    decision = rollout_decision(policy, action_id)
+    if not decision["promotion_allowed"]:
+        raise SectionalRolloutError("sectional promotion is not allowed for this Action")
+    if policy.get("mode") != "action":
+        raise SectionalRolloutError("operator override requires action rollout mode")
+    if policy.get("allowed_action_ids") != [action_id]:
+        raise SectionalRolloutError(
+            "operator override requires the action allowlist to contain only the current Action"
+        )
+
+
+def operator_override_eligibility(
+    *,
+    action_id: int,
+    policy: dict[str, Any],
+    comparison: dict[str, Any],
+    assembly: dict[str, Any],
+    operator_review: dict[str, Any],
+) -> dict[str, Any]:
+    """Read-only preflight: report whether an operator override would be allowed."""
+    try:
+        report = validate_shadow_comparison(comparison)
+        if report["action_id"] != action_id:
+            raise SectionalRolloutError("comparison does not match this Action")
+        try:
+            validated_assembly = validate_sectional_assembly(assembly)
+        except SectionAssemblyError as exc:
+            raise SectionalRolloutError(f"assembly is invalid: {exc}") from exc
+        if report["assembly_sha256"] != validated_assembly["assembly_sha256"]:
+            raise SectionalRolloutError("comparison was produced for a different assembly")
+        _operator_override_allowed(report, validated_assembly, policy, action_id)
+        validate_operator_review(
+            operator_review,
+            action_id=action_id,
+            comparison=report,
+            assembly=validated_assembly,
+        )
+    except SectionalRolloutError as exc:
+        return {"eligible": False, "reason": str(exc)}
+    return {"eligible": True, "reason": ""}
+
+
 def promote_sectional_assembly(
     *,
     workspace: Path,
@@ -440,6 +576,7 @@ def promote_sectional_assembly(
     formal_claim_path: Path,
     expected_draft_sha256: str,
     expected_claim_sha256: str,
+    operator_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     clean_slug = _clean_text(slug, "slug")
     if not _SLUG.fullmatch(clean_slug):
@@ -448,16 +585,28 @@ def promote_sectional_assembly(
     if not decision["promotion_allowed"]:
         raise SectionalRolloutError("sectional promotion is not allowed for this Action")
     report = validate_shadow_comparison(comparison)
-    if report["action_id"] != action_id or report["recommendation"] != (
-        "eligible_for_single_action_promotion"
-    ):
-        raise SectionalRolloutError("comparison does not approve this Action for promotion")
+    if report["action_id"] != action_id:
+        raise SectionalRolloutError("comparison does not match this Action")
     try:
         validated_assembly = validate_sectional_assembly(assembly)
     except SectionAssemblyError as exc:
         raise SectionalRolloutError(f"assembly is invalid: {exc}") from exc
     if report["assembly_sha256"] != validated_assembly["assembly_sha256"]:
         raise SectionalRolloutError("comparison was produced for a different assembly")
+    operator_review_used = False
+    if report["recommendation"] == "eligible_for_single_action_promotion":
+        pass
+    elif report["recommendation"] == "keep_legacy" and operator_review is not None:
+        _operator_override_allowed(report, validated_assembly, policy, action_id)
+        review = validate_operator_review(
+            operator_review,
+            action_id=action_id,
+            comparison=report,
+            assembly=validated_assembly,
+        )
+        operator_review_used = True
+    else:
+        raise SectionalRolloutError("comparison does not approve this Action for promotion")
     draft_path = _ensure_workspace_path(workspace, formal_draft_path)
     claim_path = _ensure_workspace_path(workspace, formal_claim_path)
     if not draft_path.exists() or not claim_path.exists():
@@ -500,6 +649,17 @@ def promote_sectional_assembly(
         "after_draft_sha256": _sha_bytes(new_draft),
         "after_claim_sha256": _sha_bytes(new_claim),
     }
+    if operator_review_used:
+        manifest.update(
+            {
+                "operator_override": True,
+                "operator_reviewer": review["reviewer"],
+                "operator_reason": review["reason"],
+                "operator_reviewed_comparison_sha256": review["comparison_sha256"],
+                "operator_reviewed_assembly_sha256": review["assembly_sha256"],
+                "overridden_blockers": [OPERATOR_OVERRIDE_BLOCKER],
+            }
+        )
     manifest["manifest_sha256"] = _digest(manifest)
     manifest = validate_promotion_manifest(manifest)
     manifest_path = root / "promotion-manifest.json"
@@ -578,6 +738,35 @@ def validate_promotion_manifest(manifest: Any) -> dict[str, Any]:
     ):
         if not isinstance(manifest.get(field), str) or not _SHA256.fullmatch(manifest[field]):
             raise SectionalRolloutError(f"promotion manifest {field} is invalid")
+    operator_fields = _OPERATOR_MANIFEST_FIELDS.intersection(manifest)
+    override = manifest.get("operator_override")
+    if override is True:
+        if operator_fields != _OPERATOR_MANIFEST_FIELDS:
+            raise SectionalRolloutError("operator override manifest fields are incomplete")
+        _clean_text(manifest.get("operator_reviewer"), "operator_reviewer")
+        if (
+            not isinstance(manifest.get("operator_reason"), str)
+            or len(manifest["operator_reason"].strip()) < 20
+        ):
+            raise SectionalRolloutError("operator_reason must be at least 20 characters")
+        for field in (
+            "operator_reviewed_comparison_sha256",
+            "operator_reviewed_assembly_sha256",
+        ):
+            if not isinstance(manifest.get(field), str) or not _SHA256.fullmatch(manifest[field]):
+                raise SectionalRolloutError(f"promotion manifest {field} is invalid")
+        if manifest.get("overridden_blockers") != [OPERATOR_OVERRIDE_BLOCKER]:
+            raise SectionalRolloutError(
+                "promotion manifest overridden_blockers must be exactly ['excessive_ai_retries']"
+            )
+    elif override is None:
+        if operator_fields:
+            raise SectionalRolloutError(
+                "operator override manifest fields require operator_override=true"
+            )
+    else:
+        raise SectionalRolloutError("promotion manifest operator_override must be exactly true")
+
     unsigned = dict(manifest)
     digest = unsigned.pop("manifest_sha256")
     if digest != _digest(unsigned):

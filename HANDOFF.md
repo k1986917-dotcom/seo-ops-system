@@ -2,6 +2,21 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
+## 2026-08-02 — Operator-reviewed promotion override 已实现并通过测试（未执行）
+
+- 老师确认候选内容达标、`excessive_ai_retries` 为唯一 blocker（过程指标）。自动 promotion
+  继续 fail-closed；新增显式人工审核覆盖入口（仅允许精确 `["excessive_ai_retries"]`）。
+- 实现：`validate_operator_review`（六字段严格校验）+ `_operator_override_allowed`
+  （精确列表比较 + audit/provenance/policy 条件）+ `promote_sectional_assembly(
+  operator_review=None)` 可选参数 + manifest 六项 operator 字段（纳入 SHA 与校验）
+  + 只读 `operator_override_eligibility` + 受控 CLI `tools/promote_sectional_reviewed.py`
+  （默认 preflight 零写入，--execute 需双 SHA 确认）。
+- 测试：rollout 13 项验收 + CLI 4 项；要求的三个测试文件 51 passed；全量 pytest 通过；
+  Ruff/format/compileall/`git diff --check` 通过。
+- 状态：尚未执行 `--execute`、未创建 promotion manifest、未运行 Shadow、未修改任何
+  正式/生成产物。下一步：老师审核代码；实际 promotion 需运营者在 action 模式下执行
+  CLI（先 preflight 确认，再带双 SHA 确认执行）。
+
 ## 2026-08-02 — 新规则下 Shadow 端到端成功，终态候选完整并通过内容 QA
 
 - `d5c5818`（FINAL CONTENT REBUILD）推送后普通 resume 一次，POST=1，`ai_runs 259→277`，

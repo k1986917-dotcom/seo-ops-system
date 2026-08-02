@@ -33,6 +33,22 @@
   用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
   `git diff --check` 全部通过。
 
+## [Unreleased] — Operator-reviewed promotion override for retry-only blocker
+
+### Added
+
+- `promote_sectional_assembly()` 新增可选 `operator_review` 参数：默认 fail-closed 行为
+  不变；仅当 comparison `blockers` 精确等于 `["excessive_ai_retries"]` 且 recommendation
+  为 keep_legacy、assembly audit 通过且零 blockers、产品 binding/provenance 计数一致、
+  formal pair 未变化、rollout 为 action 模式且 allowlist 仅含当前 Action、人工 review
+  六字段完整匹配（approved=true、Action ID 匹配、reviewer/reason 非空、comparison 与
+  assembly SHA 严格一致）时，才允许人工审核 promotion。
+- Promotion manifest 记录 operator_override、operator_reviewer、operator_reason、
+  operator_reviewed_comparison_sha256、operator_reviewed_assembly_sha256 与
+  overridden_blockers，全部纳入 manifest SHA 计算与校验。
+- 新增受控 CLI `tools/promote_sectional_reviewed.py`：默认只读 preflight；实际写入必须
+  显式 `--execute` 并同时提供 comparison/assembly 双 SHA 确认，缺任一即停止。
+
 ## [Unreleased] — Sectional shadow end-to-end under the final content rules
 
 ### Added

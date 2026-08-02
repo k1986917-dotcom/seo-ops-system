@@ -558,3 +558,296 @@ def test_rollback_restores_promoted_pair_when_manifest_write_fails(tmp_path, mon
     assert claim_path.read_bytes() == promoted_claim
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["status"] == "promoted"
+
+
+# ---------------------------------------------------------------------------
+# Operator-reviewed promotion override (excessive_ai_retries only)
+# ---------------------------------------------------------------------------
+
+
+def _retry_only_report():
+    assembly = _assembly()
+    old_draft, old_ledger = _legacy_pair(assembly)
+    report = build_shadow_comparison(
+        action_id=3,
+        topic=assembly["topic"],
+        old_draft=old_draft,
+        old_claim_ledger=old_ledger,
+        new_assembly=assembly,
+        run_metrics={"retry_count": 3},
+    )
+    assert report["blockers"] == ["excessive_ai_retries"]
+    assert report["recommendation"] == "keep_legacy"
+    return assembly, old_draft, old_ledger, report
+
+
+def _mutated_report(report, blockers):
+    from seo_ops.services import sectional_rollout as rollout
+
+    mutated = dict(report)
+    mutated["blockers"] = list(blockers)
+    mutated["recommendation"] = "keep_legacy"
+    unsigned = dict(mutated)
+    unsigned.pop("report_sha256", None)
+    mutated["report_sha256"] = rollout._digest(unsigned)
+    return rollout.validate_shadow_comparison(mutated)
+
+
+def _review_for(
+    report,
+    assembly,
+    *,
+    action_id=3,
+    approved=True,
+    reviewer="operator",
+    reason=None,
+    comparison_sha=None,
+    assembly_sha=None,
+):
+    reason = reason or (
+        "Human review confirmed the candidate meets the existing published article "
+        "quality standard; the only blocker is generation retry count."
+    )
+    return {
+        "approved": approved,
+        "action_id": action_id,
+        "reviewer": reviewer,
+        "reason": reason,
+        "comparison_sha256": comparison_sha or report["report_sha256"],
+        "assembly_sha256": assembly_sha or assembly["assembly_sha256"],
+    }
+
+
+def _promote_with(
+    tmp_path,
+    report,
+    assembly,
+    old_draft,
+    old_ledger,
+    *,
+    operator_review=None,
+    policy=None,
+    draft_override=None,
+):
+    draft_path = tmp_path / "drafts" / "ceiling-marking.md"
+    claim_path = tmp_path / "research" / "claim-ledger-ceiling-marking.json"
+    draft_path.parent.mkdir(parents=True)
+    claim_path.parent.mkdir(parents=True)
+    old_draft_bytes = old_draft.encode("utf-8")
+    old_claim_bytes = (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+    draft_path.write_bytes(old_draft_bytes)
+    claim_path.write_bytes(old_claim_bytes)
+    if draft_override is not None:
+        draft_path.write_bytes(draft_override)
+    return promote_sectional_assembly(
+        workspace=tmp_path,
+        slug="ceiling-marking",
+        action_id=3,
+        policy=policy or build_rollout_policy("action", [3]),
+        comparison=report,
+        assembly=assembly,
+        formal_draft_path=draft_path,
+        formal_claim_path=claim_path,
+        expected_draft_sha256=_sha(old_draft_bytes),
+        expected_claim_sha256=_sha(old_claim_bytes),
+        operator_review=operator_review,
+    )
+
+
+def test_operator_override_rejected_without_review_for_retry_only_blocker(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    with pytest.raises(
+        SectionalRolloutError,
+        match="comparison does not approve this Action for promotion",
+    ):
+        _promote_with(tmp_path, report, assembly, old_draft, old_ledger, operator_review=None)
+
+
+def test_operator_override_allowed_for_exact_retry_only_blocker(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    manifest = _promote_with(
+        tmp_path,
+        report,
+        assembly,
+        old_draft,
+        old_ledger,
+        operator_review=_review_for(report, assembly),
+    )
+    assert manifest["status"] == "promoted"
+    assert manifest["operator_override"] is True
+    assert manifest["operator_reviewer"] == "operator"
+    assert manifest["overridden_blockers"] == ["excessive_ai_retries"]
+    assert manifest["operator_reviewed_comparison_sha256"] == report["report_sha256"]
+    assert manifest["operator_reviewed_assembly_sha256"] == assembly["assembly_sha256"]
+    from seo_ops.services.sectional_rollout import validate_promotion_manifest
+
+    validate_promotion_manifest(manifest)
+
+
+def test_eligible_comparison_keeps_legacy_promotion_path(tmp_path):
+    assembly, old_draft, old_ledger, _ = _retry_only_report()
+    eligible = build_shadow_comparison(
+        action_id=3,
+        topic=assembly["topic"],
+        old_draft=old_draft,
+        old_claim_ledger=old_ledger,
+        new_assembly=assembly,
+    )
+    assert eligible["recommendation"] == "eligible_for_single_action_promotion"
+    manifest = _promote_with(
+        tmp_path,
+        eligible,
+        assembly,
+        old_draft,
+        old_ledger,
+        operator_review=None,
+    )
+    assert manifest["status"] == "promoted"
+    assert "operator_override" not in manifest
+
+
+def test_operator_override_rejected_with_any_second_blocker(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    mutated = _mutated_report(
+        report,
+        ["empty_ai_response_observed", "excessive_ai_retries"],
+    )
+    with pytest.raises(SectionalRolloutError, match="exactly"):
+        _promote_with(
+            tmp_path,
+            mutated,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=_review_for(mutated, assembly),
+        )
+
+
+def test_operator_override_never_allowed_for_assembly_gate_blockers(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    mutated = _mutated_report(
+        report,
+        ["new_assembly_has_gate_blockers", "excessive_ai_retries"],
+    )
+    with pytest.raises(SectionalRolloutError, match="exactly"):
+        _promote_with(
+            tmp_path,
+            mutated,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=_review_for(mutated, assembly),
+        )
+
+
+def test_operator_override_never_allowed_for_provenance_missing(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    mutated = _mutated_report(
+        report,
+        ["product_copy_provenance_missing", "excessive_ai_retries"],
+    )
+    with pytest.raises(SectionalRolloutError, match="exactly"):
+        _promote_with(
+            tmp_path,
+            mutated,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=_review_for(mutated, assembly),
+        )
+
+
+def test_operator_override_rejected_when_comparison_sha_mismatches(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    review = _review_for(report, assembly, comparison_sha="0" * 64)
+    with pytest.raises(SectionalRolloutError, match="comparison SHA does not match"):
+        _promote_with(
+            tmp_path,
+            report,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=review,
+        )
+
+
+def test_operator_override_rejected_when_assembly_sha_mismatches(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    review = _review_for(report, assembly, assembly_sha="0" * 64)
+    with pytest.raises(SectionalRolloutError, match="assembly SHA does not match"):
+        _promote_with(
+            tmp_path,
+            report,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=review,
+        )
+
+
+def test_operator_override_rejected_when_action_id_mismatches(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    review = _review_for(report, assembly, action_id=7)
+    with pytest.raises(SectionalRolloutError, match="action_id does not match"):
+        _promote_with(
+            tmp_path,
+            report,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=review,
+        )
+
+
+def test_operator_override_rejected_when_formal_pair_changed(tmp_path):
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    with pytest.raises(SectionalRolloutError, match="formal draft changed"):
+        _promote_with(
+            tmp_path,
+            report,
+            assembly,
+            old_draft,
+            old_ledger,
+            operator_review=_review_for(report, assembly),
+            draft_override=(old_draft + "changed").encode("utf-8"),
+        )
+
+
+def test_operator_override_restores_pair_when_formal_replace_fails(tmp_path, monkeypatch):
+    from seo_ops.services import sectional_rollout as rollout
+
+    assembly, old_draft, old_ledger, report = _retry_only_report()
+    draft_path = tmp_path / "drafts" / "ceiling-marking.md"
+    claim_path = tmp_path / "research" / "claim-ledger-ceiling-marking.json"
+    draft_path.parent.mkdir(parents=True)
+    claim_path.parent.mkdir(parents=True)
+    old_draft_bytes = old_draft.encode("utf-8")
+    old_claim_bytes = (json.dumps(old_ledger, sort_keys=True) + "\n").encode("utf-8")
+    draft_path.write_bytes(old_draft_bytes)
+    claim_path.write_bytes(old_claim_bytes)
+    original_replace = rollout.os.replace
+
+    def fail_formal_claim(source, destination):
+        if Path(destination) == claim_path.resolve():
+            raise OSError("simulated formal claim replace failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(rollout.os, "replace", fail_formal_claim)
+    with pytest.raises(OSError, match="simulated formal claim"):
+        promote_sectional_assembly(
+            workspace=tmp_path,
+            slug="ceiling-marking",
+            action_id=3,
+            policy=build_rollout_policy("action", [3]),
+            comparison=report,
+            assembly=assembly,
+            formal_draft_path=draft_path,
+            formal_claim_path=claim_path,
+            expected_draft_sha256=_sha(old_draft_bytes),
+            expected_claim_sha256=_sha(old_claim_bytes),
+            operator_review=_review_for(report, assembly),
+        )
+    assert draft_path.read_bytes() == old_draft_bytes
+    assert claim_path.read_bytes() == old_claim_bytes
+    promotions = tmp_path / "drafts" / "sectional" / "ceiling-marking" / "promotions"
+    assert not promotions.exists() or not any(promotions.glob("action-3/*"))
