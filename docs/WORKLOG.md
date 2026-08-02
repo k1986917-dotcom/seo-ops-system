@@ -1,3 +1,27 @@
+## 2026-08-02 — 新规则下 Shadow 端到端成功：终态候选完成并通过内容 QA
+
+- 推送 `d5c5818`（FINAL CONTENT REBUILD）后执行一次普通 resume，POST=1，
+  `ai_runs 259→277`（+18），result=success，`artifacts_complete=true`。
+  901/049 resumed；429/2d/7bb/b92 全部重生成（新 provenance/安全规则下旧内容作废）；
+  frame 生成 1 次；10 个 ledger 全部重新生成。
+- 内容 QA（新规则逐项）：
+  - 429：无商品、无未核验直接引语、中性比较 Class 2/3R（386 words，ARTICLE 2，CITE 2）；
+  - 7bb：仅 B025（product-718d54a72161），PRODUCT 句含 1.2–1.5W/520nm/8× 感知亮度等
+    目录事实，同段完整安全提醒（wavelength-matched eyewear + OD + 避免直接/反射暴露 +
+    vehicles/aircraft），无 ceiling/construction-focused 等无依据用途声明；
+  - b92：无直接引语/归因转述，全部改写为普通概括 + CITE；
+  - provenance：resolved-delivery B025 binding 含 catalog_provenance
+    （catalog_title/catalog_facts×5/catalog_sha256 `76e3e1dc…`）；
+    assembly product_provenance 恰 1 条（S088）；comparison
+    binding_counts.product=1、product_provenance_count=1；
+  - assembled draft：B025=1 个产品链接，其他型号全 0，无未解析 placeholder/空链接，
+    无禁止用途声明，无禁止引语短语。
+- 重试：7 次 body 调用中 429/2d 各 1 次、7bb 2 次（content provenance repair）、
+  b92 3 次（repair+final）；comparison `retry_count=3` →
+  blockers=['excessive_ai_retries']，recommendation=`keep_legacy`（保守，不 promotion）。
+- 正式 draft/claim/w2-state/`.env`/Action/Git 全部不变，无 promotion manifest，archive
+  仍为 4 个条目。下一步：等待老师 MCP 审查该终态候选；promotion 由运营者决定。
+
 ## 2026-08-02 — 新增 FINAL CONTENT REBUILD 解决 required_link ↔ word_count 振荡
 
 - 推送 `26ace16`（H2 修复）后实跑一次普通 resume：429 已越过 H2 门禁，但新 provenance

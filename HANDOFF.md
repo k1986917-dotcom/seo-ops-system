@@ -2,6 +2,20 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
+## 2026-08-02 — 新规则下 Shadow 端到端成功，终态候选完整并通过内容 QA
+
+- `d5c5818`（FINAL CONTENT REBUILD）推送后普通 resume 一次，POST=1，`ai_runs 259→277`，
+  result=success，终态产物齐全（assembled-*、resolved-delivery、comparison）。
+- 六节全部有效：901/049 resumed；429（无商品、无引语、中性比较）、2d、7bb（仅 B025 +
+  完整高功率安全提醒 + 目录 provenance）、b92（无直接引语）全部重生成并落盘；frame +
+  10×ledger 全部生成。
+- comparison：blockers=['excessive_ai_retries']（retry_count=3：7bb 1 次 provenance
+  repair、b92 2 次 repair+final），recommendation=`keep_legacy`——保守不 promotion，
+  等待老师 MCP 内容审查。
+- 正式产物/Action/Git/.env 全部不变，无 promotion manifest，archive=4。
+- 下一步：老师审查通过后由运营者决定 promotion（AI 禁止 promotion）；若审查要求调整
+  copy/链接，再按同一流程迭代。
+
 ## 2026-08-02 — FINAL CONTENT REBUILD 已解决链接/字数振荡；等待下一轮真实 Shadow
 
 - `26ace16`（H2 修复）推送后实跑：429 越过 H2 门禁，但因新 provenance 规则旧 429 内容

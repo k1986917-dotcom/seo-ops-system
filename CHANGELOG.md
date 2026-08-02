@@ -33,6 +33,16 @@
   用例）；Legacy/W1b 当前范围 `234 passed`；Ruff、format、compileall、
   `git diff --check` 全部通过。
 
+## [Unreleased] — Sectional shadow end-to-end under the final content rules
+
+### Added
+
+- 真实 Action #3 sectional shadow 在 final content rules（provenance / high-power safety
+  context / H2 与 gate 修复）下首次端到端成功：六节正文 + frame + 10 ledger 全部落盘，
+  终态产物齐全；B025 产品段含完整安全提醒与 catalog provenance，安全/Class 章节无商品，
+  b92 无未核验直接引语。comparison 因 excessive_ai_retries 保守返回 keep_legacy，
+  promotion 仍由运营者决定。
+
 ## [Unreleased] — Final content rebuild for link/word-count oscillation
 
 ### Fixed
