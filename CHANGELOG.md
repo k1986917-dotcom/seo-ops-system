@@ -1,3 +1,12 @@
+## [Unreleased] — Make the installed entrypoint runnable outside the checkout
+
+### Fixed
+
+- `seo-ops` now bootstraps the repository root before importing the Legacy workflow, so launching
+  from another directory no longer fails with `ModuleNotFoundError: data_sources`.
+- Added a subprocess regression test that imports the full Web application from a temporary working
+  directory.
+
 ## [Unreleased] — Require safety context for high-power product copy
 
 ### Fixed

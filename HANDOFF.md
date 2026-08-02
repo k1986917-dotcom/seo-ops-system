@@ -2,6 +2,18 @@
 
 最后更新：2026-08-02（Asia/Shanghai）
 
+## 2026-08-02 — 修复从项目目录外启动的安装入口
+
+- 发现完整测试在项目目录内通过，但从 `/tmp` 导入 `seo_ops.web.app` 时因
+  `data_sources` 位于仓库根目录、未被 editable `src/` 路径覆盖而失败。
+- `src/seo_ops/__main__.py` 现在在启动前以可重复方式把包含已审计 Legacy 模块的项目根目录
+  加入 `sys.path`；不存在该目录时保持可安装包的安全回退。
+- 新增 `tests/test_package_entrypoint.py`，从临时工作目录验证入口可以加载
+  `data_sources.modules.seo_common`。
+- 验证：修复后完整 `.venv/bin/python -m pytest -q` 通过；针对入口测试、Ruff、compileall、
+  `git diff --check` 通过；从 `/tmp` 完整导入 `seo_ops.web.app` 输出 `startup-import-ok`。
+- 本修复尚未提交/推送；未触碰正式 draft、claim ledger、w2-state、`.env` 或生产 Action。
+
 ## 2026-08-02 — 高功率商品参数可中性展示，但必须带完整安全提醒
 
 - 对首次完整 Shadow 终态进行 MCP 独立内容审查后确认：产品选择 B025 与安全/Class 章节

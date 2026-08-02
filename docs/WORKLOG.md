@@ -1,3 +1,20 @@
+## 2026-08-02 — 修复安装入口在仓库外启动失败
+
+### 完成
+
+- 复现并修复 `seo-ops` 从项目目录外启动时无法导入仓库级 `data_sources` 的 P1 问题。
+- 启动入口在调用 Uvicorn 前执行幂等项目根目录引导；新增外部工作目录回归测试。
+
+### 验证
+
+- WSL 完整回归：`.venv/bin/python -m pytest -q` 通过。
+- `.venv/bin/ruff check src tests tools`、入口文件格式检查、`compileall`、`git diff --check` 通过。
+- 从 `/tmp` 导入完整 `seo_ops.web.app` 成功。
+
+### 遗留
+
+- 代码尚未提交/推送；真实 Shadow 仍需在推送后按 Handoff 的单次运行规则执行。
+
 ## 2026-08-02 — High-power copy requires a complete safety reminder
 
 - 首次完整 Shadow 的结构门禁已通过，但人工内容审查发现三个自动门禁缺口：B025 产品句

@@ -78,7 +78,7 @@ DB → 输出几乎相同。
 
 **优先级**：中 — UX 问题，不阻塞功能。
 
-### 5. 后端启动必须设 PYTHONPATH（同上一份 commit 409fd10 的 P1-3）
+### 5. 后端启动必须设 PYTHONPATH（已修复）
 
 **症状**：从其他目录启动 `.venv/bin/seo-ops` 报 `ModuleNotFoundError: No module
 named 'data_sources'`。
@@ -86,14 +86,17 @@ named 'data_sources'`。
 **根因**：`legacy_workflow.py` 用 `from data_sources.modules import seo_common`，
 需要项目根目录在 `sys.path`。editable install 只把 `src/` 加到 sys.path。
 
-**修复方向**：在 `src/seo_ops/__main__.py` 开头加：
+**已修复**：`src/seo_ops/__main__.py` 的启动入口现在会在仓库级 `data_sources/modules`
+存在时幂等地加入项目根目录，并由 `tests/test_package_entrypoint.py` 从临时工作目录回归验证。
+
+**历史修复方向**：在 `src/seo_ops/__main__.py` 开头加：
 ```python
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 ```
 
-**优先级**：高 — 每次新环境部署都会踩。
+**优先级**：已关闭 — 仍需在构建/发布方式改变时复查。
 
 ### 6. Legacy 工作流的 state 持久化字段不规范（同上一份 commit 409fd10 的 P1-4）
 
